@@ -25,13 +25,20 @@ final class ExportWriter(format: ExportFormat, out: String => Unit):
 
   def write(env: ExportEnv): Unit =
     if isJson then
-      val m = env.meta.getOrElse(ExportMeta("lean4export", jsonVersion, "", ""))
+      val m = env.meta.getOrElse(ExportMeta("lean4export", jsonVersion, jsonVersion, "", ""))
       out(
         s"""{"meta":{"exporter":{"name":${Jsonw.str(m.exporterName)},"version":${Jsonw.str(m.exporterVersion)}},""" +
           s""""format":{"version":${Jsonw.str(jsonVersion)}},""" +
           s""""lean":{"githash":${Jsonw.str(m.leanGithash)},"version":${Jsonw.str(m.leanVersion)}}}}"""
       )
     env.items.foreach(item)
+
+  /** The text formats have no field for these, and silently dropping them would
+    * turn an unsafe or partial declaration into a safe one.
+    */
+  private def requireJson(flagged: Boolean, what: String): Unit =
+    if flagged && format.isText then
+      throw ExportException(s"the text formats cannot represent $what")
 
   private def jsonVersion: String = format match
     case Ndjson(v) if v.nonEmpty => v
@@ -148,6 +155,7 @@ final class ExportWriter(format: ExportFormat, out: String => Unit):
         if isJson then s""""forallE":{"name":$n,"type":$d,"body":$b,"binderInfo":"${binderJson(f.binderInfo)}"}"""
         else s"#EP ${binderText(f.binderInfo)} $n $d $b"
       case l: Expr.LetE =>
+        requireJson(l.nondep, "a non-dependent let")
         val n = name(l.declName); val d = exprIdx(l.tpe); val v = exprIdx(l.value); val b = exprIdx(l.body)
         if isJson then s""""letE":{"name":$n,"type":$d,"value":$v,"body":$b,"nondep":${l.nondep}}"""
         else s"#EZ $n $d $v $b"
@@ -204,9 +212,14 @@ final class ExportWriter(format: ExportFormat, out: String => Unit):
     case Declaration.QuotDecl =>
       if format != TextV1 then throw ExportException("only the text v1 format has a bare #QUOT")
       out("#QUOT")
-    case Declaration.InductDecl(lp, numParams, types, _) =>
+    case Declaration.InductDecl(lp, numParams, types, isUnsafe) =>
       if format != TextV1 then
         throw ExportException("only the text v1 format carries inductive declarations as kernel inputs")
+      if types.length > 1 then
+        throw ExportException(
+          s"the text v1 format cannot represent a mutual inductive block of ${types.length} types"
+        )
+      if isUnsafe then throw ExportException("the text v1 format cannot represent an unsafe inductive block")
       types.foreach { t =>
         val n  = name(t.name)
         val ty = expr(t.tpe)
@@ -233,6 +246,7 @@ final class ExportWriter(format: ExportFormat, out: String => Unit):
     else out(s"""{"$key":$body}""")
 
   private def axiom(v: AxiomVal): Unit =
+    requireJson(v.isUnsafe, "an unsafe axiom")
     val cv = v.toConstantVal
     val n  = name(cv.name); val t = expr(cv.tpe); val ls = uparams(cv.levelParams)
     if isJson then
@@ -240,6 +254,7 @@ final class ExportWriter(format: ExportFormat, out: String => Unit):
     else out(s"#AX $n $t${tail(ls)}")
 
   private def defn(v: DefinitionVal): Unit =
+    requireJson(v.safety != DefinitionSafety.Safe, s"a ${v.safety.toString.toLowerCase} definition")
     val cv = v.toConstantVal
     val n = name(cv.name); val t = expr(cv.tpe); val x = expr(v.value)
     val ls = uparams(cv.levelParams); val all = names(v.all)
@@ -272,6 +287,7 @@ final class ExportWriter(format: ExportFormat, out: String => Unit):
     else out(s"#THM $n $t $x${tail(ls)}")
 
   private def opaq(v: OpaqueVal): Unit =
+    requireJson(v.isUnsafe, "an unsafe opaque")
     val cv = v.toConstantVal
     val n = name(cv.name); val t = expr(cv.tpe); val x = expr(v.value)
     val ls = uparams(cv.levelParams); val all = names(v.all)
@@ -321,6 +337,7 @@ final class ExportWriter(format: ExportFormat, out: String => Unit):
 
   private def inductOnly(v: InductiveVal): Unit =
     requireNotV1("inductive types")
+    requireJson(v.isUnsafe, "an unsafe inductive type")
     if isJson then
       val (tk, ck, rk) =
         if legacyJson then ("inductiveVals", "constructorVals", "recursorVals") else ("types", "ctors", "recs")
@@ -338,6 +355,7 @@ final class ExportWriter(format: ExportFormat, out: String => Unit):
 
   private def ctorOnly(v: ConstructorVal): Unit =
     requireNotV1("constructors")
+    requireJson(v.isUnsafe, "an unsafe constructor")
     if isJson then
       val (tk, ck, rk) =
         if legacyJson then ("inductiveVals", "constructorVals", "recursorVals") else ("types", "ctors", "recs")
@@ -349,6 +367,7 @@ final class ExportWriter(format: ExportFormat, out: String => Unit):
 
   private def recOnly(v: RecursorVal): Unit =
     requireNotV1("recursors")
+    requireJson(v.isUnsafe, "an unsafe recursor")
     if isJson then
       val (tk, ck, rk) =
         if legacyJson then ("inductiveVals", "constructorVals", "recursorVals") else ("types", "ctors", "recs")

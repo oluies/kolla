@@ -44,6 +44,7 @@ final class ExportReader(forced: Option[ExportFormat] = None, retainItems: Boole
     lineNo += 1
     val line = trimLine(rawLine)
     if line.isEmpty then return
+    tables.observeLine()
     try
       kind match
         case None =>
@@ -91,7 +92,7 @@ final class ExportReader(forced: Option[ExportFormat] = None, retainItems: Boole
       case Some(m) =>
         meta = Some(m)
         if jsonVersion.isEmpty then
-          jsonVersion = Some(if m.exporterVersion.nonEmpty then m.exporterVersion else "")
+          jsonVersion = Some(if m.formatVersion.nonEmpty then m.formatVersion else m.exporterVersion)
       case None => ()
 
   private def feedText(line: String): Unit =

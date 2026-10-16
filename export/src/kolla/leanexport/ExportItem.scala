@@ -24,6 +24,7 @@ enum ExportItem:
 final case class ExportMeta(
     exporterName: String,
     exporterVersion: String,
+    formatVersion: String,
     leanVersion: String,
     leanGithash: String
 )

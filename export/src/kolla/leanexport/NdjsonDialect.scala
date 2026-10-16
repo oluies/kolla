@@ -52,10 +52,12 @@ private[leanexport] final class NdjsonDialect(tables: ExportTables, emit: Export
   private def meta(j: Json): ExportMeta =
     val f  = j.asObj("meta")
     val ex = f.get("exporter").map(_.asObj("meta.exporter")).getOrElse(Map.empty)
+    val fo = f.get("format").map(_.asObj("meta.format")).getOrElse(Map.empty)
     val ln = f.get("lean").map(_.asObj("meta.lean")).getOrElse(Map.empty)
     ExportMeta(
       ex.get("name").map(_.asStr("meta.exporter.name")).getOrElse(""),
       ex.get("version").map(_.asStr("meta.exporter.version")).getOrElse(""),
+      fo.get("version").map(_.asStr("meta.format.version")).getOrElse(""),
       ln.get("version").map(_.asStr("meta.lean.version")).getOrElse(""),
       ln.get("githash").map(_.asStr("meta.lean.githash")).getOrElse("")
     )

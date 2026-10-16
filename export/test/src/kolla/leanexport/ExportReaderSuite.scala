@@ -28,6 +28,29 @@ class ExportReaderSuite extends munit.FunSuite:
     assertEquals(read(textV2Literal).meta, None)
   }
 
+  test("the ndjson version comes from meta.format.version, not the exporter version") {
+    val src =
+      """{"meta":{"exporter":{"name":"lean4export","version":"3.1.0"},"format":{"version":"3.0.0"},"lean":{"githash":"g","version":"4.27.0"}}}
+        |{"in":1,"str":{"pre":0,"str":"A"}}
+        |{"ie":0,"sort":0}
+        |{"axiom":[{"name":1,"levelParams":[],"type":0,"isUnsafe":false}]}""".stripMargin
+    val env = read(src)
+    assertEquals(env.format, Ndjson("3.0.0"))
+    assertEquals(env.meta.map(_.exporterVersion), Some("3.1.0"))
+    assertEquals(env.meta.map(_.formatVersion), Some("3.0.0"))
+    // 3.0.0 wraps declarations in arrays; reading it as 3.1.0 would have failed.
+    assertEquals(env.infos.map(_.name.toString), Vector("A"))
+  }
+
+  test("the exporter version is the fallback when meta.format is absent") {
+    val src =
+      """{"meta":{"exporter":{"name":"lean4export","version":"3.1.0"}}}
+        |{"in":1,"str":{"pre":0,"str":"A"}}
+        |{"ie":0,"sort":0}
+        |{"axiom":{"name":1,"levelParams":[],"type":0,"isUnsafe":false}}""".stripMargin
+    assertEquals(read(src).format, Ndjson("3.1.0"))
+  }
+
   test("a #DEF with a hint token forces v2, without one forces v1") {
     assertEquals(read("1 #NS 0 A\n0 #EC 1\n#DEF 1 0 0 R 3").format, TextV2)
     assertEquals(read("1 #NS 0 A\n0 #EC 1\n#DEF 1 0 0").format, TextV1)
@@ -263,6 +286,24 @@ class ExportReaderSuite extends munit.FunSuite:
     intercept[ExportException](read("1 #NS 0 A\n0 #EA 0"))
     intercept[ExportException](read("1 #NS 0 A\n0 #EL #BD 1 0"))
     intercept[ExportException](read("1 #NS 0 A\n0 #EL #XX 1 0 0"))
+  }
+
+  test("a #NS with no name component is an error, an empty one is not") {
+    val e = intercept[ExportException](read("1 #NS 0"))
+    assert(clue(e.getMessage).contains("missing name component"))
+    intercept[ExportException](read("1 #NI 0"))
+    val env = read("1 #NS 0 \n0 #EC 1\n#AX 1 0")
+    assertEquals(env.infos.head.name, Name.anonymous.str(""))
+  }
+
+  test("an index beyond the number of lines read is rejected") {
+    val e = intercept[ExportException](read("1 #NS 0 A\n268435455 #EV 0"))
+    assert(clue(e.getMessage).contains("expr index out of range: 268435455"))
+    val e2 = intercept[ExportException](read("1000 #NS 0 A"))
+    assert(clue(e2.getMessage).contains("name index out of range: 1000"))
+    // Dense, sequential indices are unaffected.
+    val dense = (1 to 400).map(i => s"$i #NS 0 n$i").mkString("\n")
+    assertEquals(read(dense + "\n0 #EC 400\n#AX 400 0").infos.head.name.toString, "n400")
   }
 
   test("unknown ndjson items are reported") {
