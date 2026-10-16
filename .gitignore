@@ -1,0 +1,10 @@
+out/
+.ref/
+.difftest/
+target/
+.bsp/
+.metals/
+.bloop/
+node_modules/
+*.class
+.DS_Store

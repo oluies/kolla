@@ -1,0 +1,56 @@
+//| mill-version: 1.3.0
+package build
+
+import mill.*
+import mill.scalalib.*
+import mill.scalajslib.*
+import mill.scalanativelib.*
+
+object v {
+  val scala           = "3.9.0"
+  val scalaJs         = "1.22.0"
+  val scalaNative     = "0.5.12"
+  val cats            = "2.13.0"
+  val catsEffect      = "3.7.1"
+  val fs2             = "3.14.0"
+  val munit           = "1.3.6"
+  val munitScalacheck = "1.3.1"
+  val munitCatsEffect = "2.2.1"
+  val scalacheck      = "1.20.0"
+}
+
+trait KollaModule extends ScalaModule with PlatformScalaModule {
+  def scalaVersion = v.scala
+  def scalacOptions = Seq("-deprecation", "-feature", "-unchecked")
+
+  trait KollaTests extends ScalaTests with TestModule.Munit {
+    def mvnDeps = Seq(
+      mvn"org.scalameta::munit::${v.munit}",
+      mvn"org.scalameta::munit-scalacheck::${v.munitScalacheck}",
+      mvn"org.scalacheck::scalacheck::${v.scalacheck}"
+    )
+  }
+}
+
+trait KollaJsModule extends KollaModule with ScalaJSModule {
+  def scalaJSVersion = v.scalaJs
+}
+
+trait KollaNativeModule extends KollaModule with ScalaNativeModule {
+  def scalaNativeVersion = v.scalaNative
+}
+
+object kernel extends Module {
+  trait Shared extends KollaModule {
+    def mvnDeps = Seq(mvn"org.typelevel::cats-core::${v.cats}")
+  }
+  object jvm extends Shared {
+    object test extends KollaTests
+  }
+  object js extends Shared with KollaJsModule {
+    object test extends KollaTests with ScalaJSTests
+  }
+  object native extends Shared with KollaNativeModule {
+    object test extends KollaTests with ScalaNativeTests
+  }
+}
