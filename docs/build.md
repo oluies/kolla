@@ -18,3 +18,15 @@ Commands:
     mill kernel.js.test
     mill kernel.native.test
     mill __.test
+
+## Lean toolchains on this host
+
+`lake build` of lean4export succeeds for Lean v4.35.0 and the binary runs.
+
+The Lean v4.12.0 toolchain installs and builds, but the resulting binary does not
+start on macOS 27:
+
+    dyld[45339]: __DATA_CONST segment missing SG_READ_ONLY flag in .lake/build/bin/lean4export
+
+So no text v1 export could be produced on this machine; the text v1 reader is
+tested against hand-written files transcribed from `dumpConstant` at `d797849`.

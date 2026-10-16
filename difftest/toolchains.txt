@@ -1,0 +1,18 @@
+# Lean releases the differential platform runs against, as elan toolchain specs.
+# Blank lines and lines starting with '#' are ignored.
+#
+# Each entry pins a lean4export revision whose lean-toolchain matches, and so a
+# particular export format version:
+#
+#   v4.25.0   lean4export text v2.0.0   (last text-format revision, 3245035)
+#   v4.27.0   lean4export ndjson 3.0.0  (c840756)
+#   v4.35.0   lean4export ndjson 3.1.0  (tag v4.35.0), latest stable
+#
+# Releases up to v4.19 use lean4export's original text format, which emits one
+# #IND line per inductive type with no sibling list, so a mutual inductive block
+# cannot be reconstructed from the file. Those toolchains are excluded from the
+# corpus; the reader still accepts the format. See docs/semantics.md X4.
+
+leanprover/lean4:v4.25.0
+leanprover/lean4:v4.27.0
+leanprover/lean4:v4.35.0
