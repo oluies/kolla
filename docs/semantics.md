@@ -318,3 +318,68 @@ have this property, and `ExportWriter` reproduces it by keying its table on
 
 A term round-trips with its binder names and annotations intact only when no
 binder-equal variant of it appears elsewhere in the same file.
+
+## Kernel
+
+### K1 — the kernel is not behaviourally stable across Lean releases
+
+`src/kernel` changes semantics between releases, so a checker that must agree
+with `lean4checker` from more than one release needs the release as a parameter.
+Comparing `v4.25.0`, `v4.27.0` and `v4.35.0` (the toolchains in
+`difftest/toolchains.txt`):
+
+| behaviour | v4.25.0 | v4.27.0 | v4.35.0 |
+|---|---|---|---|
+| `string_lit_to_constructor` wrapper | `String.mk` | `String.ofList` | `String.ofList` |
+| `is_prop` | `whnf(infer_type e) == Prop` | same | `normalizes_to_zero(sort_level s)` |
+| `Nat` numeral size limit | none | none | 128 MB, `LEAN_NAT_MAX_SIZE` |
+| projection index bound | truncated to `unsigned` | same | rejected if it does not fit |
+| `check_uniform_ind_occs` | absent | absent | present |
+| `check_recursors` | absent | absent | present |
+| eta-struct / unit-like guard | `is_structure_like` | same | `is_non_rec_structure`, which also requires the inductive not be recursive |
+| positive `is_def_eq` cache | absent | absent | present |
+
+Three of these can flip a verdict rather than just performance:
+`is_prop` (v4.35's comment records that the syntactic test let `infer_proj`
+extract non-proof data out of a proof), `check_uniform_ind_occs` and
+`check_recursors` are soundness checks v4.35 added, and the string-literal
+wrapper changes which terms are definitionally equal.
+
+`KernelProfile` carries these as fields, `KernelProfile.forToolchain` maps an
+elan toolchain spec to the nearest pinned profile at or below it, and the
+differential platform selects the profile per toolchain. Releases between the
+pinned ones take the lower profile, which is a guess until a release is added to
+the corpus and diffed.
+
+### K2 — substitution follows `replace_fn`
+
+`ExprOps.replace` mirrors `lean::replace_fn`: `f` sees each subterm with its
+binder depth, a `Some` result replaces the subterm and stops the descent, and
+results are cached per `(subterm identity, depth)`. `forEach` mirrors
+`lean::for_each_fn`. Both run in `cats.Eval` or on an explicit stack, so neither
+grows the call stack.
+
+### K3 — beta reduction substitutes arguments in reverse
+
+`whnf_core` collects an application's arguments with `get_app_rev_args` and hands
+that reversed buffer to `instantiate`, so `#0` takes the *last* consumed
+argument and `#(m-1)` the first. `ExprOps.betaReduce` takes its arguments in
+application order and uses `instantiateRev`, which is the same mapping.
+`cheap_beta_reduce` instead collects arguments with `get_app_args` in forward
+order and indexes them as `args[i - idx - 1]`; `ExprOps.cheapBetaReduce` keeps
+that form.
+
+### K4 — `local_ctx::mk_binding` and dead lets
+
+`LocalContext.mkPi`/`mkLambda` abstract free variables back into binders as
+`lean::local_ctx::mk_binding` does, rebuilding a `let` for a let-bound variable.
+`infer_let` passes `remove_dead_let = true`, which drops a `let` whose variable
+does not occur in the body and lowers the remaining bound variables; `infer_lambda`
+does not.
+
+### K5 — string literals decode to code points
+
+`string_lit_to_constructor` calls `utf8_decode`, which yields Unicode code
+points, so a character outside the basic multilingual plane becomes one
+`Char.ofNat` application. `ExprOps.codePoints` iterates code points rather than
+UTF-16 units to match.

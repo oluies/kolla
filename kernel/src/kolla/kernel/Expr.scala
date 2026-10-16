@@ -1,6 +1,7 @@
 package kolla.kernel
 
 import scala.annotation.tailrec
+import scala.collection.immutable.ArraySeq
 import scala.collection.mutable
 
 sealed abstract class Expr:
@@ -197,8 +198,8 @@ object Expr:
       case _      => acc
     go(e, 0)
 
-  /** Arguments in application order. */
-  def getAppArgs(e: Expr): Array[Expr] =
+  /** Arguments in application order, array-backed and not copied. */
+  def getAppArgs(e: Expr): ArraySeq[Expr] =
     val n = getAppNumArgs(e)
     val out = new Array[Expr](n)
     var i = n
@@ -208,9 +209,9 @@ object Expr:
       i -= 1
       out(i) = a.arg
       cur = a.fn
-    out
+    ArraySeq.unsafeWrapArray(out)
 
-  def getAppFnArgs(e: Expr): (Expr, Array[Expr]) = (getAppFn(e), getAppArgs(e))
+  def getAppFnArgs(e: Expr): (Expr, ArraySeq[Expr]) = (getAppFn(e), getAppArgs(e))
 
   @tailrec
   def getRevArgD(e: Expr, i: Int, default: Expr): Expr = e match
