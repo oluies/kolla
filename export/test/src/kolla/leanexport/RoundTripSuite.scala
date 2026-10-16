@@ -82,7 +82,7 @@ class RoundTripSuite extends munit.FunSuite:
     assertEquals(roundTrip(env, Ndjson("3.1.0")).infos.head.name, n)
   }
 
-  test("binder annotations survive") {
+  test("a single binder's annotation survives") {
     List(BinderInfo.Default, BinderInfo.Implicit, BinderInfo.StrictImplicit, BinderInfo.InstImplicit).foreach { bi =>
       val n = Name.parse("B")
       val e = Expr.Lam(Name.mkSimple("x"), Expr.Sort(Level.zero), Expr.BVar(0), bi)
@@ -94,6 +94,28 @@ class RoundTripSuite extends munit.FunSuite:
         assert(Expr.isBiEqual(back.infos.head.tpe, e), clue((fmt, bi)))
       }
     }
+  }
+
+  // The exporter's own expression table is keyed on `BEq Expr`, which is
+  // `Expr.eqv` (`expr_eq_fn<false>`) and ignores binder names and annotations,
+  // so lean4export assigns one index to binder nodes that differ only there and
+  // the file records the first occurrence's annotation. The writer matches that.
+  test("binder-blind deduplication matches lean4export") {
+    val nat      = Expr.const("Nat")
+    val explicitB = Expr.ForallE(Name.mkSimple("a"), nat, nat, BinderInfo.Default)
+    val implicitB = Expr.ForallE(Name.mkSimple("b"), nat, nat, BinderInfo.Implicit)
+    assertEquals(explicitB, implicitB)
+    assert(!Expr.isBiEqual(explicitB, implicitB))
+
+    val env = ExportEnv(TextV2, None, Vector(
+      ExportItem.Info(ConstantInfo.AxiomInfo(AxiomVal(ConstantVal(Name.parse("E"), Nil, explicitB), false))),
+      ExportItem.Info(ConstantInfo.AxiomInfo(AxiomVal(ConstantVal(Name.parse("I"), Nil, implicitB), false)))
+    ))
+    val lines = ExportWriter.toLines(env, TextV2)
+    assertEquals(lines.count(_.contains("#EP")), 1)
+    val back = ExportReader.fromString(lines.mkString("\n"))
+    assert(Expr.isBiEqual(back.infos(0).tpe, explicitB))
+    assert(Expr.isBiEqual(back.infos(1).tpe, explicitB))
   }
 
   test("deep terms do not overflow the writer or the reader") {
@@ -126,6 +148,67 @@ class RoundTripSuite extends munit.FunSuite:
       ExportWriter.toString(envOf(ExportItem.Info(ConstantInfo.AxiomInfo(AxiomVal(
         ConstantVal(Name.parse("L"), Nil, Expr.Sort(Level.mvar(Name.parse("m")))), false
       )))), TextV2)
+    )
+  }
+
+  test("the text formats reject what they cannot represent without loss") {
+    def envOf(item: ExportItem) = ExportEnv(TextV2, None, Vector(item))
+    val n  = Name.parse("U")
+    val cv = ConstantVal(n, Nil, Expr.const("Nat"))
+
+    val unsafeAxiom = ExportItem.Info(ConstantInfo.AxiomInfo(AxiomVal(cv, true)))
+    val unsafeDefn = ExportItem.Info(ConstantInfo.DefnInfo(DefinitionVal(
+      cv, Expr.const("Nat"), ReducibilityHints.Abbrev, DefinitionSafety.Unsafe, List(n)
+    )))
+    val partialDefn = ExportItem.Info(ConstantInfo.DefnInfo(DefinitionVal(
+      cv, Expr.const("Nat"), ReducibilityHints.Abbrev, DefinitionSafety.Partial, List(n)
+    )))
+    val unsafeOpaque = ExportItem.Info(ConstantInfo.OpaqueInfo(OpaqueVal(cv, Expr.const("Nat"), true, List(n))))
+    val unsafeInduct = ExportItem.Info(ConstantInfo.InductInfo(InductiveVal(
+      cv, 0, 0, List(n), Nil, 0, false, true, false
+    )))
+    val unsafeCtor = ExportItem.Info(ConstantInfo.CtorInfo(ConstructorVal(cv, n, 0, 0, 0, true)))
+    val unsafeRec = ExportItem.Info(ConstantInfo.RecInfo(RecursorVal(cv, List(n), 0, 0, 1, 0, Nil, false, true)))
+    val nondepLet = ExportItem.Info(ConstantInfo.AxiomInfo(AxiomVal(
+      ConstantVal(n, Nil, Expr.LetE(n, Expr.const("Nat"), Expr.const("Nat"), Expr.BVar(0), true)), false
+    )))
+
+    val lossy = List(unsafeAxiom, unsafeDefn, partialDefn, unsafeOpaque, unsafeInduct, unsafeCtor, unsafeRec, nondepLet)
+    lossy.foreach { it =>
+      List[ExportFormat](TextV1, TextV2).foreach { fmt =>
+        intercept[ExportException](ExportWriter.toString(envOf(it), fmt))
+      }
+    }
+
+    // NDJSON carries all of them, so they must survive a round trip there.
+    List(unsafeAxiom, unsafeDefn, partialDefn, unsafeOpaque, nondepLet).foreach { it =>
+      assertEquals(roundTrip(envOf(it), Ndjson("3.1.0")).items, Vector(it))
+    }
+    List(unsafeInduct, unsafeCtor, unsafeRec).foreach { it =>
+      assertEquals(roundTrip(envOf(it), Ndjson("3.1.0")).items, Vector(it))
+    }
+  }
+
+  test("text v1 rejects a mutual or unsafe inductive block") {
+    val a = InductiveType(Name.parse("A"), Expr.Sort(Level.one), Nil)
+    val b = InductiveType(Name.parse("B"), Expr.Sort(Level.one), Nil)
+    def envOf(d: Declaration) = ExportEnv(TextV1, None, Vector(ExportItem.Decl(d)))
+
+    val mutual = intercept[ExportException](
+      ExportWriter.toString(envOf(Declaration.InductDecl(Nil, 0, List(a, b), false)), TextV1)
+    )
+    assert(clue(mutual.getMessage).contains("mutual inductive block of 2 types"))
+
+    intercept[ExportException](
+      ExportWriter.toString(envOf(Declaration.InductDecl(Nil, 0, List(a), true)), TextV1)
+    )
+
+    // A single safe type is still fine.
+    assertEquals(
+      ExportReader.fromString(
+        ExportWriter.toString(envOf(Declaration.InductDecl(Nil, 0, List(a), false)), TextV1)
+      ).items.length,
+      1
     )
   }
 

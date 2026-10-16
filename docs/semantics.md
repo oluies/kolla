@@ -182,10 +182,15 @@ covers text v1's `#DEF`, which carries no reducibility hint.
 
 ### X2 — the text formats have no version header
 
-Only NDJSON announces itself, with a leading `{"meta":{...}}` object carrying
-`meta.format.version`. Neither text format writes a header, so `ExportReader`
-resolves the text version from the first declaration command that distinguishes
-them:
+Only NDJSON announces itself, with a leading `{"meta":{...}}` object. The format
+version is `meta.format.version`; `meta.exporter.version` is a separate,
+independently hard-coded literal in lean4export's `Export.lean` and is used only
+as a fallback when the `format` object is absent. The two have drifted apart in
+the past, which is what commit `4fb1b91` ("Actually bump format in metadat")
+repaired, so they must not be conflated.
+
+Neither text format writes a header, so `ExportReader` resolves the text version
+from the first declaration command that distinguishes them:
 
 | command | resolution |
 |---------|------------|
@@ -264,13 +269,22 @@ integer. `Name.num`'s index is a JSON integer, parsed as `BigInt`. The text
 formats write `#ELN` as a decimal integer and `#ELS` as space-separated
 uppercase hex bytes of the UTF-8 encoding.
 
-### X11 — index tables are sparse
+### X11 — index tables are sparse but bounded by the line count
 
 The exporter assigns dense, sequential indices, but the reference parser stores
 them in a `HashMap Nat _`, so out-of-order and sparse indices are accepted.
-`Table` matches that behaviour with a growable array and an upper bound of
-2^28 on any single index. Name index 0 is pre-seeded with the anonymous name and
-level index 0 with `zero`, as both the exporter and the reference parser do.
+`Table` matches that behaviour with a growable array.
+
+Because the array grows to the largest index seen, the bound on an index has to
+bound memory as well. The exporter assigns `idx = map.size` and emits at most one
+entry per line, so no index in a well-formed file exceeds the number of lines read
+so far; `Table` rejects anything above that, with 2^28 as an absolute ceiling. A
+single malformed line such as `268435455 #EV 0` is therefore an error instead of a
+multi-gigabyte allocation. This is stricter than the reference parser, which would
+accept such a file, but no file lean4export produces is affected.
+
+Name index 0 is pre-seeded with the anonymous name and level index 0 with `zero`,
+as both the exporter and the reference parser do.
 
 ### X12 — the writer is not byte-identical to lean4export
 
@@ -280,3 +294,27 @@ re-running `dumpDeps`, and it does not reproduce the trailing space the exporter
 leaves after an `#EC` with no universe arguments. Round-trip tests compare
 `write(read(write(env)))` against `write(env)` rather than against the original
 file.
+
+### X13 — the writer refuses to write lossily
+
+The text formats have no field for `DefinitionSafety`, for the `isUnsafe` flag of
+an axiom, opaque, inductive, constructor or recursor, for `Expr.letE`'s `nondep`,
+or for the sibling types of a mutual inductive block (X4). Dropping any of those
+would silently relabel an unsafe or partial declaration as safe, so the writer
+raises an `ExportException` instead, as it already did for `Expr.mdata`, `fvar`,
+`mvar` and level metavariables. lean4export takes the same position from the other
+end: `dumpConstant` skips unsafe declarations unless `--export-unsafe` is given.
+NDJSON carries all of these fields and round-trips them.
+
+### X14 — expression deduplication is binder-blind, as in lean4export
+
+The exporter's expression table is `HashMap Expr Nat`, and Lean's `BEq Expr` is
+`Expr.eqv`, that is `lean_expr_eqv`/`expr_eq_fn<false>`, which ignores binder
+names and binder annotations (`src/Lean/Expr.lean:811`, see E2). Two binder nodes
+that differ only in binder name or `BinderInfo` therefore receive a single index,
+and the file records whichever annotation occurred first. Export files already
+have this property, and `ExportWriter` reproduces it by keying its table on
+`Expr`, whose `==` is the same relation.
+
+A term round-trips with its binder names and annotations intact only when no
+binder-equal variant of it appears elsewhere in the same file.

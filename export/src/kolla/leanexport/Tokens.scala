@@ -24,10 +24,13 @@ final class Tokens(private val line: String):
     pos = save
     r
 
-  /** Remainder of the line verbatim, after a single separating space. */
+  /** Remainder of the line verbatim, after a single separating space. The
+    * separator must be present, so a truncated line is an error rather than an
+    * empty remainder; an empty remainder after the separator is legitimate.
+    */
   def rest(what: String): String =
-    if pos < line.length && line.charAt(pos) == ' ' then pos += 1
-    if pos > line.length then throw ExportException(s"missing $what")
+    if pos >= line.length || line.charAt(pos) != ' ' then throw ExportException(s"missing $what")
+    pos += 1
     val r = line.substring(pos)
     pos = line.length
     r
