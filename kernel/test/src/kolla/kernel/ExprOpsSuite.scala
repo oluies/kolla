@@ -203,6 +203,46 @@ class ExprOpsSuite extends munit.ScalaCheckSuite:
     assertEquals(listArgs(1), Expr.App(Expr.const(Names.charOfNat), Expr.natLit(0x1F600)))
   }
 
+  test("consumeTypeAnnotations strips the gadgets") {
+    val sortW = Expr.Sort(Level.one)
+    def app(n: Name, args: Expr*) = Expr.mkAppN(Expr.const(n), args)
+    assertEquals(ExprOps.consumeTypeAnnotations(app(Names.outParam, sortW)), sortW)
+    assertEquals(ExprOps.consumeTypeAnnotations(app(Names.semiOutParam, sortW)), sortW)
+    // optParam and autoParam take the type first and the default second.
+    assertEquals(ExprOps.consumeTypeAnnotations(app(Names.optParam, sortW, nat)), sortW)
+    assertEquals(ExprOps.consumeTypeAnnotations(app(Names.autoParam, sortW, nat)), sortW)
+    // Nested.
+    assertEquals(
+      ExprOps.consumeTypeAnnotations(app(Names.outParam, app(Names.optParam, sortW, nat))),
+      sortW
+    )
+    // Wrong arity is not an annotation.
+    assertEquals(ExprOps.consumeTypeAnnotations(app(Names.outParam, sortW, nat)), app(Names.outParam, sortW, nat))
+    assertEquals(ExprOps.consumeTypeAnnotations(app(Names.optParam, sortW)), app(Names.optParam, sortW))
+    // Not nested under a binder, as Lean documents.
+    val underBinder = pi(app(Names.outParam, sortW))
+    assertEquals(ExprOps.consumeTypeAnnotations(underBinder), underBinder)
+    assertEquals(ExprOps.consumeTypeAnnotations(nat), nat)
+  }
+
+  test("inferImplicit marks binders whose variable is used later") {
+    // forall (A : Type), A -> A   =>   A becomes implicit
+    val t = Expr.ForallE(
+      Name.mkSimple("A"), Expr.Sort(Level.one),
+      Expr.ForallE(Name.mkSimple("a"), bv(0), bv(1), BinderInfo.Default),
+      BinderInfo.Default
+    )
+    val r = ExprOps.inferImplicit(t, strict = true).asInstanceOf[Expr.ForallE]
+    assertEquals(r.binderInfo, BinderInfo.Implicit)
+    assertEquals(r.body.asInstanceOf[Expr.ForallE].binderInfo, BinderInfo.Default)
+    // Nothing to infer when the variable is unused.
+    val u2 = Expr.ForallE(Name.mkSimple("A"), Expr.Sort(Level.one), nat, BinderInfo.Default)
+    assertEquals(ExprOps.inferImplicit(u2, strict = true), u2)
+    // Annotations are invisible to `==`, so this only shows up with isBiEqual.
+    assert(r == t)
+    assert(!Expr.isBiEqual(r, t))
+  }
+
   test("deep terms do not overflow") {
     val depth = 50000
     val deep  = (0 until depth).foldLeft(bv(0))((e, _) => Expr.App(e, bv(1)))

@@ -49,7 +49,8 @@ final class InductiveChecker(
   /** `mk_local_decl_for`: a free variable standing for the binder of `t`. */
   private def localDeclFor(t: Expr): Expr =
     val pi           = t.asInstanceOf[Expr.ForallE]
-    val (next, fvar) = lctx.mkLocalDecl(ngen, pi.binderName, Expr.consumeMData(pi.binderType), pi.binderInfo)
+    val (next, fvar) =
+      lctx.mkLocalDecl(ngen, pi.binderName, ExprOps.consumeTypeAnnotations(pi.binderType), pi.binderInfo)
     lctx = next
     fvar
 
@@ -263,6 +264,288 @@ final class InductiveChecker(
     }.toList
     (inds, ctors)
 
+  // ----------------------------------------------------------- recursors
+
+  private var elimLevel: Level = Level.zero
+  private var kTarget: Boolean = false
+
+  private final case class RecInfo(
+      motive: Expr,
+      indices: Vector[Expr],
+      major: Expr,
+      minors: mutable.ArrayBuffer[Expr]
+  )
+
+  private val recInfos = mutable.ArrayBuffer.empty[RecInfo]
+
+  private def isPredicate: Boolean =
+    if profile.propByNormalization then Level.normalizesToZero(resultLevel) else resultLevel.isZero
+
+  /** `is_rec_argument`. */
+  private def isRecArgument(t0: Expr): Option[Int] =
+    var t = tc.whnf(t0)
+    while t.isInstanceOf[Expr.ForallE] do
+      val pi    = t.asInstanceOf[Expr.ForallE]
+      val local = localDeclFor(t)
+      t = tc.whnf(ExprOps.instantiate1(pi.body, local))
+    isValidIndApp(t)
+
+  /** `elim_only_at_universe_zero`. */
+  private def elimOnlyAtUniverseZero: Boolean =
+    if isNotZero then false
+    else if indTypes.length > 1 then true
+    else
+      val ctors = indTypes(0).ctors
+      if ctors.length > 1 then true
+      else if ctors.isEmpty then false
+      else
+        // One constructor: every non-parameter argument must live in Prop or
+        // occur in the result type.
+        var t = ctors.head.tpe
+        var i = 0
+        val toCheck = mutable.ArrayBuffer.empty[Expr]
+        while t.isInstanceOf[Expr.ForallE] do
+          val pi   = t.asInstanceOf[Expr.ForallE]
+          val fvar = localDeclFor(t)
+          if i >= nparams then
+            val s = tc.ensureType(pi.binderType).asInstanceOf[Expr.Sort]
+            if !Level.normalizesToZero(s.level) then toCheck += fvar
+          t = ExprOps.instantiate1(pi.body, fvar)
+          i += 1
+        val resultArgs = Expr.getAppArgs(t)
+        toCheck.exists(arg => !resultArgs.contains(arg))
+
+  /** `init_elim_level`. */
+  private def initElimLevel(): Unit =
+    if elimOnlyAtUniverseZero then elimLevel = Level.zero
+    else
+      var u = Name.mkSimple("u")
+      var i = 1
+      while lparams.contains(u) do
+        u = Name.mkSimple(s"u$i")
+        i += 1
+      elimLevel = Level.Param(u)
+
+  /** `init_K_target`. */
+  private def initKTarget(): Unit =
+    kTarget = indTypes.length == 1 && isPredicate && indTypes(0).ctors.length == 1
+    if kTarget then
+      // K applies only when the single constructor has no fields.
+      var t = indTypes(0).ctors.head.tpe
+      var i = 0
+      var stop = false
+      while !stop && t.isInstanceOf[Expr.ForallE] do
+        if i < nparams then
+          t = t.asInstanceOf[Expr.ForallE].body
+          i += 1
+        else
+          kTarget = false
+          stop = true
+
+  /** `get_I_indices`. */
+  private def getIIndices(t: Expr): (Int, Vector[Expr]) =
+    val idx = isValidIndApp(t).getOrElse(
+      throw KernelException(ExceptionKind.InvalidDeclaration, "expected an application of a datatype being declared")
+    )
+    val all = Expr.getAppArgs(t)
+    (idx, all.slice(nparams, all.length).toVector)
+
+  private def recLevels: List[Level] =
+    if elimLevel.isParam then elimLevel :: levels else levels
+
+  private def recLparams: List[Name] =
+    elimLevel match
+      case p: Level.Param => p.name :: lparams
+      case _              => lparams
+
+  /** One pass over a constructor type, as `mk_rec_infos` does: the non-parameter
+    * arguments, which of them are recursive, and the result type instantiated
+    * with those same free variables.
+    *
+    * Splitting this into two walks would give the result type a different set of
+    * free variables from the arguments.
+    */
+  private def ctorParts(ctorType: Expr): CtorParts =
+    val bu = mutable.ArrayBuffer.empty[Expr]
+    val u  = mutable.ArrayBuffer.empty[Expr]
+    var t  = ctorType
+    var i  = 0
+    while t.isInstanceOf[Expr.ForallE] do
+      val pi = t.asInstanceOf[Expr.ForallE]
+      if i < nparams then t = ExprOps.instantiate1(pi.body, params(i))
+      else
+        val l = localDeclFor(t)
+        bu += l
+        if isRecArgument(pi.binderType).isDefined then u += l
+        t = ExprOps.instantiate1(pi.body, l)
+      i += 1
+    CtorParts(bu.toVector, u.toVector, t)
+
+  /** `mk_rec_infos`. */
+  private def mkRecInfos(): Unit =
+    indTypes.zipWithIndex.foreach { (indType, dIdx) =>
+      val indices = mutable.ArrayBuffer.empty[Expr]
+      var t = tc.whnf(indType.tpe)
+      var i = 0
+      while t.isInstanceOf[Expr.ForallE] do
+        val pi = t.asInstanceOf[Expr.ForallE]
+        if i < nparams then t = ExprOps.instantiate1(pi.body, params(i))
+        else
+          val idx = localDeclFor(t)
+          indices += idx
+          t = ExprOps.instantiate1(pi.body, idx)
+        i += 1
+        t = tc.whnf(t)
+      val majorType = Expr.mkAppN(Expr.mkAppN(indCnsts(dIdx), params.toSeq), indices.toSeq)
+      val (l1, major) = lctx.mkLocalDecl(ngen, Name.mkSimple("t"), majorType, BinderInfo.Default)
+      lctx = l1
+      var cTy: Expr = Expr.Sort(elimLevel)
+      cTy = lctx.mkPi(Vector(major), cTy)
+      cTy = lctx.mkPi(indices.toIndexedSeq, cTy)
+      val cName =
+        if indTypes.length > 1 then Name.mkSimple(s"motive${dIdx + 1}") else Name.mkSimple("motive")
+      val (l2, motive) = lctx.mkLocalDecl(ngen, cName, cTy, BinderInfo.Default)
+      lctx = l2
+      recInfos += RecInfo(motive, indices.toVector, major, mutable.ArrayBuffer.empty)
+    }
+
+    indTypes.zipWithIndex.foreach { (indType, dIdx) =>
+      indType.ctors.foreach { ctor =>
+        val parts = ctorParts(ctor.tpe)
+        val bu    = parts.args
+        val u     = parts.recArgs
+        val (itIdx, itIndices) = getIIndices(parts.result)
+        val introApp = Expr.mkAppN(Expr.mkAppN(Expr.Const(ctor.name, levels), params.toSeq), bu)
+        val cApp     = Expr.App(Expr.mkAppN(recInfos(itIdx).motive, itIndices), introApp)
+        val v = u.map { ui =>
+          var uiTy = tc.whnf(tc.infer(ui))
+          val xs   = mutable.ArrayBuffer.empty[Expr]
+          while uiTy.isInstanceOf[Expr.ForallE] do
+            val pi = uiTy.asInstanceOf[Expr.ForallE]
+            val xx = localDeclFor(uiTy)
+            xs += xx
+            uiTy = tc.whnf(ExprOps.instantiate1(pi.body, xx))
+          val (jIdx, jIndices) = getIIndices(uiTy)
+          val inner = Expr.App(Expr.mkAppN(recInfos(jIdx).motive, jIndices), Expr.mkAppN(ui, xs.toSeq))
+          val viTy  = lctx.mkPi(xs.toIndexedSeq, inner)
+          val uiName = lctx.get(ui.asInstanceOf[Expr.FVar].id).userName
+          val (l3, vi) = lctx.mkLocalDecl(ngen, Name.append(uiName, Name.mkSimple("ih")), viTy, BinderInfo.Default)
+          lctx = l3
+          vi
+        }
+        val minorTy   = lctx.mkPi(bu, lctx.mkPi(v, cApp))
+        val minorName = Name.replacePrefix(ctor.name, indType.name, Name.anonymous)
+        val (l4, minor) = lctx.mkLocalDecl(ngen, minorName, minorTy, BinderInfo.Default)
+        lctx = l4
+        recInfos(dIdx).minors += minor
+      }
+    }
+
+  private def collectCs: Vector[Expr]     = recInfos.map(_.motive).toVector
+  private def collectMinors: Vector[Expr] = recInfos.flatMap(_.minors).toVector
+
+  /** `mk_rec_rules`. */
+  private def mkRecRules(dIdx: Int, cs: Vector[Expr], minors: Vector[Expr], minorIdx0: Int): (List[RecursorRule], Int) =
+    var minorIdx = minorIdx0
+    val rules = indTypes(dIdx).ctors.map { ctor =>
+      val parts = ctorParts(ctor.tpe)
+      val bu    = parts.args
+      val u     = parts.recArgs
+      val v = u.map { ui =>
+        var uiTy = tc.whnf(tc.infer(ui))
+        val xs   = mutable.ArrayBuffer.empty[Expr]
+        while uiTy.isInstanceOf[Expr.ForallE] do
+          val pi = uiTy.asInstanceOf[Expr.ForallE]
+          val xx = localDeclFor(uiTy)
+          xs += xx
+          uiTy = tc.whnf(ExprOps.instantiate1(pi.body, xx))
+        val (jIdx, jIndices) = getIIndices(uiTy)
+        val recApp = Expr.App(
+          Expr.mkAppN(
+            Expr.mkAppN(
+              Expr.mkAppN(
+                Expr.mkAppN(Expr.Const(Names.recName(indTypes(jIdx).name), recLevels), params.toSeq),
+                cs
+              ),
+              minors
+            ),
+            jIndices
+          ),
+          Expr.mkAppN(ui, xs.toSeq)
+        )
+        lctx.mkLambda(xs.toIndexedSeq, recApp)
+      }
+      val eApp    = Expr.mkAppN(Expr.mkAppN(minors(minorIdx), bu), v)
+      val compRhs =
+        lctx.mkLambda(params.toIndexedSeq, lctx.mkLambda(cs, lctx.mkLambda(minors, lctx.mkLambda(bu, eApp))))
+      minorIdx += 1
+      RecursorRule(ctor.name, bu.length, compRhs)
+    }
+    (rules, minorIdx)
+
+  /** `declare_recursors`. */
+  private def declareRecursors(): List[RecursorVal] =
+    val cs      = collectCs
+    val minors  = collectMinors
+    val all     = indTypes.map(_.name).toList
+    var minorIdx = 0
+    val out = mutable.ArrayBuffer.empty[RecursorVal]
+    indTypes.indices.foreach { dIdx =>
+      val info  = recInfos(dIdx)
+      val cApp  = Expr.App(Expr.mkAppN(info.motive, info.indices), info.major)
+      var recTy = lctx.mkPi(Vector(info.major), cApp)
+      recTy = lctx.mkPi(info.indices, recTy)
+      recTy = lctx.mkPi(minors, recTy)
+      recTy = lctx.mkPi(cs, recTy)
+      recTy = lctx.mkPi(params.toIndexedSeq, recTy)
+      recTy = ExprOps.inferImplicit(recTy, strict = true)
+      val (rules, nextIdx) = mkRecRules(dIdx, cs, minors, minorIdx)
+      minorIdx = nextIdx
+      val recName = Names.recName(indTypes(dIdx).name)
+      env.checkName(recName)
+      val rv = RecursorVal(
+        ConstantVal(recName, recLparams, recTy),
+        all, nparams, nindices(dIdx), cs.length, minors.length, rules, kTarget, isUnsafe
+      )
+      env = env.addCore(ConstantInfo.RecInfo(rv))
+      out += rv
+    }
+    out.toList
+
+  /** `check_recursors`: v4.35 type checks the generated recursors and verifies
+    * each computation rule is type-preserving.
+    */
+  private def checkRecursors(): Unit =
+    val cs     = collectCs
+    val minors = collectMinors
+    indTypes.indices.foreach { dIdx =>
+      val recName = Names.recName(indTypes(dIdx).name)
+      val recCi   = env.get(recName)
+      tc.check(recCi.tpe, recLparams)
+      val recPre = Expr.mkAppN(
+        Expr.mkAppN(Expr.mkAppN(Expr.Const(recName, recLevels), params.toSeq), cs),
+        minors
+      )
+      indTypes(dIdx).ctors.foreach { ctor =>
+        val parts = ctorParts(ctor.tpe)
+        val bu    = parts.args
+        val (_, itIndices) = getIIndices(parts.result)
+        val introApp = Expr.mkAppN(Expr.mkAppN(Expr.Const(ctor.name, levels), params.toSeq), bu)
+        val lhs      = Expr.App(Expr.mkAppN(recPre, itIndices), introApp)
+        val checker  = tc
+        val expected = checker.infer(lhs)
+        val reduct   = checker.whnf(lhs)
+        val actual   = checker.infer(reduct)
+        if !checker.isDefEq(actual, expected) then
+          throw new KernelException(
+            ExceptionKind.InvalidDeclaration,
+            Some(ctor.name),
+            "the generated recursor computation rule is not type-preserving",
+            checker.defeqTrace
+          )
+      }
+    }
+
   /** Runs the checks and returns the derived entries. The environment is extended
     * with the inductive types before the constructors are checked, as
     * `declare_inductive_types` does, because a constructor's type mentions them.
@@ -283,14 +566,24 @@ final class InductiveChecker(
     checkConstructors()
     val (inds, ctors) = derive()
     ctors.foreach(c => env = env.addCore(ConstantInfo.CtorInfo(c)))
-    InductiveResult(env, inds, ctors, resultLevel, nindices.toList)
+    initElimLevel()
+    initKTarget()
+    mkRecInfos()
+    val recs = declareRecursors()
+    if profile.checkRecursors then checkRecursors()
+    InductiveResult(env, inds, ctors, recs, resultLevel, nindices.toList, elimLevel, kTarget)
+
+private final case class CtorParts(args: Vector[Expr], recArgs: Vector[Expr], result: Expr)
 
 final case class InductiveResult(
     env: Environment,
     inductives: List[InductiveVal],
     constructors: List[ConstructorVal],
+    recursors: List[RecursorVal],
     resultLevel: Level,
-    numIndices: List[Int]
+    numIndices: List[Int],
+    elimLevel: Level,
+    kTarget: Boolean
 )
 
 object InductiveChecker:
@@ -346,7 +639,9 @@ object InductiveChecker:
       exportedInds: List[InductiveVal],
       exportedCtors: List[ConstructorVal],
       derivedInds: List[InductiveVal],
-      derivedCtors: List[ConstructorVal]
+      derivedCtors: List[ConstructorVal],
+      exportedRecs: List[RecursorVal] = Nil,
+      derivedRecs: List[RecursorVal] = Nil
   ): Unit =
     def mismatch(n: Name, field: String, got: Any, want: Any): Nothing =
       throw KernelException(
@@ -382,4 +677,61 @@ object InductiveChecker:
       if got.numParams != want.numParams then mismatch(n, "numParams", got.numParams, want.numParams)
       if got.numFields != want.numFields then mismatch(n, "numFields", got.numFields, want.numFields)
       if got.isUnsafe != want.isUnsafe then mismatch(n, "isUnsafe", got.isUnsafe, want.isUnsafe)
+    }
+    validateRecursors(exportedRecs, derivedRecs)
+
+  /** Compares the recursors an export file ships against the regenerated ones,
+    * including every computation rule's right-hand side.
+    */
+  private def validateRecursors(exported: List[RecursorVal], derived: List[RecursorVal]): Unit =
+    def mismatch(n: Name, field: String, got: Any, want: Any): Nothing =
+      throw KernelException(
+        ExceptionKind.InvalidDeclaration,
+        n,
+        s"$field is $got in the export file but the kernel derives $want"
+      )
+    if exported.length != derived.length then
+      throw KernelException(
+        ExceptionKind.InvalidDeclaration,
+        s"the export file declares ${exported.length} recursors but the kernel derives ${derived.length}"
+      )
+    val derivedByName = derived.map(r => r.toConstantVal.name -> r).toMap
+    exported.foreach { got =>
+      val n    = got.toConstantVal.name
+      val want = derivedByName.getOrElse(n, mismatch(n, "the recursor", n, "nothing"))
+      val gcv  = got.toConstantVal
+      val wcv  = want.toConstantVal
+      if gcv.levelParams.length != wcv.levelParams.length then
+        mismatch(n, "the universe parameter count", gcv.levelParams.length, wcv.levelParams.length)
+      if got.numParams != want.numParams then mismatch(n, "numParams", got.numParams, want.numParams)
+      if got.numIndices != want.numIndices then mismatch(n, "numIndices", got.numIndices, want.numIndices)
+      if got.numMotives != want.numMotives then mismatch(n, "numMotives", got.numMotives, want.numMotives)
+      if got.numMinors != want.numMinors then mismatch(n, "numMinors", got.numMinors, want.numMinors)
+      if got.k != want.k then mismatch(n, "the K-like reduction flag", got.k, want.k)
+      if got.isUnsafe != want.isUnsafe then mismatch(n, "isUnsafe", got.isUnsafe, want.isUnsafe)
+      if got.all != want.all then
+        mismatch(n, "the mutual block", got.all.map(_.toString), want.all.map(_.toString))
+      // The exported recursor may name its elimination universe differently.
+      val subst = gcv.levelParams.map(Level.Param(_))
+      def rename(e: Expr): Expr = ExprOps.instantiateLevelParams(e, wcv.levelParams, subst)
+      if rename(wcv.tpe) != gcv.tpe then
+        throw KernelException(
+          ExceptionKind.InvalidDeclaration,
+          n,
+          s"the recursor type is\n  ${Pretty.expr(gcv.tpe)}\nbut the kernel derives\n  ${Pretty.expr(rename(wcv.tpe))}"
+        )
+      if got.rules.length != want.rules.length then
+        mismatch(n, "the rule count", got.rules.length, want.rules.length)
+      val wantRules = want.rules.map(r => r.ctor -> r).toMap
+      got.rules.foreach { gr =>
+        val wr = wantRules.getOrElse(gr.ctor, mismatch(n, s"a rule for '${gr.ctor}'", "present", "absent"))
+        if gr.nfields != wr.nfields then
+          mismatch(gr.ctor, "the rule's nfields", gr.nfields, wr.nfields)
+        if rename(wr.rhs) != gr.rhs then
+          throw KernelException(
+            ExceptionKind.InvalidDeclaration,
+            gr.ctor,
+            s"the recursor rule is\n  ${Pretty.expr(gr.rhs)}\nbut the kernel derives\n  ${Pretty.expr(rename(wr.rhs))}"
+          )
+      }
     }

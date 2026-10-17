@@ -229,6 +229,147 @@ class InductiveSuite extends munit.FunSuite:
     )
   }
 
+  test("the recursor for a simple recursive type") {
+    val r = runInd(natDecl)
+    assertEquals(r.recursors.length, 1)
+    val rv = r.recursors.head
+    assertEquals(rv.toConstantVal.name, Name.parse("Nat.rec"))
+    // A fresh elimination universe is added in front of the declaration's.
+    assertEquals(rv.toConstantVal.levelParams.map(_.toString), List("u"))
+    assertEquals(r.elimLevel, Level.Param(Name.mkSimple("u")))
+    assertEquals(rv.numParams, 0)
+    assertEquals(rv.numIndices, 0)
+    assertEquals(rv.numMotives, 1)
+    assertEquals(rv.numMinors, 2)
+    assert(!rv.k)
+    assertEquals(rv.majorIdx, 3)
+    assertEquals(rv.rules.map(_.ctor.toString), List("Nat.zero", "Nat.succ"))
+    assertEquals(rv.rules.map(_.nfields), List(0, 1))
+    assert(r.env.contains(Name.parse("Nat.rec")))
+    // The generated recursor is well typed and its rules are type-preserving;
+    // `check_recursors` ran as part of `run` under the v4.35 profile.
+    val tc = new TypeChecker(r.env, KernelProfile.v4_35)
+    tc.check(rv.toConstantVal.tpe, rv.toConstantVal.levelParams)
+  }
+
+  test("the elimination universe collides with a declared parameter") {
+    // The datatype already uses `u`, so the recursor must pick another name.
+    val d = Declaration.InductDecl(
+      List(u), 0,
+      List(InductiveType(
+        Name.parse("Box"), Expr.Sort(Level.Succ(lu)),
+        List(Constructor(Name.parse("Box.mk"), arrow(Expr.Sort(lu), Expr.Const(Name.parse("Box"), List(lu)))))
+      )),
+      false
+    )
+    val r = runInd(d)
+    assertEquals(r.elimLevel, Level.Param(Name.mkSimple("u1")))
+    assertEquals(r.recursors.head.toConstantVal.levelParams.map(_.toString), List("u1", "u"))
+  }
+
+  test("an inductive predicate eliminates only into Prop") {
+    // inductive Two : Prop where a : Two | b : Two
+    val d = Declaration.InductDecl(
+      Nil, 0,
+      List(InductiveType(
+        Name.parse("Two"), prop,
+        List(
+          Constructor(Name.parse("Two.a"), Expr.const("Two")),
+          Constructor(Name.parse("Two.b"), Expr.const("Two"))
+        )
+      )),
+      false
+    )
+    val r = runInd(d)
+    // More than one constructor, so the recursor cannot leave Prop.
+    assertEquals(r.elimLevel, Level.zero)
+    assertEquals(r.recursors.head.toConstantVal.levelParams, Nil)
+    assert(!r.kTarget)
+  }
+
+  test("an empty inductive predicate eliminates anywhere") {
+    val d = Declaration.InductDecl(Nil, 0, List(InductiveType(Name.parse("Empty0"), prop, Nil)), false)
+    val r = runInd(d)
+    assert(r.elimLevel.isParam)
+    assertEquals(r.recursors.head.numMinors, 0)
+    assert(!r.kTarget)
+  }
+
+  test("a field-less single-constructor predicate is a K target") {
+    // inductive K0 : Prop where mk : K0
+    val d = Declaration.InductDecl(
+      Nil, 0,
+      List(InductiveType(Name.parse("K0"), prop, List(Constructor(Name.parse("K0.mk"), Expr.const("K0"))))),
+      false
+    )
+    val r = runInd(d)
+    assert(r.kTarget)
+    assertEquals(r.recursors.head.k, true)
+    // One constructor with no fields, so it eliminates anywhere.
+    assert(r.elimLevel.isParam)
+  }
+
+  test("a single-constructor predicate with a field is not a K target") {
+    val nat = runInd(natDecl)
+    val d = Declaration.InductDecl(
+      Nil, 0,
+      List(InductiveType(
+        Name.parse("K1"), prop,
+        List(Constructor(Name.parse("K1.mk"), arrow(Expr.const("Nat"), Expr.const("K1"))))
+      )),
+      false
+    )
+    val r = runInd(d, nat.env)
+    assert(!r.kTarget)
+    // The field is not in Prop and does not occur in the result, so elimination
+    // is restricted to Prop.
+    assertEquals(r.elimLevel, Level.zero)
+  }
+
+  test("a mutual block gets one recursor per type sharing the motives") {
+    val d = Declaration.InductDecl(
+      Nil, 0,
+      List(
+        InductiveType(Name.parse("A"), type0, List(Constructor(Name.parse("A.mk"), arrow(Expr.const("B"), Expr.const("A"))))),
+        InductiveType(Name.parse("B"), type0, List(Constructor(Name.parse("B.mk"), arrow(Expr.const("A"), Expr.const("B")))))
+      ),
+      false
+    )
+    val r = runInd(d)
+    assertEquals(r.recursors.length, 2)
+    assertEquals(r.recursors.map(_.toConstantVal.name.toString), List("A.rec", "B.rec"))
+    r.recursors.foreach { rv =>
+      assertEquals(rv.numMotives, 2, clue(rv.toConstantVal.name.toString))
+      assertEquals(rv.numMinors, 2, clue(rv.toConstantVal.name.toString))
+      assertEquals(rv.all.map(_.toString), List("A", "B"))
+    }
+    // Mutual predicates would be Prop-only, but these live in Type.
+    assert(r.elimLevel.isParam)
+  }
+
+  test("the recursor rules reduce") {
+    val r  = runInd(natDecl)
+    val tc = new TypeChecker(r.env, KernelProfile.v4_35)
+    val natC = Expr.const("Nat")
+    val zero = Expr.const("Nat.zero")
+    val one  = Level.one
+    // Nat.rec.{1} (motive := fun _ => Nat) zero (fun n ih => n) Nat.zero  ==>  zero
+    val motive = Expr.Lam(Name.mkSimple("t"), natC, natC, BinderInfo.Default)
+    val minorZ = zero
+    val minorS = Expr.Lam(Name.mkSimple("n"), natC,
+      Expr.Lam(Name.mkSimple("ih"), natC, Expr.BVar(1), BinderInfo.Default), BinderInfo.Default)
+    def rec(major: Expr) = Expr.mkAppN(
+      Expr.Const(Name.parse("Nat.rec"), List(one)), Seq(motive, minorZ, minorS, major)
+    )
+    assertEquals(tc.whnf(rec(zero)), zero)
+    // `whnf` folds `Nat.succ` applications into literals, and the major premise
+    // is expanded back with `nat_lit_to_constructor`, so the result is a literal.
+    val two = Expr.App(Expr.const("Nat.succ"), Expr.App(Expr.const("Nat.succ"), zero))
+    assertEquals(tc.whnf(two), Expr.natLit(2))
+    assertEquals(tc.whnf(rec(two)), Expr.natLit(1))
+    assert(tc.isDefEq(rec(two), Expr.App(Expr.const("Nat.succ"), zero)))
+  }
+
   test("declarationOf rebuilds a block from exported entries") {
     val r = runInd(natDecl)
     val rebuilt = InductiveChecker.declarationOf(r.inductives, r.constructors)

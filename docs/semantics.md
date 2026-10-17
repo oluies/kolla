@@ -497,12 +497,48 @@ The inductive-predicate test uses the profile: v4.35 asks
 it over the three committed exports reproduces every value Lean emitted for all
 ten blocks.
 
-Still missing, and the reason an inductive block is not yet a verdict:
+Recursor generation is implemented: `elim_only_at_universe_zero`,
+`init_elim_level`, `init_K_target`, `mk_rec_infos`, `mk_rec_rules`,
+`declare_recursors`, and under the v4.35 profile the `check_recursors` pass that
+type checks each generated recursor and verifies each computation rule is
+type-preserving.
 
-- recursor generation: `elim_only_at_universe_zero`, `init_elim_level`,
-  `init_K_target`, `mk_rec_infos`, `declare_recursors`, and the v4.35
-  `check_recursors` pass.
+`InductiveChecker.validate` compares the recursors an export file ships against
+the regenerated ones: the universe parameter count, `numParams`, `numIndices`,
+`numMotives`, `numMinors`, the K-like reduction flag, the mutual block, the
+recursor type, and every rule's `nfields` and right-hand side. The exported
+recursor may name its elimination universe differently, so the derived type and
+rule bodies are renamed to the exported parameters before comparison. Running
+this over the three committed exports reproduces all ten recursors Lean emitted,
+rules included.
+
+Still missing:
+
 - the nested-inductive preprocessor. `numNested` is taken from the export file
   rather than computed, so a nested block is accepted on that field without
   being checked.
 - `check_uniform_ind_occs` (v4.35 only).
+
+### K12 — `consume_type_annotations` is not just `mdata`
+
+`add_inductive_fn::mk_local_decl_for` puts every binder domain through
+`consume_type_annotations` before it enters the local context, and that strips
+four *application* gadgets, not metadata: `optParam α d` and `autoParam α tac`
+reduce to `α` (their first argument), `outParam α` and `semiOutParam α` to `α`
+(`Expr.consumeTypeAnnotations`, `src/Lean/Expr.lean:1739`). Nested annotations
+under a binder are left alone.
+
+This is load-bearing for recursor generation. `HAdd` declares its third parameter
+as `outParam (Sort w)`, so without stripping, the generated `HAdd.rec` carries
+`forall (γ : outParam.{succ (succ w)} Sort succ w)` where Lean's carries
+`forall (γ : Sort succ w)`, and the two do not compare equal.
+
+### K13 — a constructor type must be walked once
+
+`mk_rec_infos`, `mk_rec_rules` and `check_recursors` each walk a constructor type
+collecting the non-parameter arguments as free variables, and each needs the
+*result* type instantiated with those same variables. Splitting the walk into one
+pass for the arguments and another for the result gives the result type a
+different set of free variables, which produces a recursor whose minor premise
+applies the motive to the wrong index. `ctorParts` returns both from one pass.
+v4.35's `check_recursors` rejects the result, which is what it is for.

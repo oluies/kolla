@@ -110,11 +110,12 @@ class CheckRealExportSuite extends munit.FunSuite:
   /** Walks an export file, running the inductive checker on each block instead
     * of carrying the file's entries over unchecked.
     */
-  private def checkInductiveBlocks(file: String): Int =
+  private def checkInductiveBlocks(file: String): (Int, Int) =
     val infos = ExportReader.fromLines(resource(file)).infos
     val dc    = new DeclarationChecker(KernelProfile.v4_35)
     var env   = Environment.empty
     var blocks = 0
+    var recsSeen = 0
     var i = 0
     while i < infos.length do
       infos(i) match
@@ -122,6 +123,7 @@ class CheckRealExportSuite extends munit.FunSuite:
           val blockNames = first.all.toSet
           val inds  = List.newBuilder[InductiveVal]
           val ctors = List.newBuilder[ConstructorVal]
+          val recs  = List.newBuilder[RecursorVal]
           var j = i
           var consumed = 0
           // The entries of one block are contiguous: types, then constructors,
@@ -133,26 +135,93 @@ class CheckRealExportSuite extends munit.FunSuite:
                 inds += v; consumed += 1; j += 1
               case ConstantInfo.CtorInfo(v) if blockNames.contains(v.induct) =>
                 ctors += v; consumed += 1; j += 1
+              case ConstantInfo.RecInfo(v) if v.all.toSet == blockNames =>
+                recs += v; consumed += 1; j += 1
               case _ => scanning = false
           val exportedInds  = inds.result()
           val exportedCtors = ctors.result()
+          val exportedRecs  = recs.result()
           val declaration   = InductiveChecker.declarationOf(exportedInds, exportedCtors)
           val result        = new InductiveChecker(env, declaration, KernelProfile.v4_35, exportedInds.head.numNested).run()
-          InductiveChecker.validate(exportedInds, exportedCtors, result.inductives, result.constructors)
+          InductiveChecker.validate(
+            exportedInds, exportedCtors, result.inductives, result.constructors,
+            exportedRecs, result.recursors
+          )
           env = result.env
           blocks += 1
+          recsSeen += exportedRecs.length
           i = j
         case info =>
           env = dc.addInfo(env, info)._1
           i += 1
-    blocks
+    (blocks, recsSeen)
 
-  test("the kernel derives the same inductive metadata Lean exports") {
-    // isRec, isReflexive, numIndices, cidx and numFields are all recomputed and
-    // compared against the values in the file.
-    assertEquals(checkInductiveBlocks("nat-add-3.1.0.ndjson"), 3)
-    assertEquals(checkInductiveBlocks("nat-add-succ-3.0.0.ndjson"), 6)
-    assertEquals(checkInductiveBlocks("quot-sound-3.1.0.ndjson"), 1)
+  test("the kernel regenerates the recursors Lean exports") {
+    // isRec, isReflexive, numIndices, cidx, numFields, the recursor types and
+    // every computation rule right-hand side are recomputed and compared against
+    // the values in the file. The second number is how many recursors were
+    // compared, so an empty comparison cannot pass unnoticed.
+    assertEquals(checkInductiveBlocks("nat-add-3.1.0.ndjson"), (3, 3))
+    assertEquals(checkInductiveBlocks("nat-add-succ-3.0.0.ndjson"), (6, 6))
+    assertEquals(checkInductiveBlocks("quot-sound-3.1.0.ndjson"), (1, 1))
+  }
+
+  test("a mutated recursor is rejected") {
+    val infos = ExportReader.fromLines(resource("nat-add-3.1.0.ndjson")).infos
+    val natName = Name.parse("Nat")
+    val natInd = infos.collectFirst {
+      case ConstantInfo.InductInfo(v) if v.toConstantVal.name == natName => v
+    }.get
+    val natCtors = infos.collect { case ConstantInfo.CtorInfo(v) if v.induct == natName => v }.toList
+    val natRec = infos.collectFirst {
+      case ConstantInfo.RecInfo(v) if v.toConstantVal.name == Name.parse("Nat.rec") => v
+    }.get
+    val declaration = InductiveChecker.declarationOf(List(natInd), natCtors)
+    val r = new InductiveChecker(Environment.empty, declaration, KernelProfile.v4_35).run()
+
+    // Unmutated, Lean's recursor and the regenerated one agree.
+    InductiveChecker.validate(List(natInd), natCtors, r.inductives, r.constructors, List(natRec), r.recursors)
+    assertEquals(natRec.rules.length, 2)
+    assertEquals(r.recursors.length, 1)
+    assertEquals(r.recursors.head.toConstantVal.name, Name.parse("Nat.rec"))
+    assert(!r.kTarget)
+
+    def reject(label: String, mutated: RecursorVal, expected: String): Unit =
+      val got =
+        try
+          InductiveChecker.validate(
+            List(natInd), natCtors, r.inductives, r.constructors, List(mutated), r.recursors
+          )
+          None
+        catch case e: KernelException => Some(e.getMessage)
+      got match
+        case None      => fail(s"mutation '$label' was accepted")
+        case Some(msg) => assert(msg.contains(expected), clue(label) + " / " + clue(msg))
+
+    // Altered rule right-hand side.
+    reject(
+      "rule rhs",
+      natRec.copy(rules = natRec.rules.head.copy(rhs = Expr.natLit(0)) :: natRec.rules.tail),
+      "the kernel derives"
+    )
+    // Altered field count on a rule.
+    reject(
+      "rule nfields",
+      natRec.copy(rules = natRec.rules.map(x => x.copy(nfields = x.nfields + 1))),
+      "nfields"
+    )
+    reject("numMinors", natRec.copy(numMinors = natRec.numMinors + 1), "numMinors")
+    reject("numMotives", natRec.copy(numMotives = 2), "numMotives")
+    reject("k", natRec.copy(k = true), "K-like reduction flag")
+    reject("numIndices", natRec.copy(numIndices = 1), "numIndices")
+    // A changed universe level in the recursor type.
+    reject(
+      "recursor type",
+      natRec.copy(toConstantVal = natRec.toConstantVal.copy(tpe = Expr.Sort(Level.zero))),
+      "the recursor type is"
+    )
+    // A dropped rule.
+    reject("dropped rule", natRec.copy(rules = natRec.rules.take(1)), "the rule count")
   }
 
   test("a swapped constructor index is rejected") {

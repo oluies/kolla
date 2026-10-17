@@ -88,6 +88,15 @@ object Name:
         case (x: Num, y: Num) => x.value == y.value && structEq(x.pre, y.pre)
         case _                => false
 
+  /** `lean::name::replace_prefix`. */
+  def replacePrefix(n: Name, pre: Name, newPre: Name): Name =
+    if n == pre then newPre
+    else
+      n match
+        case s: Str => replacePrefix(s.pre, pre, newPre).str(s.value)
+        case m: Num => replacePrefix(m.pre, pre, newPre).num(m.value)
+        case _      => n
+
   def append(a: Name, b: Name): Name =
     b.components.foldLeft(a) { (acc, c) =>
       c match

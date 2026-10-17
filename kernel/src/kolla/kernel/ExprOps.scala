@@ -314,6 +314,61 @@ object ExprOps:
       i += 1
     Expr.mkAppRange(instantiateRev(fn, args.slice(0, i)), args, i, args.length)
 
+  // ------------------------------------------------------- type annotations
+
+  private def isAppOfArity(e: Expr, n: Name, arity: Int): Boolean =
+    Expr.isConstOf(Expr.getAppFn(e), n) && Expr.getAppNumArgs(e) == arity
+
+  /** `Expr.consumeTypeAnnotations`: strips `optParam`, `autoParam`, `outParam`
+    * and `semiOutParam` wrappers. Nested annotations under a binder are left
+    * alone, as in Lean.
+    *
+    * `add_inductive_fn::mk_local_decl_for` applies this to every binder domain,
+    * so a parameter declared `(γ : outParam (Sort w))` enters the local context
+    * as `Sort w` and the generated recursor's type carries no annotation.
+    */
+  @tailrec
+  def consumeTypeAnnotations(e: Expr): Expr =
+    if isAppOfArity(e, Names.optParam, 2) || isAppOfArity(e, Names.autoParam, 2) then
+      consumeTypeAnnotations(e.asInstanceOf[Expr.App].fn.asInstanceOf[Expr.App].arg)
+    else if isAppOfArity(e, Names.outParam, 1) || isAppOfArity(e, Names.semiOutParam, 1) then
+      consumeTypeAnnotations(e.asInstanceOf[Expr.App].arg)
+    else e
+
+  // ------------------------------------------------- implicit argument inference
+
+  /** `lean::has_loose_bvars_in_domain`. */
+  private def hasLooseBVarsInDomain(b: Expr, vidx: Int, strict: Boolean): Boolean =
+    b match
+      case pi: Expr.ForallE =>
+        if hasLooseBVar(pi.binderType, vidx) then
+          if pi.binderInfo.isExplicit then true
+          else if hasLooseBVarsInDomain(pi.body, 0, strict) then true
+          else hasLooseBVarsInDomain(pi.body, vidx + 1, strict)
+        else hasLooseBVarsInDomain(pi.body, vidx + 1, strict)
+      case other => if !strict then hasLooseBVar(other, vidx) else false
+
+  /** `lean::infer_implicit`: marks a binder implicit when its variable occurs in
+    * a later domain. Binder annotations do not take part in `Expr.==` or in any
+    * kernel decision; this exists so a generated recursor's type carries the same
+    * annotations Lean's does.
+    */
+  def inferImplicit(t: Expr, numParams: Int, strict: Boolean): Expr =
+    if numParams == 0 then t
+    else
+      t match
+        case pi: Expr.ForallE =>
+          val newBody = inferImplicit(pi.body, numParams - 1, strict)
+          val bi =
+            if !pi.binderInfo.isExplicit then pi.binderInfo
+            else if hasLooseBVarsInDomain(newBody, 0, strict) then BinderInfo.Implicit
+            else pi.binderInfo
+          if (newBody eq pi.body) && bi == pi.binderInfo then t
+          else Expr.ForallE(pi.binderName, pi.binderType, newBody, bi)
+        case other => other
+
+  def inferImplicit(t: Expr, strict: Boolean): Expr = inferImplicit(t, Int.MaxValue, strict)
+
   // ------------------------------------------------------------- literals
 
   /** `lean::lit_type`. */

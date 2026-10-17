@@ -38,6 +38,11 @@ object Names:
 
   val eagerReduce: Name = Name.parse("eagerReduce")
 
+  val optParam: Name     = Name.parse("optParam")
+  val autoParam: Name    = Name.parse("autoParam")
+  val outParam: Name     = Name.parse("outParam")
+  val semiOutParam: Name = Name.parse("semiOutParam")
+
   val quotNames: Set[Name] = Set(quot, quotMk, quotLift, quotInd)
 
   def isQuotRecursor(n: Name): Boolean = n == quotLift || n == quotInd
