@@ -243,6 +243,26 @@ class ExprOpsSuite extends munit.ScalaCheckSuite:
     assert(!Expr.isBiEqual(r, t))
   }
 
+  test("inferImplicit handles a forall chain as long as a recursor's") {
+    val depth = 400
+    // forall (x_0 ... x_n : Type), Nat   with no dependencies: nothing to infer.
+    val deep = (0 until depth).foldLeft(nat)((b, _) =>
+      Expr.ForallE(Name.mkSimple("A"), Expr.Sort(Level.one), b, BinderInfo.Default)
+    )
+    assertEquals(ExprOps.inferImplicit(deep, strict = true), deep)
+    // Every binder's variable is used by the innermost domain, so all but the
+    // last become implicit.
+    // The outermost binder's variable reaches the innermost domain, so it is
+    // marked implicit while the chain's shape is preserved.
+    val dependent = (0 until depth).foldLeft(
+      Expr.ForallE(Name.mkSimple("z"), bv(depth - 1), nat, BinderInfo.Default): Expr
+    )((b, _) => Expr.ForallE(Name.mkSimple("A"), Expr.Sort(Level.one), b, BinderInfo.Default))
+    val inferred = ExprOps.inferImplicit(dependent, strict = true)
+    assertEquals(inferred.asInstanceOf[Expr.ForallE].binderInfo, BinderInfo.Implicit)
+    assert(inferred == dependent)
+    assert(!Expr.isBiEqual(inferred, dependent))
+  }
+
   test("deep terms do not overflow") {
     val depth = 50000
     val deep  = (0 until depth).foldLeft(bv(0))((e, _) => Expr.App(e, bv(1)))

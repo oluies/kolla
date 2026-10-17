@@ -337,7 +337,13 @@ object ExprOps:
 
   // ------------------------------------------------- implicit argument inference
 
-  /** `lean::has_loose_bvars_in_domain`. */
+  /** `lean::has_loose_bvars_in_domain`.
+    *
+    * Kept in Lean's recursive form. An explicit stack would have to enqueue both
+    * the `vidx + 1` continuation and the `vidx = 0` "transitivity" branch, losing
+    * the short-circuit that makes the original cheap. Recursion depth is bounded
+    * by the length of the forall spine; see the note on `inferImplicit`.
+    */
   private def hasLooseBVarsInDomain(b: Expr, vidx: Int, strict: Boolean): Boolean =
     b match
       case pi: Expr.ForallE =>
@@ -349,23 +355,40 @@ object ExprOps:
       case other => if !strict then hasLooseBVar(other, vidx) else false
 
   /** `lean::infer_implicit`: marks a binder implicit when its variable occurs in
-    * a later domain. Binder annotations do not take part in `Expr.==` or in any
-    * kernel decision; this exists so a generated recursor's type carries the same
-    * annotations Lean's does.
+    * a later domain. Binder annotations do not take part in `Expr.==`, but they
+    * do take part in `Expr.isBiEqual`, which is how a generated recursor's type
+    * is compared against the one an export file ships.
+    *
+    * Unlike the rest of this file, this pair is not stack-safe for an arbitrary
+    * term: the spine walk below is iterative, but `hasLooseBVarsInDomain`
+    * recurses, and the whole thing is quadratic in the spine length. Both are
+    * only ever applied to a generated recursor type, whose spine is the
+    * parameters, motives, minor premises and indices of one inductive block.
     */
   def inferImplicit(t: Expr, numParams: Int, strict: Boolean): Expr =
-    if numParams == 0 then t
-    else
-      t match
-        case pi: Expr.ForallE =>
-          val newBody = inferImplicit(pi.body, numParams - 1, strict)
-          val bi =
-            if !pi.binderInfo.isExplicit then pi.binderInfo
-            else if hasLooseBVarsInDomain(newBody, 0, strict) then BinderInfo.Implicit
-            else pi.binderInfo
-          if (newBody eq pi.body) && bi == pi.binderInfo then t
-          else Expr.ForallE(pi.binderName, pi.binderType, newBody, bi)
-        case other => other
+    // Collect the spine, then rebuild it from the inside out, so a forall chain
+    // thousands deep does not grow the call stack.
+    val spine = mutable.ArrayBuffer.empty[Expr.ForallE]
+    var cur   = t
+    var left  = numParams
+    while left > 0 && cur.isInstanceOf[Expr.ForallE] do
+      val pi = cur.asInstanceOf[Expr.ForallE]
+      spine += pi
+      cur = pi.body
+      left -= 1
+    var body = cur
+    var i    = spine.length
+    while i > 0 do
+      i -= 1
+      val pi = spine(i)
+      val bi =
+        if !pi.binderInfo.isExplicit then pi.binderInfo
+        else if hasLooseBVarsInDomain(body, 0, strict) then BinderInfo.Implicit
+        else pi.binderInfo
+      body =
+        if (body eq pi.body) && bi == pi.binderInfo then pi
+        else Expr.ForallE(pi.binderName, pi.binderType, body, bi)
+    body
 
   def inferImplicit(t: Expr, strict: Boolean): Expr = inferImplicit(t, Int.MaxValue, strict)
 

@@ -88,6 +88,14 @@ object Name:
         case (x: Num, y: Num) => x.value == y.value && structEq(x.pre, y.pre)
         case _                => false
 
+  /** `Name.appendAfter`: extends the last string component, or adds one. */
+  def appendAfter(n: Name, suffix: String): Name = n match
+    case s: Str => s.pre.str(s.value + suffix)
+    case other  => other.str(suffix)
+
+  /** `name::append_after(unsigned)`, which separates the index with `_`. */
+  def appendIndexAfter(n: Name, i: Int): Name = appendAfter(n, s"_$i")
+
   /** `lean::name::replace_prefix`. */
   def replacePrefix(n: Name, pre: Name, newPre: Name): Name =
     if n == pre then newPre

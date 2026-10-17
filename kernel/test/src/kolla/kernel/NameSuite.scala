@@ -71,3 +71,25 @@ class NameSuite extends munit.ScalaCheckSuite:
   property("components rebuild the name") {
     forAll { (a: Name) => Name.anonymous.append(a) == a }
   }
+
+  test("appendAfter extends the last string component") {
+    assertEquals(Name.appendAfter(Name.parse("A.n"), "_ih").toString, "A.n_ih")
+    assertEquals(Name.appendAfter(Name.mkSimple("n"), "_ih").toString, "n_ih")
+    // A numeral component cannot be extended, so a component is added.
+    assertEquals(Name.appendAfter(Name.anonymous.num(3), "_ih").toString, "3._ih")
+    assertEquals(Name.appendAfter(Name.anonymous, "u").toString, "u")
+  }
+
+  test("appendIndexAfter separates the index with an underscore") {
+    assertEquals(Name.appendIndexAfter(Name.mkSimple("u"), 1).toString, "u_1")
+    assertEquals(Name.appendIndexAfter(Name.mkSimple("motive"), 2).toString, "motive_2")
+    assertEquals(Name.appendIndexAfter(Name.parse("A.b"), 7).toString, "A.b_7")
+  }
+
+  test("replacePrefix strips an inductive's namespace") {
+    assertEquals(Name.replacePrefix(Name.parse("Nat.succ"), Name.parse("Nat"), Name.anonymous).toString, "succ")
+    assertEquals(Name.replacePrefix(Name.parse("A.B.c"), Name.parse("A.B"), Name.anonymous).toString, "c")
+    // No match leaves the name alone.
+    assertEquals(Name.replacePrefix(Name.parse("Nat.succ"), Name.parse("Int"), Name.anonymous).toString, "Nat.succ")
+    assertEquals(Name.replacePrefix(Name.parse("Nat"), Name.parse("Nat"), Name.mkSimple("X")).toString, "X")
+  }

@@ -3,12 +3,12 @@ package kolla.kernel
 import scala.collection.mutable
 
 /** Checks an inductive declaration and derives the environment entries for its
-  * types and constructors, mirroring `add_inductive_fn` in
+  * types, constructors and recursors, mirroring `add_inductive_fn` in
   * `src/kernel/inductive.cpp`.
   *
-  * Recursor generation is not implemented yet, so `run` stops after the
-  * constructors; `numNested` is taken from the declaration rather than computed,
-  * because computing it needs the nested-inductive preprocessor.
+  * Two things are still missing: the nested-inductive preprocessor, so
+  * `numNested` is taken from the declaration rather than computed, and
+  * `check_uniform_ind_occs`. See docs/semantics.md K11.
   */
 final class InductiveChecker(
     env0: Environment,
@@ -322,7 +322,7 @@ final class InductiveChecker(
       var u = Name.mkSimple("u")
       var i = 1
       while lparams.contains(u) do
-        u = Name.mkSimple(s"u$i")
+        u = Name.appendIndexAfter(Name.mkSimple("u"), i)
         i += 1
       elimLevel = Level.Param(u)
 
@@ -403,7 +403,8 @@ final class InductiveChecker(
       cTy = lctx.mkPi(Vector(major), cTy)
       cTy = lctx.mkPi(indices.toIndexedSeq, cTy)
       val cName =
-        if indTypes.length > 1 then Name.mkSimple(s"motive${dIdx + 1}") else Name.mkSimple("motive")
+        if indTypes.length > 1 then Name.appendIndexAfter(Name.mkSimple("motive"), dIdx + 1)
+        else Name.mkSimple("motive")
       val (l2, motive) = lctx.mkLocalDecl(ngen, cName, cTy, BinderInfo.Default)
       lctx = l2
       recInfos += RecInfo(motive, indices.toVector, major, mutable.ArrayBuffer.empty)
@@ -429,7 +430,8 @@ final class InductiveChecker(
           val inner = Expr.App(Expr.mkAppN(recInfos(jIdx).motive, jIndices), Expr.mkAppN(ui, xs.toSeq))
           val viTy  = lctx.mkPi(xs.toIndexedSeq, inner)
           val uiName = lctx.get(ui.asInstanceOf[Expr.FVar].id).userName
-          val (l3, vi) = lctx.mkLocalDecl(ngen, Name.append(uiName, Name.mkSimple("ih")), viTy, BinderInfo.Default)
+          val (l3, vi) =
+            lctx.mkLocalDecl(ngen, Name.appendAfter(uiName, "_ih"), viTy, BinderInfo.Default)
           lctx = l3
           vi
         }
@@ -720,6 +722,14 @@ object InductiveChecker:
           n,
           s"the recursor type is\n  ${Pretty.expr(gcv.tpe)}\nbut the kernel derives\n  ${Pretty.expr(rename(wcv.tpe))}"
         )
+      // `Expr.==` ignores binder names and annotations, so without this the
+      // `inferImplicit` and `appendAfter` naming would never be compared.
+      if !Expr.isBiEqual(rename(wcv.tpe), gcv.tpe) then
+        throw KernelException(
+          ExceptionKind.InvalidDeclaration,
+          n,
+          "the recursor type agrees up to binder names and annotations but not exactly"
+        )
       if got.rules.length != want.rules.length then
         mismatch(n, "the rule count", got.rules.length, want.rules.length)
       val wantRules = want.rules.map(r => r.ctor -> r).toMap
@@ -732,6 +742,12 @@ object InductiveChecker:
             ExceptionKind.InvalidDeclaration,
             gr.ctor,
             s"the recursor rule is\n  ${Pretty.expr(gr.rhs)}\nbut the kernel derives\n  ${Pretty.expr(rename(wr.rhs))}"
+          )
+        if !Expr.isBiEqual(rename(wr.rhs), gr.rhs) then
+          throw KernelException(
+            ExceptionKind.InvalidDeclaration,
+            gr.ctor,
+            "the recursor rule agrees up to binder names and annotations but not exactly"
           )
       }
     }

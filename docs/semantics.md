@@ -508,9 +508,29 @@ the regenerated ones: the universe parameter count, `numParams`, `numIndices`,
 `numMotives`, `numMinors`, the K-like reduction flag, the mutual block, the
 recursor type, and every rule's `nfields` and right-hand side. The exported
 recursor may name its elimination universe differently, so the derived type and
-rule bodies are renamed to the exported parameters before comparison. Running
-this over the three committed exports reproduces all ten recursors Lean emitted,
-rules included.
+rule bodies are renamed to the exported parameters before comparison.
+
+The comparison is made twice: with `Expr.==`, which ignores binder names and
+annotations (E2), and then with `Expr.isBiEqual`, which does not. Without the
+second one the `inferImplicit` annotations and the generated binder names would
+never be compared against anything, since they are invisible to the first. With
+both, all ten recursors in the three committed exports are reproduced exactly.
+
+### K14 — generated binder names use `append_after`
+
+`name::append_after(unsigned i)` separates the index with an underscore, so the
+fresh elimination universe is `u_1` and a mutual block's motives are `motive_1`,
+`motive_2`; `append_after(char const *)` extends the last string component, so
+the induction hypothesis for an argument `n` is `n_ih`, not `n.ih`. The exported
+recursors confirm both: `nat-add-3.1.0.ndjson` contains the name components
+`u_1` and `n_ih`.
+
+A minor premise is named by `name::replace_prefix(ind_type_name, anonymous)`, so
+`Nat.succ`'s premise is `succ`.
+
+These are binder and universe-parameter names, so only `Expr.isBiEqual` and the
+positional universe renaming see them. They were wrong (`u1`, `n.ih`) while the
+export comparison used `Expr.==` alone and nothing noticed.
 
 Still missing:
 

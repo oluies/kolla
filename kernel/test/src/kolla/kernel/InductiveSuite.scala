@@ -21,7 +21,9 @@ class InductiveSuite extends munit.FunSuite:
       Name.parse("Nat"), type0,
       List(
         Constructor(Name.parse("Nat.zero"), Expr.const("Nat")),
-        Constructor(Name.parse("Nat.succ"), arrow(Expr.const("Nat"), Expr.const("Nat")))
+        // The argument is named `n`, as Lean's own `Nat.succ` names it, so the
+        // generated induction hypothesis is `n_ih`.
+        Constructor(Name.parse("Nat.succ"), pi("n", Expr.const("Nat"), Expr.const("Nat")))
       )
     )),
     false
@@ -245,6 +247,9 @@ class InductiveSuite extends munit.FunSuite:
     assertEquals(rv.majorIdx, 3)
     assertEquals(rv.rules.map(_.ctor.toString), List("Nat.zero", "Nat.succ"))
     assertEquals(rv.rules.map(_.nfields), List(0, 1))
+    // The induction hypothesis is named `<arg>_ih`, as `append_after` produces.
+    val succRule = rv.rules.find(_.ctor == Name.parse("Nat.succ")).get
+    assert(Pretty.expr(succRule.rhs, 400).contains("n_ih"), clue(Pretty.expr(succRule.rhs, 400)))
     assert(r.env.contains(Name.parse("Nat.rec")))
     // The generated recursor is well typed and its rules are type-preserving;
     // `check_recursors` ran as part of `run` under the v4.35 profile.
@@ -263,8 +268,10 @@ class InductiveSuite extends munit.FunSuite:
       false
     )
     val r = runInd(d)
-    assertEquals(r.elimLevel, Level.Param(Name.mkSimple("u1")))
-    assertEquals(r.recursors.head.toConstantVal.levelParams.map(_.toString), List("u1", "u"))
+    // `name::append_after(unsigned)` separates the index with an underscore, so
+    // the fresh universe is `u_1`, which is what Lean's own exports contain.
+    assertEquals(r.elimLevel, Level.Param(Name.mkSimple("u_1")))
+    assertEquals(r.recursors.head.toConstantVal.levelParams.map(_.toString), List("u_1", "u"))
   }
 
   test("an inductive predicate eliminates only into Prop") {
