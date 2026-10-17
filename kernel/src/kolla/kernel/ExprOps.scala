@@ -76,7 +76,13 @@ object ExprOps:
               }
     go(e, 0).value
 
-  /** `lean::for_each_fn`, stopping the descent where `f` returns false. */
+  /** `lean::for_each_fn`, stopping the descent where `f` returns false.
+    *
+    * Children are visited in the order `for_each_fn::apply` recurses: `app_fn`
+    * before `app_arg`, the binder domain before its body, and a `let`'s type and
+    * value before its body. The stack is popped from the end, so children are
+    * pushed in reverse.
+    */
   def forEach(e: Expr)(f: (Expr, Int) => Boolean): Unit =
     val seen  = mutable.HashSet.empty[Key]
     val stack = mutable.ArrayDeque.empty[(Expr, Int)]
@@ -85,11 +91,11 @@ object ExprOps:
       val (x, offset) = stack.removeLast()
       if seen.add(new Key(x, offset)) && f(x, offset) then
         x match
-          case a: Expr.App     => stack.append((a.fn, offset)); stack.append((a.arg, offset))
-          case l: Expr.Lam     => stack.append((l.binderType, offset)); stack.append((l.body, offset + 1))
-          case p: Expr.ForallE => stack.append((p.binderType, offset)); stack.append((p.body, offset + 1))
+          case a: Expr.App     => stack.append((a.arg, offset)); stack.append((a.fn, offset))
+          case l: Expr.Lam     => stack.append((l.body, offset + 1)); stack.append((l.binderType, offset))
+          case p: Expr.ForallE => stack.append((p.body, offset + 1)); stack.append((p.binderType, offset))
           case l: Expr.LetE =>
-            stack.append((l.tpe, offset)); stack.append((l.value, offset)); stack.append((l.body, offset + 1))
+            stack.append((l.body, offset + 1)); stack.append((l.value, offset)); stack.append((l.tpe, offset))
           case p: Expr.Proj  => stack.append((p.struct, offset))
           case m: Expr.MData => stack.append((m.expr, offset))
           case _             => ()

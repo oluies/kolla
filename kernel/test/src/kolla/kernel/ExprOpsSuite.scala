@@ -101,6 +101,41 @@ class ExprOpsSuite extends munit.ScalaCheckSuite:
     assertEquals(ExprOps.undefinedLevelParam(e, List(u, y)), None)
     assertEquals(ExprOps.undefinedLevelParam(e, List(u)), Some(y))
     assertEquals(ExprOps.undefinedLevelParam(nat, Nil), None)
+    // `get_undef_param` reports the first in `for_each_fn` order, which visits
+    // `app_fn` before `app_arg`.
+    assertEquals(
+      ExprOps.undefinedLevelParam(Expr.App(Expr.Sort(lu), Expr.Sort(Level.Param(y))), Nil),
+      Some(u)
+    )
+    assertEquals(
+      ExprOps.undefinedLevelParam(Expr.Lam(x, Expr.Sort(lu), Expr.Sort(Level.Param(y)), BinderInfo.Default), Nil),
+      Some(u)
+    )
+    assertEquals(
+      ExprOps.undefinedLevelParam(
+        Expr.LetE(x, Expr.Sort(lu), Expr.Sort(Level.Param(y)), Expr.Sort(Level.Param(Name.mkSimple("z"))), false),
+        Nil
+      ),
+      Some(u)
+    )
+  }
+
+  test("forEach visits children in for_each_fn order") {
+    val a = Expr.const("A")
+    val b = Expr.const("B")
+    val c = Expr.const("C")
+    def order(e: Expr): List[String] =
+      val seen = List.newBuilder[String]
+      ExprOps.forEach(e) { (m, _) =>
+        Expr.constName(m).foreach(n => seen += n.toString)
+        true
+      }
+      seen.result()
+    assertEquals(order(Expr.App(a, b)), List("A", "B"))
+    assertEquals(order(Expr.Lam(x, a, b, BinderInfo.Default)), List("A", "B"))
+    assertEquals(order(Expr.ForallE(x, a, b, BinderInfo.Default)), List("A", "B"))
+    assertEquals(order(Expr.LetE(x, a, b, c, false)), List("A", "B", "C"))
+    assertEquals(order(Expr.mkAppN(a, Seq(b, c))), List("A", "B", "C"))
   }
 
   test("cheapBetaReduce") {
@@ -181,8 +216,21 @@ class ExprOpsSuite extends munit.ScalaCheckSuite:
     assertEquals(ExprOps.instantiate1(opened, nat), opened)
   }
 
-  property("instantiateRev of abstract is the identity on fvar-free terms") {
-    forAll { (e: Expr) => ExprOps.abstract_(e, Vector.empty) == e }
+  property("abstract with no free variables is the identity") {
+    forAll { (e: Expr) => ExprOps.abstract_(e, Vector.empty) eq e }
+  }
+
+  property("instantiateRev undoes abstract") {
+    // The term has to be closed: `abstract_` leaves loose bound variables alone,
+    // but `instantiateRev` would substitute any that fall inside its window.
+    val f0 = Expr.FVar(Name.mkSimple("_roundTrip0"))
+    val f1 = Expr.FVar(Name.mkSimple("_roundTrip1"))
+    val fvars = Vector(f0, f1)
+    forAll { (e: Expr) =>
+      val closed = (0 until e.looseBVarRange).foldLeft(e)((x, _) => lam(x))
+      val t      = Expr.App(Expr.App(Expr.const("f"), closed), Expr.App(f0, Expr.App(f1, f0)))
+      !t.hasLooseBVars && ExprOps.instantiateRev(ExprOps.abstract_(t, fvars), fvars) == t
+    }
   }
 
   property("liftLooseBVars by 0 is the identity") {

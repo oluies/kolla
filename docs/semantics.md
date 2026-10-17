@@ -356,8 +356,12 @@ the corpus and diffed.
 `ExprOps.replace` mirrors `lean::replace_fn`: `f` sees each subterm with its
 binder depth, a `Some` result replaces the subterm and stops the descent, and
 results are cached per `(subterm identity, depth)`. `forEach` mirrors
-`lean::for_each_fn`. Both run in `cats.Eval` or on an explicit stack, so neither
-grows the call stack.
+`lean::for_each_fn`, including its child order: `app_fn` before `app_arg`, a
+binder's domain before its body, and a `let`'s type and value before its body
+(`src/kernel/for_each_fn.cpp`, the offset-carrying `apply`). The order is
+observable through `undefinedLevelParam`, which reports the first undefined
+parameter, so it decides which name an error message carries. Both traversals run
+in `cats.Eval` or on an explicit stack, so neither grows the call stack.
 
 ### K3 — beta reduction substitutes arguments in reverse
 
@@ -376,6 +380,21 @@ that form.
 `infer_let` passes `remove_dead_let = true`, which drops a `let` whose variable
 does not occur in the body and lowers the remaining bound variables; `infer_lambda`
 does not.
+
+A `let` rebuilt this way always has `nondep = false`, and `LocalDecl` has no field
+for it. That is Lean's behaviour, not an omission:
+
+- `lean::local_decl` stores only `idx`, `name`, `user_name`, `type` and `value`
+  (`src/kernel/local_ctx.h`); there is no `nondep` field and no accessor for one.
+- the only let-shaped `local_ctx::mk_local_decl` passes `non_dep = false` as a
+  literal to `lean_local_ctx_mk_let_decl` (`src/kernel/local_ctx.cpp`).
+- `mk_binding` rebuilds with the four-argument `mk_let`, whose overload supplies
+  `nondep = false` (`src/kernel/expr.h:225`).
+- `infer_let` calls `m_lctx.mk_local_decl(ngen, let_name(e), type, val)` and never
+  passes `let_nondep(e)` (`src/kernel/type_checker.cpp`).
+
+So the flag is lost on the way through the local context in Lean too. It survives
+in `Expr` itself, where `==` compares it (E2, E3), and the kernel never reads it.
 
 ### K5 — string literals decode to code points
 

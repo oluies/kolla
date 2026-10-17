@@ -49,7 +49,11 @@ class KernelProfileSuite extends munit.FunSuite:
     assertEquals(p("nightly-2026-01-01"), KernelProfile.default.label)
   }
 
-  test("every toolchain in difftest/toolchains.txt resolves") {
-    List("leanprover/lean4:v4.25.0", "leanprover/lean4:v4.27.0", "leanprover/lean4:v4.35.0")
-      .foreach(t => assert(KernelProfile.all.contains(KernelProfile.forToolchain(t)), clue(t)))
+  test("every pinned profile is reachable from its own label") {
+    // Falsifiable: adding a profile to `all` without extending `forToolchain`
+    // makes it resolve to a neighbour instead of itself.
+    KernelProfile.all.foreach { p =>
+      assertEquals(KernelProfile.forToolchain(s"leanprover/lean4:${p.label}"), p, clue(p.label))
+    }
+    assertEquals(KernelProfile.all.map(_.label).distinct.length, KernelProfile.all.length)
   }
