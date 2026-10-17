@@ -56,6 +56,10 @@ final case class CheckerRun(
     wallNanos: Long,
     peakHeapBytes: Long,
     failure: Option[String] = None,
+    /** Whether the corpus is one at least one declaration must be rejected on.
+      * See docs/semantics.md P3, P7.
+      */
+    expectRejection: Boolean = false,
     /** Whether `results` carries a verdict per declaration. `lean4checker`
       * reports one accept/reject for a whole module, so its run is comparable
       * only through `overall`.
@@ -98,6 +102,7 @@ final case class CheckerRun(
       "wallNanos"     -> Json.num(wallNanos),
       "peakHeapBytes" -> Json.num(peakHeapBytes),
       "failure"       -> failure.fold("null")(Json.str),
+      "expectRejection" -> Json.bool(expectRejection),
       "perDeclaration" -> Json.bool(perDeclaration),
       "overall"        -> Json.str(overall.label),
       "overallDetail"  -> overall.detail.fold("null")(Json.str),

@@ -32,6 +32,14 @@ final class KernelException(
   def withTrace(t: List[String]): KernelException =
     new KernelException(kind, declName, detail, t)
 
+  /** The message without the defeq trace.
+    *
+    * `detail` alone is not a reason: for `InvalidProj` it is just the
+    * projection, and the kind is what says what is wrong with it. The trace is
+    * left out because callers that record it do so in their own field.
+    */
+  def reason: String = KernelException.render(kind, declName, detail, Nil)
+
 object KernelException:
 
   private[kernel] def render(

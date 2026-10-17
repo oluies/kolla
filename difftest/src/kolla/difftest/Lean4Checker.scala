@@ -43,6 +43,7 @@ object Lean4Checker:
       results = Vector.empty,
       wallNanos = 0L,
       peakHeapBytes = 0L,
+      expectRejection = corpus.expectRejection,
       perDeclaration = false
     )
 

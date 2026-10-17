@@ -28,6 +28,60 @@ class CorpusSuite extends munit.FunSuite:
     assertEquals(cs.map(_.name), cs.map(_.name).sorted)
   }
 
+  test("a negative case is named apart and marked") {
+    val c = Corpus.handwritten(Paths.get("difftest/cases-negative/addfalse.lean"), expectRejection = true)
+    assertEquals(c.name, "bad-addfalse")
+    assert(c.expectRejection)
+    assert(!Corpus.handwritten(Paths.get("difftest/cases/eta.lean")).expectRejection)
+  }
+
+  test("every committed negative case is picked up") {
+    val cs = Corpus.negativeCases.unsafeRunHere()
+    assert(cs.length >= 3, clue(cs.map(_.name)))
+    assert(cs.forall(_.expectRejection))
+    assert(cs.forall(_.name.startsWith("bad-")))
+    // Nothing is both a positive and a negative corpus.
+    val names = Corpus.cases.unsafeRunHere().map(_.name).toSet
+    assert(cs.forall(c => !names.contains(c.name)))
+  }
+
+  test("a toolchains directive restricts a case, and an absent one does not") {
+    val all = Corpus.handwritten(Paths.get("x/a.lean"))
+    assert(all.appliesTo(Toolchain("leanprover/lean4:v4.35.0")))
+
+    val some = Corpus.handwritten(
+      Paths.get("x/a.lean"),
+      expectRejection = true,
+      contents = "/- doc -/\n-- toolchains: v4.27.0  v4.28.0\nimport Lean\n"
+    )
+    assertEquals(some.toolchains, List("v4.27.0", "v4.28.0"))
+    assert(some.appliesTo(Toolchain("leanprover/lean4:v4.28.0")))
+    assert(!some.appliesTo(Toolchain("leanprover/lean4:v4.35.0")))
+  }
+
+  test("every toolchain a committed case names is in the matrix") {
+    // A typo here would silently drop the case from every run.
+    val known = Toolchains.parse(Layout.readFile(Layout.toolchainsFile)).map(_.version).toSet
+    val cs    = Corpus.cases.unsafeRunHere() ++ Corpus.negativeCases.unsafeRunHere()
+    cs.foreach(c => c.toolchains.foreach(v => assert(known.contains(v), clue(s"${c.name} names $v"))))
+  }
+
+  test("every committed toolchain has at least one negative case or something to mutate") {
+    val ts = Toolchains.parse(Layout.readFile(Layout.toolchainsFile))
+    val cs = Corpus.cases.unsafeRunHere() ++ Corpus.negativeCases.unsafeRunHere()
+    ts.foreach { t =>
+      val applicable = cs.filter(_.appliesTo(t))
+      assert(
+        applicable.exists(_.expectRejection) || applicable.exists(!_.expectRejection),
+        clue(s"${t.spec} has no corpus at all")
+      )
+    }
+    // v4.35.0 has no negative case, by P7; its negative coverage is the mutants.
+    val v435 = Toolchain("leanprover/lean4:v4.35.0")
+    assert(cs.filter(_.appliesTo(v435)).forall(!_.expectRejection))
+    assert(cs.exists(c => c.expectRejection && c.appliesTo(Toolchain("leanprover/lean4:v4.28.0"))))
+  }
+
   test("the mathlib sample names declarations and nothing else") {
     val c = Corpus.mathlibSample(Paths.get("/tmp/mathlib4")).unsafeRunHere()
     assertEquals(c.name, "mathlib-sample")

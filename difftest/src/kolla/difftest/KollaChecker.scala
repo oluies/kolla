@@ -24,7 +24,8 @@ object KollaChecker:
       toolchain: String,
       corpus: String,
       platform: String = "jvm",
-      stopOnFirstRejection: Boolean = false
+      stopOnFirstRejection: Boolean = false,
+      expectRejection: Boolean = false
   ): IO[CheckerRun] =
     IO.monotonic.flatMap { start =>
       val results = Vector.newBuilder[DeclResult]
@@ -60,7 +61,7 @@ object KollaChecker:
             (v, Some(e), Nil)
           catch
             case e: KernelException =>
-              (Verdict.Rejected(e.detail), scala.util.Try(recover(env)).toOption, e.trace)
+              (Verdict.Rejected(e.reason), scala.util.Try(recover(env)).toOption, e.trace)
             case e: ExportException =>
               (Verdict.Error(e.getMessage), scala.util.Try(recover(env)).toOption, Nil)
         val nanos = System.nanoTime() - t0
@@ -168,7 +169,8 @@ object KollaChecker:
         IO.monotonic.map { end =>
           CheckerRun(
             name, toolchain, corpus, platform,
-            results.result(), (end - start).toNanos, peak
+            results.result(), (end - start).toNanos, peak,
+            expectRejection = expectRejection
           )
         }
       }
@@ -181,7 +183,8 @@ object KollaChecker:
       toolchain: String,
       corpus: String,
       platform: String = "jvm",
-      stopOnFirstRejection: Boolean = false
+      stopOnFirstRejection: Boolean = false,
+      expectRejection: Boolean = false
   ): IO[CheckerRun] =
     IO.blocking(Layout.readFile(path)).flatMap { contents =>
       IO(ExportReader.fromString(contents)).attempt.flatMap {
@@ -189,6 +192,7 @@ object KollaChecker:
           IO.pure(
             CheckerRun(name, toolchain, corpus, platform, Vector.empty, 0L, 0L, Some(e.getMessage))
           )
-        case Right(env) => check(env.items, profile, toolchain, corpus, platform, stopOnFirstRejection)
+        case Right(env) =>
+          check(env.items, profile, toolchain, corpus, platform, stopOnFirstRejection, expectRejection)
       }
     }

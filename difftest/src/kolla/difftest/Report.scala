@@ -19,20 +19,31 @@ final case class Report(
     * to disagree with it.
     */
   def falseRejections: Vector[CheckerRun] =
-    runs.filter(r => r.checker == KollaChecker.name && r.unexpected.nonEmpty)
+    runs.filter(r => r.checker == KollaChecker.name && !r.expectRejection && r.unexpected.nonEmpty)
+
+  /** Runs over a negative corpus that accepted everything.
+    *
+    * A negative corpus holds a declaration Lean put into the environment
+    * without the kernel's consent, so a checker that judges it must reject
+    * something. Accepting the lot is the failure this catches, and it is what
+    * keeps the positive corpora from being the only thing the platform proves.
+    */
+  def missedRejections: Vector[CheckerRun] =
+    runs.filter(r => r.expectRejection && r.rejected == 0)
 
   /** True when every comparison agreed and no run failed outright. */
   def agrees: Boolean =
     comparisons.forall(_.agrees) && overall.forall(_.agrees) &&
       mutations.forall(_.asExpected) && runs.forall(_.failure.isEmpty) &&
-      falseRejections.isEmpty
+      falseRejections.isEmpty && missedRejections.isEmpty
 
   def json: String =
     Json.obj(
       "commit"      -> Json.str(commit),
       "startedAt"   -> Json.str(startedAt),
       "agrees"      -> Json.bool(agrees),
-      "falseRejections" -> Json.num(falseRejections.map(_.unexpected.length.toLong).sum),
+      "falseRejections"  -> Json.num(falseRejections.map(_.unexpected.length.toLong).sum),
+      "missedRejections" -> Json.num(missedRejections.length.toLong),
       "runs"        -> Json.arr(runs.map(_.json)),
       "comparisons" -> Json.arr(comparisons.map(_.json)),
       "overall"     -> Json.arr(overall.map(_.json)),
@@ -57,6 +68,9 @@ final case class Report(
         }
         if r.unexpected.length > 5 then sb ++= s"    ... and ${r.unexpected.length - 5} more\n"
       }
+    if missedRejections.nonEmpty then
+      sb ++= "\nmissed rejections on a negative corpus\n"
+      missedRejections.foreach(r => sb ++= s"  ${r.checker} accepted all of ${r.toolchain} / ${r.corpus}\n")
     if comparisons.nonEmpty then
       sb ++= "\nper-declaration comparisons\n"
       comparisons.foreach(c => sb ++= c.render)

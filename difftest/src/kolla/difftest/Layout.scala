@@ -33,6 +33,9 @@ object Layout:
   /** `difftest/cases/`, the handwritten corpus. */
   def casesDir: Path = repoFile("difftest/cases")
 
+  /** `difftest/cases-negative/`, declarations the kernel has to reject. */
+  def negativeCasesDir: Path = repoFile("difftest/cases-negative")
+
   /** `difftest/history/`, timing tracked over commits. */
   def historyDir: Path = repoFile("difftest/history")
 

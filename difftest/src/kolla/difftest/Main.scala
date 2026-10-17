@@ -89,9 +89,10 @@ object Main extends IOApp:
   private def selectedCorpora(o: Options): IO[List[Corpus]] =
     for
       cases <- Corpus.cases
+      bad   <- Corpus.negativeCases
       ml    <- o.mathlib.fold(IO.pure(List.empty[Corpus]))(d => Corpus.mathlibSample(d).map(List(_)))
-      all = cases ++ List(Corpus.init, Corpus.std, Corpus.lean) ++ ml
-    yield if o.corpora.isEmpty then cases else all.filter(c => o.corpora.contains(c.name))
+      all = cases ++ bad ++ List(Corpus.init, Corpus.std, Corpus.lean) ++ ml
+    yield if o.corpora.isEmpty then cases ++ bad else all.filter(c => o.corpora.contains(c.name))
 
   private def list(toolchains: List[Toolchain], corpora: List[Corpus]): IO[Unit] =
     IO.println("toolchains") *>
@@ -99,7 +100,13 @@ object Main extends IOApp:
         IO.println(s"  ${t.spec}  (profile ${t.profile.label}${if t.hasReference then "" else ", no reference"})")
       ) *>
       IO.println("corpora") *>
-      corpora.traverseVoid(c => IO.println(s"  ${c.name}  modules=${c.modules.mkString(",")}"))
+      corpora.traverseVoid(c =>
+        IO.println(
+          s"  ${c.name}  modules=${c.modules.mkString(",")}" +
+            (if c.expectRejection then "  (must be rejected)" else "") +
+            (if c.toolchains.isEmpty then "" else s"  only ${c.toolchains.mkString(",")}")
+        )
+      )
 
   private def provisionOne(t: Toolchain, o: Options): IO[Unit] =
     IO.println(s"provisioning ${t.spec}") *> Provision.provision(t, o.withChecker && t.hasReference).void
@@ -107,7 +114,7 @@ object Main extends IOApp:
   private def exportOnly(toolchains: List[Toolchain], corpora: List[Corpus], o: Options): IO[Unit] =
     toolchains.traverseVoid { t =>
       Provision.provision(t, withChecker = false).flatMap { tools =>
-        corpora.traverseVoid { c =>
+        corpora.filter(_.appliesTo(t)).traverseVoid { c =>
           Exporter.exportFile(tools, c).flatMap(p => IO.println(s"  ${t.version} ${c.name} -> $p"))
         }
       }
@@ -123,7 +130,7 @@ object Main extends IOApp:
 
   private def mutantsFor(t: Toolchain, corpora: List[Corpus], o: Options): IO[Vector[MutationOutcome]] =
     Provision.provision(t, withChecker = false).flatMap { tools =>
-      corpora.traverseAccum { c =>
+      corpora.filter(_.appliesTo(t)).traverseAccum { c =>
         for
           path  <- Exporter.exportFile(tools, c)
           items <- IO.blocking(Layout.readFile(path)).map(s => kolla.leanexport.ExportReader.fromString(s).items)
@@ -149,9 +156,18 @@ object Main extends IOApp:
 
   private type Part = (Vector[CheckerRun], Vector[OverallAgreement], Vector[MutationOutcome])
 
+  private def mutantsOf(
+      items: Vector[kolla.leanexport.ExportItem],
+      t: Toolchain,
+      c: Corpus,
+      o: Options
+  ): IO[Vector[MutationOutcome]] =
+    if o.withMutants && !c.expectRejection then MutationRun.run(items, t.profile, t.spec, c.name, o.seeds)
+    else IO.pure(Vector.empty)
+
   private def oneToolchain(t: Toolchain, corpora: List[Corpus], o: Options): IO[Part] =
     Provision.provision(t, o.withChecker && t.hasReference).flatMap { tools =>
-      corpora.foldLeft(IO.pure((Vector.empty, Vector.empty, Vector.empty): Part)) { (acc, c) =>
+      corpora.filter(_.appliesTo(t)).foldLeft(IO.pure((Vector.empty, Vector.empty, Vector.empty): Part)) { (acc, c) =>
         acc.flatMap { (runs, agree, muts) =>
           oneCorpus(tools, t, c, o).map { (r, a, m) =>
             (runs ++ r, agree ++ a, muts ++ m)
@@ -168,10 +184,14 @@ object Main extends IOApp:
       items <- IO.blocking(Layout.readFile(path)).map(s => kolla.leanexport.ExportReader.fromString(s).items)
       // `lean4checker` aborts on the first problem, so kolla must too for the
       // corpus-level verdicts to be comparable.
-      kolla <- KollaChecker.check(items, t.profile, t.spec, c.name, "jvm", stopOnFirstRejection = reference)
+      kolla <- KollaChecker.check(
+                 items, t.profile, t.spec, c.name, "jvm",
+                 stopOnFirstRejection = reference,
+                 expectRejection = c.expectRejection
+               )
       ref   <- if reference then Lean4Checker.run(tools, c).map(Some(_)) else IO.pure(None)
-      muts  <- if o.withMutants then MutationRun.run(items, t.profile, t.spec, c.name, o.seeds)
-               else IO.pure(Vector.empty)
+      // Mutating a corpus that is already invalid proves nothing.
+      muts <- mutantsOf(items, t, c, o)
     yield (
       Vector(kolla) ++ ref.toVector,
       ref.toVector.map(r => Compare.overall(r, kolla)),

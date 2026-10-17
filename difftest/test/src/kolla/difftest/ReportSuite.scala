@@ -43,6 +43,30 @@ class ReportSuite extends munit.FunSuite:
     assertEquals(r.falseRejections.length, 0)
   }
 
+  test("a negative corpus must reject something") {
+    val accepting = run("kolla", "bad-addfalse", "A" -> Verdict.Accepted).copy(expectRejection = true)
+    val r = report(accepting)
+    assert(!r.agrees)
+    assertEquals(r.missedRejections.length, 1)
+    assertEquals(r.falseRejections.length, 0)
+    assert(clue(r.render).contains("missed rejections"))
+  }
+
+  test("a rejection on a negative corpus is what was asked for") {
+    val rejecting =
+      run("kolla", "bad-addfalse", "A" -> Verdict.Accepted, "B" -> Verdict.Rejected("type mismatch"))
+        .copy(expectRejection = true)
+    val r = report(rejecting)
+    assert(r.agrees)
+    assertEquals(r.falseRejections.length, 0)
+    assertEquals(r.missedRejections.length, 0)
+  }
+
+  test("a reference that accepts a negative corpus is caught too") {
+    val r = report(run(Lean4Checker.name, "bad-addfalse", "c" -> Verdict.Accepted).copy(expectRejection = true))
+    assertEquals(r.missedRejections.length, 1)
+  }
+
   test("a run that failed outright does not agree") {
     val r = report(run("kolla", "case-eta").copy(failure = Some("export unreadable")))
     assert(!r.agrees)

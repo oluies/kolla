@@ -9,43 +9,79 @@ import scala.jdk.CollectionConverters.*
   * `modules` are passed to `lean4export` as import roots; `decls`, when
   * non-empty, restrict the export to those constants and their dependencies.
   *
-  * Every corpus here is positive: it is the export of an environment Lean built
-  * and accepted, so each declaration in it must be accepted. That expectation
-  * is a reference in its own right, and the only one available for a toolchain
-  * `lean4checker` has no release for.
+  * A positive corpus is the export of an environment Lean built and accepted, so
+  * each declaration in it must be accepted. That expectation is a reference in
+  * its own right, and the only one available for a toolchain `lean4checker` has
+  * no release for.
+  *
+  * A negative corpus holds declarations put into the environment with
+  * `addDeclCore (doCheck := false)`, which the elaborator will do but the kernel
+  * must not: at least one declaration has to be rejected.
   */
 final case class Corpus(
     name: String,
     modules: List[String],
     decls: List[String] = Nil,
     source: Option[Path] = None,
-    project: Option[Path] = None
-)
+    project: Option[Path] = None,
+    expectRejection: Boolean = false,
+    /** The toolchain versions this corpus applies to, empty meaning all of
+      * them. A negative case has to call `Environment.addDeclCore` to get an
+      * unchecked declaration into the environment, and that signature changes
+      * between releases, so it compiles only under the toolchains it names.
+      * See docs/semantics.md P7.
+      */
+    toolchains: List[String] = Nil
+):
+  def appliesTo(t: Toolchain): Boolean = toolchains.isEmpty || toolchains.contains(t.version)
 
 object Corpus:
 
   /** A module from the toolchain's own library, exported in full. */
   def library(name: String, modules: String*): Corpus = Corpus(name, modules.toList)
 
-  /** A handwritten `.lean` file under `difftest/cases/`. */
-  def handwritten(file: Path): Corpus =
-    val mod = file.getFileName.toString.stripSuffix(".lean")
-    Corpus(s"case-$mod", List(mod), source = Some(file))
+  /** The directive a case may use to restrict itself to some toolchains. */
+  val toolchainsDirective = "-- toolchains:"
 
-  /** Every `.lean` file under `difftest/cases/`, each its own corpus. */
-  def cases: IO[List[Corpus]] =
+  /** A handwritten `.lean` file under `difftest/cases/`. */
+  def handwritten(file: Path, expectRejection: Boolean = false, contents: String = ""): Corpus =
+    val mod    = file.getFileName.toString.stripSuffix(".lean")
+    val prefix = if expectRejection then "bad" else "case"
+    Corpus(
+      s"$prefix-$mod",
+      List(mod),
+      source = Some(file),
+      expectRejection = expectRejection,
+      toolchains = declaredToolchains(contents)
+    )
+
+  /** The versions a `-- toolchains:` line names, or nothing if there is none. */
+  def declaredToolchains(contents: String): List[String] =
+    contents.linesIterator
+      .map(_.trim)
+      .find(_.startsWith(toolchainsDirective))
+      .toList
+      .flatMap(_.drop(toolchainsDirective.length).split("\\s+").toList.map(_.trim).filter(_.nonEmpty))
+
+  private def lean(dir: Path, expectRejection: Boolean): IO[List[Corpus]] =
     IO.blocking {
-      if !Files.isDirectory(Layout.casesDir) then Nil
+      if !Files.isDirectory(dir) then Nil
       else
         Files
-          .list(Layout.casesDir)
+          .list(dir)
           .iterator
           .asScala
           .filter(_.getFileName.toString.endsWith(".lean"))
           .toList
           .sortBy(_.getFileName.toString)
-          .map(handwritten)
+          .map(f => handwritten(f, expectRejection, Layout.readFile(f)))
     }
+
+  /** Every `.lean` file under `difftest/cases/`, each its own corpus. */
+  def cases: IO[List[Corpus]] = lean(Layout.casesDir, expectRejection = false)
+
+  /** Every `.lean` file under `difftest/cases-negative/`. */
+  def negativeCases: IO[List[Corpus]] = lean(Layout.negativeCasesDir, expectRejection = true)
 
   /** The declarations named in `difftest/mathlib-sample.txt`, exported from a
     * mathlib checkout the caller provides.

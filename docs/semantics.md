@@ -794,3 +794,27 @@ ones and hiding the first.
 This only matters when `stopOnFirstRejection` is off, which is how the negative
 corpus runs: a mutant has exactly one corruption, and the run has to show which
 declaration it was caught at rather than a wall of consequences.
+
+### P7 — a negative case names the toolchains it applies to
+
+A negative corpus has to get an unchecked declaration into the environment,
+which means calling `Environment.addDeclCore (doCheck := false)`. That is an
+internal API and its signature changes between releases: the v4.28 call
+`env.addDeclCore 0 decl none` does not elaborate under v4.35, the same drift
+that stops `lean4checker` building there (P1).
+
+A case therefore declares the versions it compiles under with a
+`-- toolchains: v4.25.0 v4.27.0 v4.28.0` line, which is an ordinary Lean comment,
+and a run skips the cases that do not name its toolchain. Every version named
+has to be in `difftest/toolchains.txt`, so a typo cannot silently disable a case.
+
+v4.35.0 consequently has no negative case. Its negative coverage is the mutants,
+which are produced from the export file rather than from Lean and so are
+toolchain-independent.
+
+### P8 — a rejection reason is the exception kind, not its detail
+
+`KernelException.detail` is not a reason on its own: for `InvalidProj` it is
+just the projection, and the kind is what says what is wrong with it. Verdicts
+record `KernelException.reason`, which is the kind, the declaration name and the
+detail, and leave the defeq trace to `DeclResult.trace`.
