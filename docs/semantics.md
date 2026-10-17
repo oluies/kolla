@@ -818,3 +818,50 @@ toolchain-independent.
 just the projection, and the kind is what says what is wrong with it. Verdicts
 record `KernelException.reason`, which is the kind, the declaration name and the
 detail, and leave the defeq trace to `DeclResult.trace`.
+
+### P9 — nanoda is the reference v4.35.0 does have
+
+nanoda_lib reads an export file rather than oleans, so it is not built against a
+Lean toolchain and one build serves every release. What it is tied to is the
+export format: `check_semver` in its `src/parser.rs` accepts 3.1.0 up to but not
+including 3.2.0, which in this matrix is v4.28.0 and v4.35.0.
+
+That makes it the reference for v4.35.0, which `lean4checker` has no release for
+(P2). Like `lean4checker` it reports one verdict for the whole file — a bad
+declaration panics out of `check_all_declars` — so it is compared through
+`CheckerRun.overall` and kolla runs with `stopOnFirstRejection` whenever either
+reference is in play.
+
+`nat_extension` and `string_extension` are off by default in nanoda and are
+turned on, since Lean's kernel has them. `unpermitted_axiom_hard_error` is off:
+an export file declares axioms none of its declarations use, such as `sorryAx`,
+and nanoda would otherwise abort on them before checking anything.
+
+### P10 — the kernel's ambient constants are hoisted to the front
+
+The kernel's literal extensions refer to constants by name: the string
+expansion builds `String.ofList (List.cons (Char.ofNat c) ..)`, the `Nat`
+extension needs `Nat.zero` and `Nat.succ`. None of these is a *syntactic*
+dependency of the declaration that needs them — a theorem about `"ab" ++ "cd"`
+never mentions `String.ofList` — so lean4export, which orders a file by
+syntactic dependency, can emit them after their first use.
+
+In the v4.25.0 export of `case-strlit`, `appendLit` is item 406 and `String.mk`
+is item 1822. A linear replay therefore reaches `"ab" ++ "cd" = "abcd"` with
+nothing to expand the literal to, and rejects it. Lean never sees this: its
+kernel always runs with `Init` imported, and `lean4checker` replays a module
+into an environment that already holds its imports.
+
+`KollaChecker.hoistExtensionConstants` moves those constants, and the groups
+they depend on, to the front. It is a stable partition of whole groups, so each
+half keeps its order and every declaration still follows its dependencies; an
+inductive block stays contiguous, which the checker loop requires. Nothing is
+added unchecked and nothing is checked twice.
+
+### P11 — a mutant is credited only with rejections the baseline did not have
+
+`MutationRun` checks the unmutated corpus first and subtracts its rejections.
+Without that, a corpus with a pre-existing failure makes every mutant look
+correct, including `ChangeDefinitionalHeight`, which must stay accepted: the
+v4.25.0 run before P10 reported `change-definitional-height` as a rejection of
+`appendLit`, a declaration the mutation had not touched.

@@ -11,6 +11,7 @@ final case class Options(
     seeds: List[Long] = List(1L),
     mathlib: Option[Path] = None,
     withChecker: Boolean = true,
+    withNanoda: Boolean = true,
     withMutants: Boolean = true,
     writeHistory: Boolean = false
 )
@@ -31,6 +32,7 @@ object Options:
       |  --seed <n>             mutation seed, repeatable (default 1)
       |  --mathlib <dir>        a mathlib checkout, enabling the mathlib-sample corpus
       |  --no-checker           skip lean4checker
+      |  --no-nanoda            skip nanoda
       |  --no-mutants           skip the negative corpus
       |  --history              append timings to difftest/history/
       |""".stripMargin
@@ -46,6 +48,7 @@ object Options:
           case None    => Left(s"--seed expects a number, got $v")
       case "--mathlib" :: v :: t                   => go(t, o.copy(mathlib = Some(JPaths.get(v))))
       case "--no-checker" :: t                     => go(t, o.copy(withChecker = false))
+      case "--no-nanoda" :: t                      => go(t, o.copy(withNanoda = false))
       case "--no-mutants" :: t                     => go(t, o.copy(withMutants = false))
       case "--history" :: t                        => go(t, o.copy(writeHistory = true))
       case ("-h" | "--help") :: _                  => Left(usage)
@@ -109,7 +112,9 @@ object Main extends IOApp:
       )
 
   private def provisionOne(t: Toolchain, o: Options): IO[Unit] =
-    IO.println(s"provisioning ${t.spec}") *> Provision.provision(t, o.withChecker && t.hasReference).void
+    IO.println(s"provisioning ${t.spec}") *>
+      Provision.provision(t, o.withChecker && t.hasReference).void *>
+      (if o.withNanoda then Nanoda.provision.void else IO.unit)
 
   private def exportOnly(toolchains: List[Toolchain], corpora: List[Corpus], o: Options): IO[Unit] =
     toolchains.traverseVoid { t =>
@@ -143,7 +148,8 @@ object Main extends IOApp:
     for
       commit <- Report.commit
       at     <- Report.now
-      parts  <- toolchains.traverseAccum(t => oneToolchain(t, corpora, o).map(Vector(_)))
+      nanoda <- if o.withNanoda then Nanoda.provision else IO.pure(None)
+      parts  <- toolchains.traverseAccum(t => oneToolchain(t, corpora, o, nanoda).map(Vector(_)))
       runs        = parts.flatMap(_._1)
       overall     = parts.flatMap(_._2)
       mutations   = parts.flatMap(_._3)
@@ -165,35 +171,49 @@ object Main extends IOApp:
     if o.withMutants && !c.expectRejection then MutationRun.run(items, t.profile, t.spec, c.name, o.seeds)
     else IO.pure(Vector.empty)
 
-  private def oneToolchain(t: Toolchain, corpora: List[Corpus], o: Options): IO[Part] =
+  private def oneToolchain(
+      t: Toolchain,
+      corpora: List[Corpus],
+      o: Options,
+      nanoda: Option[java.nio.file.Path]
+  ): IO[Part] =
     Provision.provision(t, o.withChecker && t.hasReference).flatMap { tools =>
       corpora.filter(_.appliesTo(t)).foldLeft(IO.pure((Vector.empty, Vector.empty, Vector.empty): Part)) { (acc, c) =>
         acc.flatMap { (runs, agree, muts) =>
-          oneCorpus(tools, t, c, o).map { (r, a, m) =>
+          oneCorpus(tools, t, c, o, nanoda).map { (r, a, m) =>
             (runs ++ r, agree ++ a, muts ++ m)
           }
         }
       }
     }
 
-  private def oneCorpus(tools: Provision.Tools, t: Toolchain, c: Corpus, o: Options): IO[Part] =
+  private def oneCorpus(
+      tools: Provision.Tools,
+      t: Toolchain,
+      c: Corpus,
+      o: Options,
+      nanoda: Option[java.nio.file.Path]
+  ): IO[Part] =
     val reference = o.withChecker && t.hasReference
     for
-      _     <- IO.println(s"${t.version} / ${c.name}")
-      path  <- Exporter.exportFile(tools, c)
-      items <- IO.blocking(Layout.readFile(path)).map(s => kolla.leanexport.ExportReader.fromString(s).items)
-      // `lean4checker` aborts on the first problem, so kolla must too for the
+      _    <- IO.println(s"${t.version} / ${c.name}")
+      path <- Exporter.exportFile(tools, c)
+      env  <- IO.blocking(Layout.readFile(path)).map(kolla.leanexport.ExportReader.fromString(_))
+      items = env.items
+      // Both references abort on the first problem, so kolla must too for the
       // corpus-level verdicts to be comparable.
+      useNanoda = o.withNanoda && nanoda.isDefined && Nanoda.applies(t, env.format)
       kolla <- KollaChecker.check(
                  items, t.profile, t.spec, c.name, "jvm",
-                 stopOnFirstRejection = reference,
+                 stopOnFirstRejection = reference || useNanoda,
                  expectRejection = c.expectRejection
                )
-      ref   <- if reference then Lean4Checker.run(tools, c).map(Some(_)) else IO.pure(None)
+      ref <- if reference then Lean4Checker.run(tools, c).map(Some(_)) else IO.pure(None)
+      nd  <- if useNanoda then Nanoda.run(nanoda, t, c, env.format, path).map(Some(_)) else IO.pure(None)
       // Mutating a corpus that is already invalid proves nothing.
       muts <- mutantsOf(items, t, c, o)
     yield (
-      Vector(kolla) ++ ref.toVector,
-      ref.toVector.map(r => Compare.overall(r, kolla)),
+      Vector(kolla) ++ ref.toVector ++ nd.toVector,
+      (ref.toVector ++ nd.toVector).map(r => Compare.overall(r, kolla)),
       muts
     )

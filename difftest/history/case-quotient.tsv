@@ -1,3 +1,8 @@
 commit	at	checker	toolchain	corpus	platform	declarations	accepted	rejected	wall_nanos	peak_heap_bytes
 eac18127f6b907b3a3d636ab176f5cc54578fa8e	2026-10-17T19:02:50Z	kolla	leanprover/lean4:v4.28.0	case-quotient	jvm	191	191	0	13598542	162673288
 eac18127f6b907b3a3d636ab176f5cc54578fa8e	2026-10-17T19:02:50Z	lean4checker	leanprover/lean4:v4.28.0	case-quotient	jvm	1	1	0	31784131584	0
+6414f891f0f2bbff9e013c2acea6c4beaa5071ce	2026-10-17T19:20:38Z	kolla	leanprover/lean4:v4.27.0	case-quotient	jvm	191	191	0	13248542	293730736
+6414f891f0f2bbff9e013c2acea6c4beaa5071ce	2026-10-17T19:20:38Z	lean4checker	leanprover/lean4:v4.27.0	case-quotient	jvm	1	1	0	41438652209	0
+ba4553d6f3983a2dddf4111c0e88e5854854a50c	2026-10-17T19:33:16Z	kolla	leanprover/lean4:v4.25.0	case-quotient	jvm	186	186	0	20604250	88974664
+ba4553d6f3983a2dddf4111c0e88e5854854a50c	2026-10-17T19:33:16Z	lean4checker	leanprover/lean4:v4.25.0	case-quotient	jvm	1	1	0	37572677666	0
+ba4553d6f3983a2dddf4111c0e88e5854854a50c	2026-10-17T19:33:16Z	nanoda	leanprover/lean4:v4.25.0	case-quotient	jvm	1	1	0	13697292	0

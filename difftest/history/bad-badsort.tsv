@@ -1,3 +1,8 @@
 commit	at	checker	toolchain	corpus	platform	declarations	accepted	rejected	wall_nanos	peak_heap_bytes
 eac18127f6b907b3a3d636ab176f5cc54578fa8e	2026-10-17T19:02:50Z	kolla	leanprover/lean4:v4.28.0	bad-badsort	jvm	1	0	1	146167	801166480
 eac18127f6b907b3a3d636ab176f5cc54578fa8e	2026-10-17T19:02:50Z	lean4checker	leanprover/lean4:v4.28.0	bad-badsort	jvm	1	0	1	43348562167	0
+6414f891f0f2bbff9e013c2acea6c4beaa5071ce	2026-10-17T19:20:38Z	kolla	leanprover/lean4:v4.27.0	bad-badsort	jvm	1	0	1	161917	459493856
+6414f891f0f2bbff9e013c2acea6c4beaa5071ce	2026-10-17T19:20:38Z	lean4checker	leanprover/lean4:v4.27.0	bad-badsort	jvm	1	0	1	80303931667	0
+ba4553d6f3983a2dddf4111c0e88e5854854a50c	2026-10-17T19:33:16Z	kolla	leanprover/lean4:v4.25.0	bad-badsort	jvm	1	0	1	251084	702379784
+ba4553d6f3983a2dddf4111c0e88e5854854a50c	2026-10-17T19:33:16Z	lean4checker	leanprover/lean4:v4.25.0	bad-badsort	jvm	1	0	1	68782399250	0
+ba4553d6f3983a2dddf4111c0e88e5854854a50c	2026-10-17T19:33:16Z	nanoda	leanprover/lean4:v4.25.0	bad-badsort	jvm	1	0	1	15905083	0

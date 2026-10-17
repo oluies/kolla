@@ -3,24 +3,19 @@
 # 'no-reference', which records that lean4checker has no release for it.
 #
 # Each entry pins the lean4export and lean4checker revisions tagged with exactly
-# that toolchain, and so a particular export format version:
+# that toolchain. What the entries cover is kernel behaviour, not export format:
+# lean4export backported the NDJSON 3.1.0 format to every release tag, so all
+# four emit 3.1.0 and the text formats are exercised by the committed fixtures
+# alone. See docs/semantics.md X4 for why text v1 cannot carry a mutual block.
 #
-#   v4.25.0   lean4export text v2.0.0   (last text-format release)
-#   v4.27.0   lean4export ndjson 3.0.0
-#   v4.28.0   lean4export ndjson 3.1.0, newest release lean4checker also tags
-#   v4.35.0   lean4export ndjson 3.1.0, latest stable
+#   v4.25.0   stringLiteralCtor is String.mk rather than String.ofList
+#   v4.27.0   the first release with String.ofList
+#   v4.28.0   newest release lean4checker also tags
+#   v4.35.0   latest stable, and the K1 behaviour changes
 #
 # lean4checker's newest tag is v4.29.0-rc8 and its head pins v4.29.0-rc8, so
-# v4.35.0 has no reference checker. It is still run: it is the only toolchain
-# whose kernel has the v4.35 behaviour changes recorded in docs/semantics.md K1,
-# and the negative corpus and the cross-platform comparison do not need a
-# reference. v4.28.0 carries the same export format, so the reader and the
-# per-declaration comparison are exercised against lean4checker there.
-#
-# Releases up to v4.19 use lean4export's original text format, which emits one
-# #IND line per inductive type with no sibling list, so a mutual inductive block
-# cannot be reconstructed from the file. Those toolchains are excluded from the
-# corpus; the reader still accepts the format. See docs/semantics.md X4.
+# v4.35.0 has no lean4checker. Its reference is nanoda, which reads an export
+# file rather than oleans and tracks current Lean. See docs/semantics.md P2, P9.
 
 leanprover/lean4:v4.25.0
 leanprover/lean4:v4.27.0

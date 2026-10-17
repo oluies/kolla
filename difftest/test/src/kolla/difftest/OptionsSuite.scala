@@ -11,6 +11,7 @@ class OptionsSuite extends munit.FunSuite:
     assertEquals(o.corpora, Nil)
     assertEquals(o.seeds, List(1L))
     assert(o.withChecker)
+    assert(o.withNanoda)
     assert(o.withMutants)
     assert(!o.writeHistory)
   }
@@ -32,8 +33,9 @@ class OptionsSuite extends munit.FunSuite:
   }
 
   test("flags turn the optional stages off") {
-    val o = ok("--no-checker", "--no-mutants", "--history")
+    val o = ok("--no-checker", "--no-nanoda", "--no-mutants", "--history")
     assert(!o.withChecker)
+    assert(!o.withNanoda)
     assert(!o.withMutants)
     assert(o.writeHistory)
   }
