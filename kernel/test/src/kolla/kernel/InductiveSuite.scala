@@ -377,6 +377,92 @@ class InductiveSuite extends munit.FunSuite:
     assert(tc.isDefEq(rec(two), Expr.App(Expr.const("Nat.succ"), zero)))
   }
 
+  test("a non-uniform occurrence of a declared datatype is rejected") {
+    // inductive T (A : Type) where mk : T Nat -> T A
+    // The occurrence `T Nat` is applied to something other than the parameter.
+    val nat = runInd(natDecl)
+    val d = Declaration.InductDecl(
+      Nil, 1,
+      List(InductiveType(
+        Name.parse("T"), pi("A", type0, type0),
+        List(Constructor(
+          Name.parse("T.mk"),
+          pi("A", type0, pi("_", Expr.App(Expr.const("T"), Expr.const("Nat")),
+            Expr.App(Expr.const("T"), Expr.BVar(1))))
+        ))
+      )),
+      false
+    )
+    val e = intercept[KernelException](runInd(d, nat.env))
+    assert(clue(e.getMessage).contains("invalid occurrence of a datatype being declared"))
+
+    // Earlier releases do not have the check, so it must be profile-gated.
+    val e2 = intercept[KernelException](
+      new InductiveChecker(nat.env, d.asInstanceOf[Declaration.InductDecl], KernelProfile.v4_27, 0).run()
+    )
+    // It still fails, but on a later check rather than this one.
+    assert(!e2.getMessage.contains("invalid occurrence of a datatype being declared"), clue(e2.getMessage))
+  }
+
+  test("a uniform occurrence is accepted and over-application descends") {
+    // inductive T (A : Type) where mk : A -> T A
+    val d = Declaration.InductDecl(
+      Nil, 1,
+      List(InductiveType(
+        Name.parse("T"), pi("A", type0, type0),
+        List(Constructor(
+          Name.parse("T.mk"),
+          pi("A", type0, pi("a", Expr.BVar(0), Expr.App(Expr.const("T"), Expr.BVar(1))))
+        ))
+      )),
+      false
+    )
+    val r = runInd(d)
+    assertEquals(r.inductives.head.numParams, 1)
+    // Checking the declaration directly must not raise either.
+    InductiveChecker.checkUniformIndOccs(d.asInstanceOf[Declaration.InductDecl])
+  }
+
+  test("the reserved nested prefix is rejected in user input") {
+    val auxName = Names.nested.str("List")
+    val d = Declaration.InductDecl(
+      Nil, 0,
+      List(InductiveType(
+        Name.parse("U"), type0,
+        List(Constructor(Name.parse("U.mk"), arrow(Expr.const(auxName), Expr.const("U"))))
+      )),
+      false
+    )
+    assert(clue(intercept[KernelException](runInd(d)).getMessage).contains("reserved prefix"))
+
+    // A projection's structure name is resolved the same way.
+    val viaProj = Declaration.InductDecl(
+      Nil, 0,
+      List(InductiveType(
+        Name.parse("V"), type0,
+        List(Constructor(
+          Name.parse("V.mk"),
+          arrow(Expr.Proj(auxName, 0, Expr.const("U")), Expr.const("V"))
+        ))
+      )),
+      false
+    )
+    assert(clue(intercept[KernelException](runInd(viaProj)).getMessage).contains("reserved prefix"))
+
+    // The check applies to the inductive's own type too.
+    val viaType = Declaration.InductDecl(
+      Nil, 0, List(InductiveType(Name.parse("W"), Expr.const(auxName), Nil)), false
+    )
+    assert(clue(intercept[KernelException](runInd(viaType)).getMessage).contains("reserved prefix"))
+  }
+
+  test("a nested block is refused rather than silently accepted") {
+    val e = intercept[KernelException](runInd(natDecl, Environment.empty, nnested = 1))
+    assert(clue(e.getMessage).contains("nested inductive types are not implemented yet"))
+    // numNested = 0 is the ordinary path.
+    assertEquals(runInd(natDecl, Environment.empty, nnested = 0).inductives.head.numNested, 0)
+  }
+
   test("declarationOf rebuilds a block from exported entries") {
     val r = runInd(natDecl)
     val rebuilt = InductiveChecker.declarationOf(r.inductives, r.constructors)

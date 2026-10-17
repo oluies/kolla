@@ -543,12 +543,40 @@ These are binder and universe-parameter names, so only `Expr.isBiEqual` and the
 positional universe renaming see them. They were wrong (`u1`, `n.ih`) while the
 export comparison used `Expr.==` alone and nothing noticed.
 
-Still missing:
+`environment::add_inductive` runs two checks before `add_inductive_fn`, and both
+are implemented:
 
-- the nested-inductive preprocessor. `numNested` is taken from the export file
-  rather than computed, so a nested block is accepted on that field without
-  being checked.
-- `check_uniform_ind_occs` (v4.35 only).
+- `check_no_nested_aux`: user input must not mention the `_nested` prefix the
+  preprocessor reserves for its auxiliary declarations. Projections are checked
+  as well as constants, because a projection's structure name is resolved the
+  same way and could name an auxiliary type without the declaration mentioning
+  it as a constant.
+- `check_uniform_ind_occs` (v4.35 only): every occurrence of a datatype being
+  declared must be applied to exactly `nparams` arguments which are the bound
+  variables `#(offset-1) … #(offset-nparams)`, with the declaration's universe
+  levels. An occurrence with *more* than `nparams` arguments is skipped at that
+  node and its parameter application is checked as a subterm.
+
+Still missing: the nested-inductive preprocessor
+(`elim_nested_inductive_fn` and `restore_nested`). A block with
+`numNested > 0` now raises instead of being accepted on the file's own say-so,
+so it cannot be mistaken for agreement with `lean4checker`.
+
+### K15 — a block's recursors must all be installed before any rule is checked
+
+`declare_recursors` installs every recursor of a block and `check_recursors`
+runs afterwards, because a rule's right-hand side can call a sibling recursor of
+the same block. A nested inductive makes this visible: Lean generates both
+`Tree.rec` and `Tree.rec_1` for
+
+    inductive Tree where
+      | leaf : Nat → Tree
+      | node : List Tree → Tree
+
+and `Tree.rec`'s rules call `Tree.rec_1`. `DeclarationChecker.addInfo`
+therefore checks a recursor's own type but not its rules; rules are checked by
+`InductiveChecker.run`, which has the whole block. The extra recursor's name
+comes from `appendIndexAfter` (K14).
 
 ### K12 — `consume_type_annotations` is not just `mdata`
 

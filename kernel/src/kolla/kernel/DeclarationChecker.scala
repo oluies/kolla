@@ -164,13 +164,14 @@ final class DeclarationChecker(val profile: KernelProfile = KernelProfile.defaul
     case ConstantInfo.CtorInfo(v) =>
       (typeOnly(env, v.toConstantVal, info), CheckOutcome.TypeOnly)
     case ConstantInfo.RecInfo(v) =>
-      val e1 = typeOnly(env, v.toConstantVal, info)
-      val tc = checker(e1, DefinitionSafety.Safe)
-      v.rules.foreach { r =>
-        checkNoMetavarNoFvar(v.toConstantVal.name, r.rhs)
-        tc.check(r.rhs, v.toConstantVal.levelParams)
-      }
-      (e1, CheckOutcome.TypeOnly)
+      // Only the recursor's own type is checked here. A rule's right-hand side
+      // may call a sibling recursor of the same block — a nested inductive's
+      // `T.rec` calls `T.rec_1` — and `declare_recursors` installs every
+      // recursor of a block before `check_recursors` looks at any rule, so a
+      // rule cannot be checked one entry at a time. `InductiveChecker.run` is
+      // the path that checks them.
+      v.rules.foreach(r => checkNoMetavarNoFvar(v.toConstantVal.name, r.rhs))
+      (typeOnly(env, v.toConstantVal, info), CheckOutcome.TypeOnly)
 
   private def typeOnly(env: Environment, cv: ConstantVal, info: ConstantInfo): Environment =
     val tc = checker(env, DefinitionSafety.Safe)

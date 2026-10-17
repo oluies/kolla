@@ -166,6 +166,82 @@ class CheckRealExportSuite extends munit.FunSuite:
     assertEquals(checkInductiveBlocks("quot-sound-3.1.0.ndjson"), (1, 1))
   }
 
+  /** Groups an export file's entries into inductive blocks. */
+  private def blocksOf(file: String)
+      : Vector[(List[InductiveVal], List[ConstructorVal], List[RecursorVal])] =
+    val infos = ExportReader.fromLines(resource(file)).infos
+    val out = Vector.newBuilder[(List[InductiveVal], List[ConstructorVal], List[RecursorVal])]
+    var i = 0
+    while i < infos.length do
+      infos(i) match
+        case ConstantInfo.InductInfo(first) =>
+          val blockNames = first.all.toSet
+          val inds  = List.newBuilder[InductiveVal]
+          val ctors = List.newBuilder[ConstructorVal]
+          val recs  = List.newBuilder[RecursorVal]
+          var j = i
+          var scanning = true
+          while scanning && j < infos.length do
+            infos(j) match
+              case ConstantInfo.InductInfo(v) if blockNames.contains(v.toConstantVal.name) =>
+                inds += v; j += 1
+              case ConstantInfo.CtorInfo(v) if blockNames.contains(v.induct) =>
+                ctors += v; j += 1
+              case ConstantInfo.RecInfo(v) if v.all.toSet == blockNames =>
+                recs += v; j += 1
+              case _ => scanning = false
+          out += ((inds.result(), ctors.result(), recs.result()))
+          i = j
+        case _ => i += 1
+    out.result()
+
+  test("a mutual inductive block is regenerated, a nested one is refused") {
+    val blocks = blocksOf("nested-3.1.0.ndjson")
+    assertEquals(blocks.length, 5)
+    val byName = blocks.map(b => b._1.head.toConstantVal.name.toString -> b).toMap
+    assertEquals(byName.keySet, Set("Nat", "List", "Tree", "RoseTree", "EvenList"))
+
+    // Replay in file order so each block is checked in the environment it had.
+    val dc  = new DeclarationChecker(KernelProfile.v4_35)
+    var env = Environment.empty
+    var regenerated = 0
+    var refused     = List.empty[String]
+    blocks.foreach { (inds, ctors, recs) =>
+      val nested      = inds.head.numNested
+      val declaration = InductiveChecker.declarationOf(inds, ctors)
+      if nested > 0 then
+        val e = intercept[KernelException](
+          new InductiveChecker(env, declaration, KernelProfile.v4_35, nested).run()
+        )
+        assert(clue(e.getMessage).contains("nested inductive types are not implemented yet"))
+        refused = refused :+ inds.head.toConstantVal.name.toString
+        // Carry the block over unchecked so later blocks still have it.
+        (inds.map(ConstantInfo.InductInfo(_)) ++ ctors.map(ConstantInfo.CtorInfo(_)) ++
+          recs.map(ConstantInfo.RecInfo(_))).foreach(info => env = dc.addInfo(env, info)._1)
+      else
+        val r = new InductiveChecker(env, declaration, KernelProfile.v4_35, nested).run()
+        InductiveChecker.validate(inds, ctors, r.inductives, r.constructors, recs, r.recursors)
+        env = r.env
+        regenerated += 1
+    }
+    assertEquals(refused, List("Tree", "RoseTree"))
+    assertEquals(regenerated, 3)
+
+    // The mutual block is the new capability here: two types, two recursors,
+    // each with both motives and all three minor premises.
+    val (evenInds, evenCtors, evenRecs) = byName("EvenList")
+    assertEquals(evenInds.map(_.toConstantVal.name.toString), List("EvenList", "OddList"))
+    assertEquals(evenInds.map(_.all.map(_.toString)).distinct, List(List("EvenList", "OddList")))
+    assertEquals(evenRecs.map(_.toConstantVal.name.toString).sorted.toList, List("EvenList.rec", "OddList.rec"))
+    evenRecs.foreach { r =>
+      assertEquals(r.numMotives, 2, clue(r.toConstantVal.name.toString))
+      assertEquals(r.numMinors, 3, clue(r.toConstantVal.name.toString))
+    }
+    // Lean names a nested block's extra recursor with appendIndexAfter.
+    val treeRecs = byName("Tree")._3.map(_.toConstantVal.name.toString).sorted
+    assertEquals(treeRecs.toList, List("Tree.rec", "Tree.rec_1"))
+  }
+
   test("a mutated recursor is rejected") {
     val infos = ExportReader.fromLines(resource("nat-add-3.1.0.ndjson")).infos
     val natName = Name.parse("Nat")

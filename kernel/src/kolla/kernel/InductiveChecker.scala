@@ -554,6 +554,15 @@ final class InductiveChecker(
     */
   def run(): InductiveResult =
     if nparams < 0 then bad("invalid inductive datatype, number of parameters is too big")
+    env.checkDuplicatedUnivParams(lparams)
+    InductiveChecker.checkNoNestedAux(decl)
+    if profile.checkUniformIndOccs then InductiveChecker.checkUniformIndOccs(decl)
+    if numNested > 0 then
+      throw KernelException(
+        ExceptionKind.InvalidDeclaration,
+        indTypes.head.name,
+        s"nested inductive types are not implemented yet (numNested = $numNested)"
+      )
     checkInductiveTypes()
     val rec       = computeIsRec
     val reflexive = computeIsReflexive
@@ -589,6 +598,81 @@ final case class InductiveResult(
 )
 
 object InductiveChecker:
+
+  /** `check_no_nested_aux`: user input must not mention the reserved prefix the
+    * nested-inductive preprocessor uses for its auxiliary declarations.
+    *
+    * `proj` is included because a projection's structure name is resolved the
+    * same way, so it could name an auxiliary type without the declaration ever
+    * mentioning it as a constant.
+    */
+  def checkNoNestedAux(decl: Declaration.InductDecl): Unit =
+    def check(n: Name, e: Expr): Unit =
+      var offender: Option[Name] = None
+      ExprOps.forEach(e) { (m, _) =>
+        if offender.isDefined then false
+        else
+          m match
+            case c: Expr.Const if Name.isPrefixOf(Names.nested, c.name) => offender = Some(c.name); false
+            case p: Expr.Proj if Name.isPrefixOf(Names.nested, p.typeName) => offender = Some(p.typeName); false
+            case _ => true
+      }
+      offender.foreach { _ =>
+        throw KernelException(
+          ExceptionKind.InvalidDeclaration,
+          n,
+          s"it uses the reserved prefix '${Names.nested}'"
+        )
+      }
+    decl.types.foreach { t =>
+      check(t.name, t.tpe)
+      t.ctors.foreach(c => check(c.name, c.tpe))
+    }
+
+  /** `check_uniform_ind_occs` (v4.35): every occurrence of a datatype being
+    * declared must be applied to exactly the declaration's parameters and
+    * universe levels.
+    *
+    * Later phases inspect constructor types modulo `whnf`, which can erase an
+    * occurrence, and a nested occurrence's parametric arguments are dropped from
+    * the auxiliary declaration, so a non-uniform occurrence could escape those
+    * checks. Reduction never creates an occurrence of a datatype being declared,
+    * since none is in the environment yet, so the syntactic occurrences are all
+    * of them.
+    */
+  def checkUniformIndOccs(decl: Declaration.InductDecl): Unit =
+    val nparams  = decl.numParams
+    val lvls     = Level.paramsToLevels(decl.levelParams)
+    val indNames = decl.types.map(_.name).toSet
+    decl.types.foreach { indType =>
+      indType.ctors.foreach { ctor =>
+        ExprOps.forEach(ctor.tpe) { (t, offset) =>
+          Expr.getAppFn(t) match
+            case fn: Expr.Const if indNames.contains(fn.name) =>
+              val args = Expr.getAppArgs(t)
+              // An over-applied occurrence is skipped here; the parameter
+              // application itself is visited as a subterm and checked then.
+              if args.length > nparams then true
+              else
+                val ok =
+                  args.length == nparams && offset >= nparams && fn.levels == lvls &&
+                    (0 until nparams).forall { i =>
+                      args(i) match
+                        case b: Expr.BVar => b.idx == offset - 1 - i
+                        case _            => false
+                    }
+                if !ok then
+                  throw KernelException(
+                    ExceptionKind.InvalidDeclaration,
+                    fn.name,
+                    "invalid occurrence of a datatype being declared: it must be applied to the parameters " +
+                      "and universe levels of the mutual declaration"
+                  )
+                false
+            case _ => true
+        }
+      }
+    }
 
   /** Rebuilds the `inductDecl` an export file's environment entries came from.
     *

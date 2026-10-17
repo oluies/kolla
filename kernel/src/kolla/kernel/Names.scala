@@ -38,6 +38,9 @@ object Names:
 
   val eagerReduce: Name = Name.parse("eagerReduce")
 
+  /** `g_nested`: the prefix the kernel reserves for nested-inductive auxiliaries. */
+  val nested: Name = Name.mkSimple("_nested")
+
   val optParam: Name     = Name.parse("optParam")
   val autoParam: Name    = Name.parse("autoParam")
   val outParam: Name     = Name.parse("outParam")

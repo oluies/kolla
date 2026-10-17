@@ -147,6 +147,14 @@ object Name:
   /** `Name.appendIndexAfter`, which separates the index with `_`. */
   def appendIndexAfter(n: Name, i: Int): Name = appendAfter(n, s"_$i")
 
+  /** `lean::is_prefix_of`: is `pre` a prefix of `n`'s component chain? */
+  def isPrefixOf(pre: Name, n: Name): Boolean =
+    @tailrec def go(cur: Name): Boolean =
+      if cur == pre then true
+      else if cur.isAnonymous then false
+      else go(cur.prefix)
+    go(n)
+
   /** `lean::name::replace_prefix`. */
   def replacePrefix(n: Name, pre: Name, newPre: Name): Name =
     if n == pre then newPre
