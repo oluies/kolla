@@ -107,6 +107,85 @@ class CheckRealExportSuite extends munit.FunSuite:
       .contains("quotient kind mismatch"))
   }
 
+  /** Walks an export file, running the inductive checker on each block instead
+    * of carrying the file's entries over unchecked.
+    */
+  private def checkInductiveBlocks(file: String): Int =
+    val infos = ExportReader.fromLines(resource(file)).infos
+    val dc    = new DeclarationChecker(KernelProfile.v4_35)
+    var env   = Environment.empty
+    var blocks = 0
+    var i = 0
+    while i < infos.length do
+      infos(i) match
+        case ConstantInfo.InductInfo(first) =>
+          val blockNames = first.all.toSet
+          val inds  = List.newBuilder[InductiveVal]
+          val ctors = List.newBuilder[ConstructorVal]
+          var j = i
+          var consumed = 0
+          // The entries of one block are contiguous: types, then constructors,
+          // then recursors.
+          var scanning = true
+          while scanning && j < infos.length do
+            infos(j) match
+              case ConstantInfo.InductInfo(v) if blockNames.contains(v.toConstantVal.name) =>
+                inds += v; consumed += 1; j += 1
+              case ConstantInfo.CtorInfo(v) if blockNames.contains(v.induct) =>
+                ctors += v; consumed += 1; j += 1
+              case _ => scanning = false
+          val exportedInds  = inds.result()
+          val exportedCtors = ctors.result()
+          val declaration   = InductiveChecker.declarationOf(exportedInds, exportedCtors)
+          val result        = new InductiveChecker(env, declaration, KernelProfile.v4_35, exportedInds.head.numNested).run()
+          InductiveChecker.validate(exportedInds, exportedCtors, result.inductives, result.constructors)
+          env = result.env
+          blocks += 1
+          i = j
+        case info =>
+          env = dc.addInfo(env, info)._1
+          i += 1
+    blocks
+
+  test("the kernel derives the same inductive metadata Lean exports") {
+    // isRec, isReflexive, numIndices, cidx and numFields are all recomputed and
+    // compared against the values in the file.
+    assertEquals(checkInductiveBlocks("nat-add-3.1.0.ndjson"), 3)
+    assertEquals(checkInductiveBlocks("nat-add-succ-3.0.0.ndjson"), 6)
+    assertEquals(checkInductiveBlocks("quot-sound-3.1.0.ndjson"), 1)
+  }
+
+  test("a swapped constructor index is rejected") {
+    val infos = ExportReader.fromLines(resource("nat-add-3.1.0.ndjson")).infos
+    val natInd = infos.collectFirst {
+      case ConstantInfo.InductInfo(v) if v.toConstantVal.name == Name.parse("Nat") => v
+    }.get
+    val natCtors = infos.collect {
+      case ConstantInfo.CtorInfo(v) if v.induct == Name.parse("Nat") => v
+    }.toList
+    assertEquals(natCtors.length, 2)
+    val declaration = InductiveChecker.declarationOf(List(natInd), natCtors)
+    val result = new InductiveChecker(Environment.empty, declaration, KernelProfile.v4_35).run()
+    // Unmutated, the derived values agree.
+    InductiveChecker.validate(List(natInd), natCtors, result.inductives, result.constructors)
+    // Swap cidx on the two constructors.
+    val swapped = natCtors.map(c => c.copy(cidx = 1 - c.cidx))
+    val e = intercept[KernelException](
+      InductiveChecker.validate(List(natInd), swapped, result.inductives, result.constructors)
+    )
+    assert(clue(e.getMessage).contains("cidx"))
+    // Claim a wrong field count.
+    val wrongFields = natCtors.map(c => c.copy(numFields = c.numFields + 1))
+    assert(clue(intercept[KernelException](
+      InductiveChecker.validate(List(natInd), wrongFields, result.inductives, result.constructors)
+    ).getMessage).contains("numFields"))
+    // Claim the type is not recursive.
+    val notRec = List(natInd.copy(isRec = false))
+    assert(clue(intercept[KernelException](
+      InductiveChecker.validate(notRec, natCtors, result.inductives, result.constructors)
+    ).getMessage).contains("isRec"))
+  }
+
   test("iota reduction through Nat.rec computes") {
     val (env, _) = replay("nat-add-3.1.0.ndjson")
     val tc = new TypeChecker(env, KernelProfile.v4_35)

@@ -468,3 +468,41 @@ universe parameters. Only `Quot.lift` has two universe parameters.
 Reduction is gated on `is_quot_initialized`, so `Quot.lift` and `Quot.ind`
 applications do not reduce in an environment where the package was never
 installed.
+
+### K11 — inductive checking, and what is still missing
+
+`InductiveChecker` mirrors `add_inductive_fn` (`src/kernel/inductive.cpp`) up to
+but not including the recursor:
+
+- `check_inductive_types`: each type is checked against the declaration's
+  universe parameters, the parameter prefix is shared across a mutual block,
+  the parameter count matches, the indices are counted, and the result universes
+  must be equivalent.
+- `check_constructors`: duplicate constructor names, the parameter prefix,
+  each field's universe against the datatype's (`is_geq(resultLevel, fieldLevel)`
+  or the datatype is an inductive predicate), positivity, and the result type via
+  `is_valid_ind_app`.
+- `is_valid_ind_app` also rejects an occurrence of a datatype being declared among
+  the *indices*, which `leanprover/lean4#2125` records as unsound.
+- `check_positivity` is skipped entirely for an unsafe declaration, as Lean skips
+  it.
+- `is_rec`, `is_reflexive`, `numIndices`, `cidx` and `numFields` are derived, not
+  read from the file.
+
+The inductive-predicate test uses the profile: v4.35 asks
+`normalizes_to_zero(resultLevel)` where earlier releases asked `is_zero` (K1).
+
+`InductiveChecker.validate` compares the derived `InductiveVal`s and
+`ConstructorVal`s against the ones an export file ships, field by field. Running
+it over the three committed exports reproduces every value Lean emitted for all
+ten blocks.
+
+Still missing, and the reason an inductive block is not yet a verdict:
+
+- recursor generation: `elim_only_at_universe_zero`, `init_elim_level`,
+  `init_K_target`, `mk_rec_infos`, `declare_recursors`, and the v4.35
+  `check_recursors` pass.
+- the nested-inductive preprocessor. `numNested` is taken from the export file
+  rather than computed, so a nested block is accepted on that field without
+  being checked.
+- `check_uniform_ind_occs` (v4.35 only).

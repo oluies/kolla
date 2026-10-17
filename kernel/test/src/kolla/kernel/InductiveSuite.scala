@@ -1,0 +1,249 @@
+package kolla.kernel
+
+class InductiveSuite extends munit.FunSuite:
+
+  val type0 = Expr.Sort(Level.one)
+  val prop  = Expr.Sort(Level.zero)
+  val u     = Name.mkSimple("u")
+  val lu    = Level.Param(u)
+  def arrow(d: Expr, c: Expr) = Expr.ForallE(Name.mkSimple("a"), d, c, BinderInfo.Default)
+  def pi(n: String, d: Expr, b: Expr) = Expr.ForallE(Name.mkSimple(n), d, b, BinderInfo.Default)
+
+  // An enum case constructor widens to `Declaration`, so match it back.
+  def runInd(d: Declaration, env: Environment = Environment.empty, nnested: Int = 0): InductiveResult =
+    d match
+      case i: Declaration.InductDecl => new InductiveChecker(env, i, KernelProfile.v4_35, nnested).run()
+      case other                     => fail(s"expected an inductive declaration, got $other")
+
+  val natDecl = Declaration.InductDecl(
+    Nil, 0,
+    List(InductiveType(
+      Name.parse("Nat"), type0,
+      List(
+        Constructor(Name.parse("Nat.zero"), Expr.const("Nat")),
+        Constructor(Name.parse("Nat.succ"), arrow(Expr.const("Nat"), Expr.const("Nat")))
+      )
+    )),
+    false
+  )
+
+  test("a simple recursive type") {
+    val r = runInd(natDecl)
+    assertEquals(r.inductives.length, 1)
+    val iv = r.inductives.head
+    assertEquals(iv.numParams, 0)
+    assertEquals(iv.numIndices, 0)
+    assert(iv.isRec)
+    assert(!iv.isReflexive)
+    assertEquals(iv.ctors.map(_.toString), List("Nat.zero", "Nat.succ"))
+    assertEquals(r.constructors.map(c => (c.toConstantVal.name.toString, c.cidx, c.numFields)),
+      List(("Nat.zero", 0, 0), ("Nat.succ", 1, 1)))
+    assertEquals(r.resultLevel, Level.one)
+    assert(r.env.contains(Name.parse("Nat")))
+    assert(r.env.contains(Name.parse("Nat.succ")))
+  }
+
+  test("a non-recursive type with parameters and indices") {
+    // inductive V (A : Type) : Nat -> Type where mk : (n : Nat) -> V A n
+    val nat = runInd(natDecl)
+    val vDecl = Declaration.InductDecl(
+      Nil, 1,
+      List(InductiveType(
+        Name.parse("V"),
+        pi("A", type0, arrow(Expr.const("Nat"), type0)),
+        List(Constructor(
+          Name.parse("V.mk"),
+          pi("A", type0, pi("n", Expr.const("Nat"),
+            Expr.mkAppN(Expr.const("V"), Seq(Expr.BVar(1), Expr.BVar(0)))))
+        ))
+      )),
+      false
+    )
+    val r = runInd(vDecl, nat.env)
+    val iv = r.inductives.head
+    assertEquals(iv.numParams, 1)
+    assertEquals(iv.numIndices, 1)
+    assert(!iv.isRec)
+    assertEquals(r.constructors.head.numParams, 1)
+    assertEquals(r.constructors.head.numFields, 1)
+  }
+
+  test("a reflexive type") {
+    // inductive R where mk : (Nat -> R) -> R
+    val nat = runInd(natDecl)
+    val rDecl = Declaration.InductDecl(
+      Nil, 0,
+      List(InductiveType(
+        Name.parse("R"), type0,
+        List(Constructor(Name.parse("R.mk"), arrow(arrow(Expr.const("Nat"), Expr.const("R")), Expr.const("R"))))
+      )),
+      false
+    )
+    val r = runInd(rDecl, nat.env)
+    assert(r.inductives.head.isRec)
+    assert(r.inductives.head.isReflexive)
+  }
+
+  test("a non-positive occurrence is rejected") {
+    // inductive Bad where mk : (Bad -> Bad) -> Bad
+    val bad = Declaration.InductDecl(
+      Nil, 0,
+      List(InductiveType(
+        Name.parse("Bad"), type0,
+        List(Constructor(Name.parse("Bad.mk"), arrow(arrow(Expr.const("Bad"), Expr.const("Bad")), Expr.const("Bad"))))
+      )),
+      false
+    )
+    val e = intercept[KernelException](runInd(bad))
+    assert(clue(e.getMessage).contains("non positive occurrence"))
+  }
+
+  test("an unsafe declaration skips the positivity check") {
+    val bad = Declaration.InductDecl(
+      Nil, 0,
+      List(InductiveType(
+        Name.parse("Bad"), type0,
+        List(Constructor(Name.parse("Bad.mk"), arrow(arrow(Expr.const("Bad"), Expr.const("Bad")), Expr.const("Bad"))))
+      )),
+      true
+    )
+    val r = runInd(bad)
+    assert(r.inductives.head.isUnsafe)
+    assert(r.constructors.head.isUnsafe)
+  }
+
+  test("a field in too large a universe is rejected") {
+    // inductive Small : Type where mk : Type 1 -> Small   (Type 1 does not fit)
+    val d = Declaration.InductDecl(
+      Nil, 0,
+      List(InductiveType(
+        Name.parse("Small"), type0,
+        List(Constructor(Name.parse("Small.mk"), arrow(Expr.Sort(Level.ofNat(2)), Expr.const("Small"))))
+      )),
+      false
+    )
+    assert(clue(intercept[KernelException](runInd(d)).getMessage).contains("too big"))
+  }
+
+  test("an inductive predicate may quantify over any universe") {
+    // inductive P : Prop where mk : Type 5 -> P
+    val d = Declaration.InductDecl(
+      Nil, 0,
+      List(InductiveType(
+        Name.parse("P"), prop,
+        List(Constructor(Name.parse("P.mk"), arrow(Expr.Sort(Level.ofNat(5)), Expr.const("P"))))
+      )),
+      false
+    )
+    val r = runInd(d)
+    assertEquals(r.resultLevel, Level.zero)
+    assertEquals(r.constructors.head.numFields, 1)
+  }
+
+  test("a duplicate constructor name is rejected") {
+    val d = Declaration.InductDecl(
+      Nil, 0,
+      List(InductiveType(
+        Name.parse("D"), type0,
+        List(
+          Constructor(Name.parse("D.mk"), Expr.const("D")),
+          Constructor(Name.parse("D.mk"), Expr.const("D"))
+        )
+      )),
+      false
+    )
+    assert(clue(intercept[KernelException](runInd(d)).getMessage).contains("duplicate constructor"))
+  }
+
+  test("a wrong return type is rejected") {
+    val nat = runInd(natDecl)
+    val d = Declaration.InductDecl(
+      Nil, 0,
+      List(InductiveType(
+        Name.parse("W"), type0,
+        List(Constructor(Name.parse("W.mk"), Expr.const("Nat")))
+      )),
+      false
+    )
+    assert(clue(intercept[KernelException](runInd(d, nat.env)).getMessage).contains("invalid return type"))
+  }
+
+  test("a wrong parameter count is rejected") {
+    val d = Declaration.InductDecl(
+      Nil, 2,
+      List(InductiveType(Name.parse("Z"), type0, Nil)),
+      false
+    )
+    assert(clue(intercept[KernelException](runInd(d)).getMessage).contains("number of parameters mismatch"))
+  }
+
+  test("mutual types must share their parameters and universe") {
+    val mismatched = Declaration.InductDecl(
+      Nil, 1,
+      List(
+        InductiveType(Name.parse("A"), pi("x", type0, type0), Nil),
+        InductiveType(Name.parse("B"), pi("x", prop, type0), Nil)
+      ),
+      false
+    )
+    assert(clue(intercept[KernelException](runInd(mismatched)).getMessage).contains("parameters of all inductive"))
+
+    val differentUniverse = Declaration.InductDecl(
+      Nil, 0,
+      List(
+        InductiveType(Name.parse("A"), type0, Nil),
+        InductiveType(Name.parse("B"), Expr.Sort(Level.ofNat(2)), Nil)
+      ),
+      false
+    )
+    assert(clue(intercept[KernelException](runInd(differentUniverse)).getMessage)
+      .contains("must live in the same universe"))
+  }
+
+  test("a mutual block shares its derived fields") {
+    // mutual inductive A where mk : B -> A | B where mk : A -> B
+    val d = Declaration.InductDecl(
+      Nil, 0,
+      List(
+        InductiveType(Name.parse("A"), type0, List(Constructor(Name.parse("A.mk"), arrow(Expr.const("B"), Expr.const("A"))))),
+        InductiveType(Name.parse("B"), type0, List(Constructor(Name.parse("B.mk"), arrow(Expr.const("A"), Expr.const("B")))))
+      ),
+      false
+    )
+    val r = runInd(d)
+    assertEquals(r.inductives.length, 2)
+    assertEquals(r.inductives.map(_.all.map(_.toString)), List(List("A", "B"), List("A", "B")))
+    r.inductives.foreach(i => assert(i.isRec, clue(i.toConstantVal.name.toString)))
+    assertEquals(r.constructors.map(c => (c.induct.toString, c.cidx)), List(("A", 0), ("B", 0)))
+  }
+
+  test("a declaration with free variables or metavariables is rejected") {
+    val withFvar = Declaration.InductDecl(
+      Nil, 0,
+      List(InductiveType(Name.parse("F"), Expr.FVar(Name.mkSimple("v")), Nil)),
+      false
+    )
+    assertEquals(
+      intercept[KernelException](runInd(withFvar)).kind,
+      ExceptionKind.DeclarationHasFreeVars
+    )
+  }
+
+  test("declarationOf rebuilds a block from exported entries") {
+    val r = runInd(natDecl)
+    val rebuilt = InductiveChecker.declarationOf(r.inductives, r.constructors)
+    assertEquals(rebuilt.numParams, 0)
+    assertEquals(rebuilt.types.length, 1)
+    assertEquals(rebuilt.types.head.ctors.map(_.name.toString), List("Nat.zero", "Nat.succ"))
+    // Round-trips through the checker.
+    val again = runInd(rebuilt)
+    InductiveChecker.validate(r.inductives, r.constructors, again.inductives, again.constructors)
+  }
+
+  test("declarationOf rejects an inconsistent block") {
+    val r = runInd(natDecl)
+    val missing = InductiveChecker.declarationOf(r.inductives, r.constructors)
+    assert(clue(intercept[KernelException](
+      InductiveChecker.declarationOf(r.inductives, Nil)
+    ).getMessage).contains("does not declare it"))
+  }
