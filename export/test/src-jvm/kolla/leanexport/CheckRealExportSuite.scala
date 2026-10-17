@@ -41,7 +41,8 @@ class CheckRealExportSuite extends munit.FunSuite:
     assertEquals(env.size, 8)
     assert(env.contains(Name.parse("Quot")))
     assert(env.quotInitialized)
-    assertEquals(outcomes.count(_._2 == CheckOutcome.Checked), 1)
+    // 1 axiom plus the four validated quotient constants.
+    assertEquals(outcomes.count(_._2 == CheckOutcome.Checked), 5)
     assertEquals(outcomes(Name.parse("Quot.sound")), CheckOutcome.Checked)
   }
 
@@ -50,6 +51,60 @@ class CheckRealExportSuite extends munit.FunSuite:
     assertEquals(env.size, 32)
     assertEquals(outcomes.count(_._2 == CheckOutcome.Checked), 13)
     assertEquals(outcomes(Name.parse("Nat.add_succ")), CheckOutcome.Checked)
+  }
+
+  test("the kernel's quotient package matches the one Lean exports") {
+    val env0 = ExportReader.fromLines(resource("quot-sound-3.1.0.ndjson"))
+    val exported = env0.infos.collect { case ConstantInfo.QuotInfo(q) => q }
+    assertEquals(exported.length, 4)
+    // Lean built these four constants itself; `Quot.declarations` rebuilds them
+    // from `add_quot`, so this compares against ground truth.
+    Quot.validate(Environment.empty, exported.toList)
+
+    val built = Quot.declarations.map(d => d.toConstantVal.name -> d).toMap
+    exported.foreach { got =>
+      val want = built(got.toConstantVal.name)
+      assertEquals(got.kind, want.kind, clue(got.toConstantVal.name.toString))
+      assertEquals(
+        got.toConstantVal.levelParams.length,
+        want.toConstantVal.levelParams.length,
+        clue(got.toConstantVal.name.toString)
+      )
+      val renamed = ExprOps.instantiateLevelParams(
+        want.toConstantVal.tpe,
+        want.toConstantVal.levelParams,
+        got.toConstantVal.levelParams.map(Level.Param(_))
+      )
+      assertEquals(renamed, got.toConstantVal.tpe, clue(got.toConstantVal.name.toString))
+    }
+  }
+
+  test("checkEqType accepts Lean's Eq and the quotient package installs") {
+    val (env, outcomes) = replay("quot-sound-3.1.0.ndjson")
+    assert(env.contains(Name.parse("Eq")))
+    Quot.checkEqType(env)
+    assert(env.quotInitialized)
+    // The export ships the four constants; the kernel builds them and the driver
+    // validates each one, so all four count as fully checked.
+    List("Quot", "Quot.mk", "Quot.lift", "Quot.ind").foreach { n =>
+      assertEquals(outcomes(Name.parse(n)), CheckOutcome.Checked, clue(n))
+    }
+    // add_quot is idempotent.
+    assertEquals(Quot.add(env).size, env.size)
+  }
+
+  test("a quotient constant with the wrong type is rejected") {
+    val (env, _) = replay("quot-sound-3.1.0.ndjson")
+    val bad = QuotVal(
+      ConstantVal(Name.parse("Quot"), List(Name.mkSimple("u")), Expr.Sort(Level.zero)),
+      QuotKind.Type
+    )
+    val e = intercept[KernelException](Quot.validate(env, List(bad)))
+    assert(clue(e.getMessage).contains("but the kernel builds"))
+    val wrongKind = Quot.declarations.find(_.toConstantVal.name == Name.parse("Quot")).get
+      .copy(kind = QuotKind.Lift)
+    assert(clue(intercept[KernelException](Quot.validate(env, List(wrongKind))).getMessage)
+      .contains("quotient kind mismatch"))
   }
 
   test("iota reduction through Nat.rec computes") {

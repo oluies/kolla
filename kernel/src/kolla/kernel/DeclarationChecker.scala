@@ -132,11 +132,7 @@ final class DeclarationChecker(val profile: KernelProfile = KernelProfile.defaul
     case Declaration.ThmDecl(v)         => addTheorem(env, v, check)
     case Declaration.OpaqueDecl(v)      => addOpaque(env, v, check)
     case Declaration.MutualDefnDecl(vs) => addMutual(env, vs, check)
-    case Declaration.QuotDecl =>
-      throw KernelException(
-        ExceptionKind.InvalidDeclaration,
-        "the quotient package is not implemented yet"
-      )
+    case Declaration.QuotDecl => Quot.add(env)
     case Declaration.InductDecl(_, _, _, _) =>
       throw KernelException(
         ExceptionKind.InvalidDeclaration,
@@ -157,9 +153,12 @@ final class DeclarationChecker(val profile: KernelProfile = KernelProfile.defaul
     case ConstantInfo.ThmInfo(v)    => (addTheorem(env, v), CheckOutcome.Checked)
     case ConstantInfo.OpaqueInfo(v) => (addOpaque(env, v), CheckOutcome.Checked)
     case ConstantInfo.QuotInfo(v) =>
-      val tc = checker(env, DefinitionSafety.Safe)
-      checkConstantVal(env, v.toConstantVal, tc)
-      (env.addCore(info).markQuotInitialized, CheckOutcome.TypeOnly)
+      // `add_quot` installs all four constants at once, so the first one an
+      // export file mentions triggers the whole package; each exported constant
+      // is then validated against the one the kernel built.
+      val next = if env.quotInitialized then env else Quot.add(env)
+      Quot.validate(next, List(v))
+      (next, CheckOutcome.Checked)
     case ConstantInfo.InductInfo(v) =>
       (typeOnly(env, v.toConstantVal, info), CheckOutcome.TypeOnly)
     case ConstantInfo.CtorInfo(v) =>

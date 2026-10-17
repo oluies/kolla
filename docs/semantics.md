@@ -450,3 +450,21 @@ Lean bounds reduction with `scope_rec_depth` and `check_system`. Since the
 instead and raises `KernelException(DeepRecursion)` past `maxSteps`. An ill-typed
 term can make `whnf` diverge in either implementation; the budget is what stops
 it.
+
+### K10 — the quotient package is built, not read
+
+`Declaration.quotDecl` carries no data: `environment::add_quot`
+(`src/kernel/quot.cpp`) builds `Quot`, `Quot.mk`, `Quot.lift` and `Quot.ind`
+itself after `check_eq_type` has confirmed that `Eq` is the inductive it expects,
+and it refuses to overwrite a name already in the environment. `Quot.declarations`
+rebuilds the same four constants, and the types it produces are equal to the ones
+Lean v4.35.0 exports, which is checked against a real export file.
+
+The text v2 and NDJSON formats ship the four constants, so the driver installs the
+package the first time one of them appears and then validates each exported
+constant against the built one, comparing the type after renaming the exported
+universe parameters. Only `Quot.lift` has two universe parameters.
+
+Reduction is gated on `is_quot_initialized`, so `Quot.lift` and `Quot.ind`
+applications do not reduce in an environment where the package was never
+installed.
