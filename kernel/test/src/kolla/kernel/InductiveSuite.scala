@@ -10,6 +10,11 @@ class InductiveSuite extends munit.FunSuite:
   def pi(n: String, d: Expr, b: Expr) = Expr.ForallE(Name.mkSimple(n), d, b, BinderInfo.Default)
 
   // An enum case constructor widens to `Declaration`, so match it back.
+  def addInd(d: Declaration, env: Environment = Environment.empty): AddInductiveResult =
+    d match
+      case i: Declaration.InductDecl => AddInductive.add(env, i, KernelProfile.v4_35)
+      case other                     => fail(s"expected an inductive declaration, got $other")
+
   def runInd(d: Declaration, env: Environment = Environment.empty, nnested: Int = 0): InductiveResult =
     d match
       case i: Declaration.InductDecl => new InductiveChecker(env, i, KernelProfile.v4_35, nnested).run()
@@ -393,12 +398,14 @@ class InductiveSuite extends munit.FunSuite:
       )),
       false
     )
-    val e = intercept[KernelException](runInd(d, nat.env))
+    val e = intercept[KernelException](
+      AddInductive.add(nat.env, d.asInstanceOf[Declaration.InductDecl], KernelProfile.v4_35)
+    )
     assert(clue(e.getMessage).contains("invalid occurrence of a datatype being declared"))
 
     // Earlier releases do not have the check, so it must be profile-gated.
     val e2 = intercept[KernelException](
-      new InductiveChecker(nat.env, d.asInstanceOf[Declaration.InductDecl], KernelProfile.v4_27, 0).run()
+      AddInductive.add(nat.env, d.asInstanceOf[Declaration.InductDecl], KernelProfile.v4_27)
     )
     // It still fails, but on a later check rather than this one.
     assert(!e2.getMessage.contains("invalid occurrence of a datatype being declared"), clue(e2.getMessage))
@@ -433,7 +440,7 @@ class InductiveSuite extends munit.FunSuite:
       )),
       false
     )
-    assert(clue(intercept[KernelException](runInd(d)).getMessage).contains("reserved prefix"))
+    assert(clue(intercept[KernelException](addInd(d)).getMessage).contains("reserved prefix"))
 
     // A projection's structure name is resolved the same way.
     val viaProj = Declaration.InductDecl(
@@ -447,20 +454,17 @@ class InductiveSuite extends munit.FunSuite:
       )),
       false
     )
-    assert(clue(intercept[KernelException](runInd(viaProj)).getMessage).contains("reserved prefix"))
+    assert(clue(intercept[KernelException](addInd(viaProj)).getMessage).contains("reserved prefix"))
 
     // The check applies to the inductive's own type too.
     val viaType = Declaration.InductDecl(
       Nil, 0, List(InductiveType(Name.parse("W"), Expr.const(auxName), Nil)), false
     )
-    assert(clue(intercept[KernelException](runInd(viaType)).getMessage).contains("reserved prefix"))
+    assert(clue(intercept[KernelException](addInd(viaType)).getMessage).contains("reserved prefix"))
   }
 
-  test("a nested block is refused rather than silently accepted") {
-    val e = intercept[KernelException](runInd(natDecl, Environment.empty, nnested = 1))
-    assert(clue(e.getMessage).contains("nested inductive types are not implemented yet"))
-    // numNested = 0 is the ordinary path.
-    assertEquals(runInd(natDecl, Environment.empty, nnested = 0).inductives.head.numNested, 0)
+  test("a declaration with no nested occurrences reports numNested = 0") {
+    assertEquals(AddInductive.add(Environment.empty, natDecl.asInstanceOf[Declaration.InductDecl]).numNested, 0)
   }
 
   test("declarationOf rebuilds a block from exported entries") {
@@ -480,4 +484,98 @@ class InductiveSuite extends munit.FunSuite:
     assert(clue(intercept[KernelException](
       InductiveChecker.declarationOf(r.inductives, Nil)
     ).getMessage).contains("does not declare it"))
+  }
+
+  test("a nested occurrence is replaced by an auxiliary type") {
+    // inductive Tree where leaf : Nat -> Tree | node : List Tree -> Tree
+    val nat  = runInd(natDecl)
+    val list = Declaration.InductDecl(
+      Nil, 1,
+      List(InductiveType(
+        Name.parse("List"), pi("A", type0, type0),
+        List(
+          Constructor(Name.parse("List.nil"), pi("A", type0, Expr.App(Expr.const("List"), Expr.BVar(0)))),
+          Constructor(
+            Name.parse("List.cons"),
+            pi("A", type0, pi("h", Expr.BVar(0), pi("t", Expr.App(Expr.const("List"), Expr.BVar(1)),
+              Expr.App(Expr.const("List"), Expr.BVar(2)))))
+          )
+        )
+      )),
+      false
+    )
+    val withList = runInd(list, nat.env)
+
+    val tree = Declaration.InductDecl(
+      Nil, 0,
+      List(InductiveType(
+        Name.parse("Tree"), type0,
+        List(
+          Constructor(Name.parse("Tree.leaf"), arrow(Expr.const("Nat"), Expr.const("Tree"))),
+          Constructor(
+            Name.parse("Tree.node"),
+            arrow(Expr.App(Expr.const("List"), Expr.const("Tree")), Expr.const("Tree"))
+          )
+        )
+      )),
+      false
+    )
+
+    // The preprocessor copies `List` into the block as an auxiliary type.
+    val elim = new ElimNestedInductive(withList.env, tree.asInstanceOf[Declaration.InductDecl]).apply()
+    assertEquals(elim.numNested, 1)
+    assertEquals(elim.auxDecl.types.length, 2)
+    val auxName = elim.auxDecl.types(1).name
+    assert(Name.isPrefixOf(Names.nested, auxName), clue(auxName.toString))
+    // `List Tree` is what the auxiliary type stands for.
+    assertEquals(
+      elim.aux2nested(auxName),
+      Expr.App(Expr.const("List"), Expr.const("Tree"))
+    )
+    // `Tree.node`'s argument now mentions the auxiliary type, not `List`.
+    val nodeType = elim.auxDecl.types(0).ctors(1).tpe
+    assert(nodeType.toString.contains(auxName.toString), clue(nodeType.toString))
+
+    val r = AddInductive.add(withList.env, tree.asInstanceOf[Declaration.InductDecl], KernelProfile.v4_35)
+    assertEquals(r.numNested, 1)
+    assertEquals(r.inductives.map(_.toConstantVal.name.toString), List("Tree"))
+    assertEquals(r.inductives.head.numNested, 1)
+    assertEquals(r.constructors.map(_.toConstantVal.name.toString), List("Tree.leaf", "Tree.node"))
+    // The auxiliary type's recursor is renamed `Tree.rec_1`.
+    assertEquals(r.recursors.map(_.toConstantVal.name.toString), List("Tree.rec", "Tree.rec_1"))
+    // The restored constructor type mentions `List` again, and no auxiliary
+    // type survives in the environment.
+    assert(!r.constructors(1).toConstantVal.tpe.toString.contains("_nested"))
+    assert(r.env.names.forall(n => !Name.isPrefixOf(Names.nested, n)))
+  }
+
+  test("a nested parameter containing a local variable is rejected") {
+    // The parametric arguments of a nested occurrence must be closed.
+    val nat  = runInd(natDecl)
+    val list = Declaration.InductDecl(
+      Nil, 1,
+      List(InductiveType(
+        Name.parse("L"), pi("A", type0, type0),
+        List(Constructor(Name.parse("L.mk"), pi("A", type0, Expr.App(Expr.const("L"), Expr.BVar(0)))))
+      )),
+      false
+    )
+    val withL = runInd(list, nat.env)
+    val bad = Declaration.InductDecl(
+      Nil, 0,
+      List(InductiveType(
+        Name.parse("B"), type0,
+        List(Constructor(
+          Name.parse("B.mk"),
+          // `L (fun _ : Nat => B) ...` would be fine; here the parameter is a
+          // bound variable introduced inside the constructor.
+          pi("x", type0, arrow(Expr.App(Expr.const("L"), Expr.App(Expr.BVar(0), Expr.const("B"))), Expr.const("B")))
+        ))
+      )),
+      false
+    )
+    val e = intercept[KernelException](
+      AddInductive.add(withL.env, bad.asInstanceOf[Declaration.InductDecl], KernelProfile.v4_35)
+    )
+    assert(clue(e.getMessage).contains("cannot contain local variables"), clue(e.getMessage))
   }

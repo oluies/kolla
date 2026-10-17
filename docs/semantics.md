@@ -557,10 +557,42 @@ are implemented:
   levels. An occurrence with *more* than `nparams` arguments is skipped at that
   node and its parameter application is checked as a subterm.
 
-Still missing: the nested-inductive preprocessor
-(`elim_nested_inductive_fn` and `restore_nested`). A block with
-`numNested > 0` now raises instead of being accepted on the file's own say-so,
-so it cannot be mistaken for agreement with `lean4checker`.
+### K16 — nested inductives
+
+`AddInductive.add` is `environment::add_inductive`, and it is the entry point for
+an inductive declaration. `InductiveChecker` is `add_inductive_fn` and sees only
+the nested-free auxiliary block, which is why `check_no_nested_aux` and
+`check_uniform_ind_occs` live in the driver: the auxiliary declaration mentions
+the reserved `_nested` prefix by construction, so running the first of them
+inside `InductiveChecker` rejects every nested block.
+
+`ElimNestedInductive` replaces each nested occurrence `I Ds is` — an application
+of an already declared inductive whose parametric arguments mention a type being
+declared — with `Iaux As is`, where `As` are the block's own parameters. Notes
+that are load-bearing:
+
+- every type of `I`'s mutual block is copied, not just `I`.
+- the parameters are rebuilt for each constructor so that each keeps its own
+  binder info, which is why the `nested_aux` lookup key is restated in terms of
+  the declaration's parameters before comparison.
+- the parametric arguments `Ds` must be closed; a bound variable there is an
+  error, since `Ds` does not appear in the auxiliary declaration.
+- an auxiliary type's name is `_nested.<J>_<n>`, made unique against the
+  environment.
+
+`ElimNestedResult.restoreNested` rewrites the auxiliary types and their
+constructors back, and renames the auxiliary recursors to
+`<main type>.rec_1`, `.rec_2`, ... (`mk_aux_rec_name_map`). The restored
+declarations are added to the *original* environment, so no auxiliary type can
+leak; the test asserts that. `Ds` is type checked at the end, in the restored
+environment, because it appears nowhere in the auxiliary block and would
+otherwise escape checking entirely.
+
+Validated against `nested-3.1.0.ndjson`, exported from Lean v4.35.0: `Tree`
+(nested `List Tree`) and `RoseTree` (nested with a parameter) both reproduce
+Lean's two recursors each — `Tree.rec`/`Tree.rec_1` and
+`RoseTree.rec`/`RoseTree.rec_1` — with types and rule right-hand sides equal up
+to `Expr.isBiEqual`.
 
 ### K15 — a block's recursors must all be installed before any rule is checked
 

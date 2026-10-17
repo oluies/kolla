@@ -554,15 +554,11 @@ final class InductiveChecker(
     */
   def run(): InductiveResult =
     if nparams < 0 then bad("invalid inductive datatype, number of parameters is too big")
+    // `check_no_nested_aux` and `check_uniform_ind_occs` belong to
+    // `environment::add_inductive`, not here: this is handed the *auxiliary*
+    // declaration, which by construction mentions the reserved `_nested` prefix.
+    // `AddInductive.add` runs them on the user's declaration.
     env.checkDuplicatedUnivParams(lparams)
-    InductiveChecker.checkNoNestedAux(decl)
-    if profile.checkUniformIndOccs then InductiveChecker.checkUniformIndOccs(decl)
-    if numNested > 0 then
-      throw KernelException(
-        ExceptionKind.InvalidDeclaration,
-        indTypes.head.name,
-        s"nested inductive types are not implemented yet (numNested = $numNested)"
-      )
     checkInductiveTypes()
     val rec       = computeIsRec
     val reflexive = computeIsReflexive

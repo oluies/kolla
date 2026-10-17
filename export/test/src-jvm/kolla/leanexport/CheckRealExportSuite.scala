@@ -195,6 +195,26 @@ class CheckRealExportSuite extends munit.FunSuite:
         case _ => i += 1
     out.result()
 
+  test("nested inductive blocks are regenerated through AddInductive") {
+    val blocks = blocksOf("nested-3.1.0.ndjson")
+    var env = Environment.empty
+    var nestedSeen = 0
+    blocks.foreach { (inds, ctors, recs) =>
+      val declaration = InductiveChecker.declarationOf(inds, ctors)
+      val r = AddInductive.add(env, declaration, KernelProfile.v4_35)
+      assertEquals(r.numNested, inds.head.numNested, clue(inds.head.toConstantVal.name.toString))
+      if r.numNested > 0 then nestedSeen += 1
+      InductiveChecker.validate(inds, ctors, r.inductives, r.constructors, recs, r.recursors)
+      env = r.env
+    }
+    assertEquals(nestedSeen, 2)
+    // Tree's nested List produced a second recursor, renamed Tree.rec_1.
+    assert(env.contains(Name.parse("Tree.rec_1")))
+    assert(env.contains(Name.parse("RoseTree.rec_1")))
+    // No auxiliary type leaked into the final environment.
+    assert(env.names.forall(n => !Name.isPrefixOf(Names.nested, n)), clue(env.names.mkString(",")))
+  }
+
   test("a mutual inductive block is regenerated, a nested one is refused") {
     val blocks = blocksOf("nested-3.1.0.ndjson")
     assertEquals(blocks.length, 5)
@@ -209,23 +229,16 @@ class CheckRealExportSuite extends munit.FunSuite:
     blocks.foreach { (inds, ctors, recs) =>
       val nested      = inds.head.numNested
       val declaration = InductiveChecker.declarationOf(inds, ctors)
-      if nested > 0 then
-        val e = intercept[KernelException](
-          new InductiveChecker(env, declaration, KernelProfile.v4_35, nested).run()
-        )
-        assert(clue(e.getMessage).contains("nested inductive types are not implemented yet"))
-        refused = refused :+ inds.head.toConstantVal.name.toString
-        // Carry the block over unchecked so later blocks still have it.
-        (inds.map(ConstantInfo.InductInfo(_)) ++ ctors.map(ConstantInfo.CtorInfo(_)) ++
-          recs.map(ConstantInfo.RecInfo(_))).foreach(info => env = dc.addInfo(env, info)._1)
-      else
-        val r = new InductiveChecker(env, declaration, KernelProfile.v4_35, nested).run()
-        InductiveChecker.validate(inds, ctors, r.inductives, r.constructors, recs, r.recursors)
-        env = r.env
-        regenerated += 1
+      // `InductiveChecker` alone sees the restored declaration, so a nested
+      // block has to go through `AddInductive`.
+      if nested > 0 then refused = refused :+ inds.head.toConstantVal.name.toString
+      val r = AddInductive.add(env, declaration, KernelProfile.v4_35)
+      InductiveChecker.validate(inds, ctors, r.inductives, r.constructors, recs, r.recursors)
+      env = r.env
+      regenerated += 1
     }
     assertEquals(refused, List("Tree", "RoseTree"))
-    assertEquals(regenerated, 3)
+    assertEquals(regenerated, 5)
 
     // The mutual block is the new capability here: two types, two recursors,
     // each with both motives and all three minor premises.
