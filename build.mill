@@ -55,6 +55,26 @@ object kernel extends Module {
   }
 }
 
+object dsl extends Module {
+  trait Shared extends KollaModule {
+    def mvnDeps = Seq(mvn"org.typelevel::cats-core::${v.cats}")
+  }
+  object jvm extends Shared {
+    def moduleDeps = Seq(kernel.jvm)
+    object test extends KollaTests {
+      def moduleDeps = super.moduleDeps ++ Seq(build.`export`.jvm)
+    }
+  }
+  object js extends Shared with KollaJsModule {
+    def moduleDeps = Seq(kernel.js)
+    object test extends KollaTests with ScalaJSTests
+  }
+  object native extends Shared with KollaNativeModule {
+    def moduleDeps = Seq(kernel.native)
+    object test extends KollaTests with ScalaNativeTests
+  }
+}
+
 object `export` extends Module {
   trait Shared extends KollaModule {
     def mvnDeps = Seq(

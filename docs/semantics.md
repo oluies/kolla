@@ -633,3 +633,55 @@ pass for the arguments and another for the result gives the result type a
 different set of free variables, which produces a recursor whose minor premise
 applies the motive to the wrong index. `ctorParts` returns both from one pass.
 v4.35's `check_recursors` rejects the result, which is what it is for.
+
+## DSL
+
+### D5 — binders are Scala functions
+
+`LeanDsl.Lam`, `Pi` and `Let` take the body as `Expr => Expr`. The bound variable
+is a free variable with a fresh identifier while the body is built and is
+abstracted immediately afterwards, which is `local_ctx::mk_binding` for one
+variable. Each binder abstracts its own variable, so `k` nested binders cost
+O(k²); that is fine for hand-written terms, and a generated telescope should use
+`LocalContext.mkPi`/`mkLambda`, which abstract every variable in one pass.
+
+### D6 — `->:` and Scala's operator rules
+
+An arrow has to be right associative, which in Scala means the operator name has
+to end in `:`. For such an extension method Scala binds the *extension receiver*
+to the left operand, not the right, so `->:` is declared on the domain:
+`extension (domain: Expr) infix def ->:(codomain: Expr)`. Declaring it the other
+way round reverses every arrow, and `Nat ->: Nat` cannot show it because it is
+symmetric: `a ->: b ->: c` produced `(a -> b) -> c`.
+
+### D7 — the interpolator shares the parser
+
+`lean"..."` is a macro that runs `LeanParser` at compile time and emits
+construction code for the resulting term, so the grammar has one implementation
+and a syntax error is a compile error. A `${...}` hole becomes a `$i` marker that
+the parser turns into an `Expr.MVar` under the reserved prefix `_leanSplice`,
+which the macro's lifter replaces with the argument. A spliced `Expr` is inserted
+unchanged and must therefore be closed; the syntax has no way to name an
+enclosing binder from Scala. A `Level` splices as `Sort l` and a `Name` as a
+constant.
+
+Because the macro *runs* the parser, changing the parser does not by itself force
+call sites to be re-expanded, and a stale expansion can survive an incremental
+build. The interpolator tests compare against `LeanParser.parseOrThrow` at
+runtime, which turns that staleness into a test failure rather than a silent
+divergence.
+
+### D8 — the DSL reads a digit component as a numeral
+
+`LeanParser.parseName` makes an all-digit component of a dotted identifier a
+`Name.Num`, as Lean's name syntax does; `Foo.3` is `Name.num 3` and the string
+form would be written `Foo.«3»`, which this syntax does not support.
+`Name.parse` in the kernel is the plain splitter and keeps every component a
+string, so the two deliberately disagree on `Foo.3`.
+
+### D9 — parser nesting is bounded
+
+The grammar is parsed by recursive descent, so nesting is bounded explicitly at
+`LeanParser.maxDepth` and reported as a parse error. Scala.js has a much smaller
+stack than the JVM: 2000 nested `fun`s parse on the JVM and raise
+`RangeError: Maximum call stack size exceeded` under Node.
