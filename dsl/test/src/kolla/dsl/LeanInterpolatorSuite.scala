@@ -54,6 +54,16 @@ class LeanInterpolatorSuite extends munit.FunSuite:
     assertEquals(lean"$n", Expr.const("Nat.add"))
   }
 
+  test("a literal digit after a splice does not merge into the index") {
+    val a = Expr.const("A")
+    val b = Expr.const("B")
+    assertEquals(lean"f ${a}1 $b", Expr.mkAppN(Expr.const("f"), Seq(a, Expr.natLit(1), b)))
+    assertEquals(lean"f ${a}7", Expr.mkAppN(Expr.const("f"), Seq(a, Expr.natLit(7))))
+    // A single argument followed by a digit used to report "splice 1 has no
+    // argument"; two arguments used to expand to `f b b`.
+    assertEquals(lean"${a}2", Expr.App(a, Expr.natLit(2)))
+  }
+
   test("several splices are matched positionally") {
     val a = Expr.const("A")
     val b = Expr.const("B")

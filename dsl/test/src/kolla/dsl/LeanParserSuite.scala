@@ -66,6 +66,33 @@ class LeanParserSuite extends munit.FunSuite:
     assertEquals(p("fun (x y : Nat) => x"), p("fun (x : Nat) (y : Nat) => x"))
   }
 
+  test("a multi-name binder group lifts its shared type") {
+    // The group's type is read before the group, so the second name sits one
+    // binder deeper and its loose bvars have to shift. A closed type such as
+    // `Nat` cannot show this.
+    assertEquals(
+      p("forall (A : Sort u) (a b : A), A"),
+      p("forall (A : Sort u) (a : A) (b : A), A")
+    )
+    val r = p("forall (A : Sort u) (a b : A), A").asInstanceOf[Expr.ForallE]
+    val aB = r.body.asInstanceOf[Expr.ForallE]
+    val bB = aB.body.asInstanceOf[Expr.ForallE]
+    assertEquals(aB.binderType, bv(0))
+    // `b`'s type must still be `A`, which is now two binders out.
+    assertEquals(bB.binderType, bv(1))
+    assertEquals(bB.body, bv(2))
+    // Three names in one group.
+    assertEquals(
+      p("forall (A : Sort u) (a b c : A), A"),
+      p("forall (A : Sort u) (a : A) (b : A) (c : A), A")
+    )
+    // A silently well-typed case: the shifted target would also be a type.
+    assertEquals(
+      p("fun (u : Sort 2) (A B : u) => A"),
+      p("fun (u : Sort 2) (A : u) (B : u) => A")
+    )
+  }
+
   test("forall binds its variable") {
     assertEquals(
       p("forall (x : Nat), x"),
@@ -145,6 +172,22 @@ class LeanParserSuite extends munit.FunSuite:
       case Right(_) => fail("expected an error")
   }
 
+  test("a keyword is not the prefix of a longer identifier") {
+    assertEquals(p("funext h"), Expr.App(Expr.const("funext"), Expr.const("h")))
+    assertEquals(p("letter"), Expr.const("letter"))
+    assertEquals(p("SortedList"), Expr.const("SortedList"))
+    assertEquals(p("forallx"), Expr.const("forallx"))
+    assertEquals(p("succs"), Expr.const("succs"))
+    // In a universe position too.
+    assertEquals(p("f.{maxi}"), Expr.Const(Name.parse("f"), List(Level.Param(Name.mkSimple("maxi")))))
+    assertEquals(p("f.{succi}"), Expr.Const(Name.parse("f"), List(Level.Param(Name.mkSimple("succi")))))
+    // The keywords themselves still work.
+    assertEquals(p("fun (x : Nat) => x"), Expr.Lam(Name.mkSimple("x"), nat, bv(0), BinderInfo.Default))
+    assertEquals(p("Sort 0"), Expr.Sort(Level.zero))
+    assertEquals(p("f.{max u v}"), Expr.Const(Name.parse("f"),
+      List(Level.Max(Level.Param(Name.mkSimple("u")), Level.Param(Name.mkSimple("v"))))))
+  }
+
   test("whitespace and newlines are insignificant") {
     assertEquals(p("  fun  (x : Nat)\n  =>\n  x  "), p("fun (x : Nat) => x"))
   }
@@ -168,6 +211,12 @@ class LeanParserSuite extends munit.FunSuite:
     // Parenthesis nesting is bounded the same way.
     val parens = "(" * (LeanParser.maxDepth * 2) + "Nat" + ")" * (LeanParser.maxDepth * 2)
     assert(clue(err(parens)).contains("nesting deeper than"))
+    // So is universe nesting, which recurses through its own functions.
+    val n = LeanParser.maxDepth * 2
+    assert(clue(err("Sort " + "(" * n + "u" + ")" * n)).contains("nesting deeper than"))
+    assert(clue(err("Sort " + ("max " * n) + ("u " * (n + 1)))).contains("nesting deeper than"))
+    // A level within the limit still parses.
+    assertEquals(p("Sort " + "(" * 20 + "u" + ")" * 20), Expr.Sort(Level.Param(Name.mkSimple("u"))))
   }
 
   test("parseName reads an all-digit component as a numeral") {

@@ -104,6 +104,18 @@ object LeanParser:
     private def eat(t: String): Boolean =
       if peekIs(t) then { i += t.length; true } else false
 
+    /** A keyword must not be the prefix of a longer identifier: `funext` is a
+      * constant, not `fun` followed by `ext`.
+      */
+    private def peekKeyword(t: String): Boolean =
+      peekIs(t) && {
+        val j = i + t.length
+        j >= s.length || !isIdentPart(s.charAt(j))
+      }
+
+    private def eatKeyword(t: String): Boolean =
+      if peekKeyword(t) then { i += t.length; true } else false
+
     private def expect(t: String): Unit =
       if !eat(t) then fail(s"expected '$t'")
 
@@ -165,14 +177,16 @@ object LeanParser:
 
     def level(): Level =
       skipWs()
-      if eat("max") then
+      if eatKeyword("max") then
         val a = levelAtom(); val b = levelAtom(); Level.max(a, b)
-      else if eat("imax") then
+      else if eatKeyword("imax") then
         val a = levelAtom(); val b = levelAtom(); Level.imax(a, b)
-      else if eat("succ") then Level.Succ(levelAtom())
+      else if eatKeyword("succ") then Level.Succ(levelAtom())
       else levelAtom()
 
-    private def levelAtom(): Level =
+    private def levelAtom(): Level = nested(levelAtomCore())
+
+    private def levelAtomCore(): Level =
       skipWs()
       if atEnd then fail("expected a universe level")
       if eat("(") then
@@ -180,7 +194,7 @@ object LeanParser:
         expect(")")
         l
       else if s.charAt(i).isDigit then Level.ofNat(natLit().toInt)
-      else if peekIs("max") || peekIs("imax") || peekIs("succ") then level()
+      else if peekKeyword("max") || peekKeyword("imax") || peekKeyword("succ") then level()
       else Level.Param(parseName(ident()))
 
     private def levelList(): List[Level] =
@@ -219,7 +233,12 @@ object LeanParser:
       expectTypeColon()
       val tpe = expr(scope)
       expect(close)
-      names.result().map(Binder(_, tpe, info))
+      // The type was read in the scope before the group, but the k-th name sits
+      // under the k preceding names of the same group, so its loose bound
+      // variables have to be shifted.
+      names.result().zipWithIndex.map { (n, k) =>
+        Binder(n, ExprOps.liftLooseBVars(tpe, 0, k), info)
+      }
 
     private def binderGroups(scope: List[String]): List[Binder] =
       val out = mutable.ArrayBuffer.empty[Binder]
@@ -240,18 +259,18 @@ object LeanParser:
 
     private def exprCore(scope: List[String]): Expr =
       skipWs()
-      if peekIs("fun") || peekIs("λ") then
-        if !eat("fun") then expect("λ")
+      if peekKeyword("fun") || peekIs("λ") then
+        if !eatKeyword("fun") then expect("λ")
         val bs = binderGroupsIn(scope)
         expect("=>")
         buildBinders(bs, scope, isPi = false)
-      else if peekIs("forall") || peekIs("∀") then
-        if !eat("forall") then expect("∀")
+      else if peekKeyword("forall") || peekIs("∀") then
+        if !eatKeyword("forall") then expect("∀")
         val bs = binderGroupsIn(scope)
         expect(",")
         buildBinders(bs, scope, isPi = true)
-      else if peekIs("let") then
-        expect("let")
+      else if peekKeyword("let") then
+        if !eatKeyword("let") then fail("expected 'let'")
         val n = ident()
         expectTypeColon()
         val tpe = expr(scope)
@@ -306,8 +325,8 @@ object LeanParser:
         Expr.MVar(spliceMarker.num(idx))
       else if peekIs("\"") then Expr.strLit(stringLit())
       else if s.charAt(i).isDigit then Expr.natLit(natLit())
-      else if peekIs("Sort") then
-        expect("Sort")
+      else if peekKeyword("Sort") then
+        if !eatKeyword("Sort") then fail("expected 'Sort'")
         Expr.Sort(levelAtom())
       else
         val id = ident()

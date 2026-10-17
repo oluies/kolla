@@ -41,8 +41,9 @@ object LeanInterpolator:
       report.errorAndAbort("lean\"\": mismatched parts and arguments", sc)
 
     // Each hole becomes `$i`, which the parser turns into a marker the lifter
-    // replaces with the corresponding argument.
-    val source = parts.head + parts.tail.zipWithIndex.map((p, i) => s"$$$i$p").mkString
+    // replaces with the corresponding argument. The trailing space terminates
+    // the index, so a literal part starting with a digit cannot merge into it.
+    val source = parts.head + parts.tail.zipWithIndex.map((p, i) => s"$$$i $p").mkString
 
     val parsed = LeanParser.parse(source) match
       case Right(e) => e
@@ -56,7 +57,6 @@ object LeanInterpolator:
     import quotes.reflect.report
 
     def name(n: Name): Expr[Name] =
-      val s = Expr(n.toString)
       if n.isAnonymous then '{ Name.anonymous }
       else
         // Rebuild from the components so a numeral component survives.

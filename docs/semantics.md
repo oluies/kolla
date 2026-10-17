@@ -685,3 +685,34 @@ The grammar is parsed by recursive descent, so nesting is bounded explicitly at
 `LeanParser.maxDepth` and reported as a parse error. Scala.js has a much smaller
 stack than the JVM: 2000 nested `fun`s parse on the JVM and raise
 `RangeError: Maximum call stack size exceeded` under Node.
+
+The bound has to cover *every* recursion in the grammar, not just `expr` and
+`atom`. Universe levels recurse through their own functions, so `levelAtom` goes
+through the same guard; without it `Sort ((((u))))` nested 20 000 deep threw a
+`StackOverflowError` out of `parse`, which catches only its own
+`ParseException` and so returned no `Left` at all.
+
+### D10 — a multi-name binder group lifts its shared type
+
+`(a b : A)` is one group whose type is read in the scope *before* the group, but
+the k-th name sits under the k names before it, so the type's loose bound
+variables are shifted by k. Without that, `forall (A : Sort u) (a b : A), A`
+parses as `... (b : a) ...`, pointing `b`'s type at `a`. A closed group type such
+as `Nat` cannot show this, and when the shifted target happens to be a type —
+`fun (u : Sort 2) (A B : u) => A` — the result is well typed and silently wrong.
+
+### D11 — a keyword is not the prefix of an identifier
+
+`fun`, `forall`, `let`, `Sort`, `max`, `imax` and `succ` are only keywords when
+the next character cannot continue an identifier. Matching them by raw prefix
+makes `funext` fail, and makes `SortedList` *silently* parse as `Sort edList`, a
+sort over a universe parameter named `edList`. `λ`, `∀` and `→` are not
+identifier characters and need no boundary test.
+
+### D12 — a splice marker is delimited
+
+The interpolator emits `$i ` with a trailing space, because the index is read as
+a numeral: concatenating `$i` straight onto a literal part that begins with a
+digit merges the two, so `lean"f ${a}1 ${b}"` built the source `f $01 $1` and
+read the first marker as index 1, silently expanding to `f b b` with the literal
+`1` gone.

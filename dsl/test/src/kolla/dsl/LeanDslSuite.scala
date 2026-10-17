@@ -72,8 +72,16 @@ class LeanDslSuite extends munit.FunSuite:
   }
 
   test("the arrow operator is right associative") {
-    assertEquals(nat ->: nat, LeanParser.parseOrThrow("Nat -> Nat"))
-    assertEquals(nat ->: nat ->: nat, LeanParser.parseOrThrow("Nat -> Nat -> Nat"))
+    // Distinct constants: `Nat ->: Nat` is symmetric and cannot detect a
+    // reversed arrow, which is the regression D6 records.
+    val a = Expr.const("A")
+    val b = Expr.const("B")
+    val c = Expr.const("C")
+    assertEquals(a ->: b, LeanParser.parseOrThrow("A -> B"))
+    assertEquals(a ->: b ->: c, LeanParser.parseOrThrow("A -> B -> C"))
+    assertNotEquals(a ->: b, b ->: a)
+    // The domain really is the left operand.
+    assertEquals((a ->: b).asInstanceOf[Expr.ForallE].binderType, a)
   }
 
   test("application via apply") {

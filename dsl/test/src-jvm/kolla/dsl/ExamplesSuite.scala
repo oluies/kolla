@@ -18,8 +18,8 @@ class ExamplesSuite extends munit.FunSuite:
     finally src.close()
 
   /** Replays an export file, checking each entry. */
-  private lazy val natAddEnv: Environment =
-    val infos = ExportReader.fromLines(resource("nat-add-3.1.0.ndjson")).infos
+  private def replay(file: String): Environment =
+    val infos = ExportReader.fromLines(resource(file)).infos
     val dc    = new DeclarationChecker(KernelProfile.v4_35)
     var env   = Environment.empty
     var i     = 0
@@ -44,6 +44,11 @@ class ExamplesSuite extends munit.FunSuite:
           env = dc.addInfo(env, info)._1
           i += 1
     env
+
+  private lazy val natAddEnv: Environment = replay("nat-add-3.1.0.ndjson")
+
+  /** This one carries a theorem, `Nat.add_succ`. */
+  private lazy val addSuccEnv: Environment = replay("nat-add-succ-3.0.0.ndjson")
 
   // -------------------------------------------- example 1: identity function
 
@@ -113,11 +118,14 @@ class ExamplesSuite extends munit.FunSuite:
   // ------------------------------------------- example 2: Nat.add_comm's kin
 
   test("the exported environment is replayed and its theorem statements check") {
-    val env = natAddEnv
+    val env = addSuccEnv
     assert(env.contains(Name.parse("Nat")))
-    assert(env.contains(Name.parse("Nat.add")))
+    assert(env.contains(Name.parse("Nat.add_succ")))
     // Every theorem's statement is a proposition and its value proves it.
     val thms = env.declarations.collect { case ConstantInfo.ThmInfo(v) => v }
+    // The fixture must actually carry one, or this asserts nothing.
+    assertEquals(thms.length, 1)
+    assertEquals(thms.head.toConstantVal.name, Name.parse("Nat.add_succ"))
     thms.foreach { t =>
       val cv = t.toConstantVal
       val tc = new TypeChecker(env, KernelProfile.v4_35)
@@ -140,18 +148,29 @@ class ExamplesSuite extends munit.FunSuite:
     assert(tc.isDefEq(declared, lean"Nat -> Nat -> Nat"), clue(Pretty.expr(declared)))
   }
 
-  test("a theorem can be restated with the interpolator and still check") {
+  test("a theorem restated with the interpolator still checks") {
+    val env = addSuccEnv
+    val t = env.declarations.collectFirst { case ConstantInfo.ThmInfo(v) => v }
+      .getOrElse(fail("the fixture carries no theorem"))
+    val cv = t.toConstantVal
+    val tc = new TypeChecker(env, KernelProfile.v4_35)
+    // A spliced statement is inserted unchanged, binder names included.
+    val restated = lean"${cv.tpe}"
+    assertEquals(restated, cv.tpe)
+    assert(Expr.isBiEqual(restated, cv.tpe))
+    val inferred = tc.check(t.value, cv.levelParams)
+    assert(tc.isDefEq(inferred, restated))
+    // And applying the proof to the statement's binders still type checks.
+    assert(tc.isProp(cv.tpe))
+  }
+
+  test("a spliced declaration type is inserted unchanged") {
     val env = natAddEnv
-    val thm = env.declarations.collectFirst { case ConstantInfo.ThmInfo(v) => v }
-    thm match
-      case None => // this export happens to carry no theorem
-      case Some(t) =>
-        val cv = t.toConstantVal
-        val tc = new TypeChecker(env, KernelProfile.v4_35)
-        // Spliced into a `forall` the statement is unchanged, which shows the
-        // splice is inserted without shifting.
-        val restated = lean"${cv.tpe}"
-        assertEquals(restated, cv.tpe)
-        val inferred = tc.check(t.value, cv.levelParams)
-        assert(tc.isDefEq(inferred, restated))
+    val declared = env.get(Name.parse("Nat.add")).tpe
+    assertEquals(lean"$declared", declared)
+    assert(Expr.isBiEqual(lean"$declared", declared))
+    // Inside a binder the splice is still unchanged, which is why it has to be
+    // closed.
+    val wrapped = lean"fun (z : Nat) => $declared"
+    assertEquals(wrapped.asInstanceOf[Expr.Lam].body, declared)
   }
