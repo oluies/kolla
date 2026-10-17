@@ -1,0 +1,123 @@
+name: nightly
+
+# The standard library and a mathlib sample are hours of work and gigabytes of
+# export, so they run on a schedule rather than on every push.
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      toolchain:
+        description: The toolchain to run, or empty for every one in the matrix
+        required: false
+        default: ''
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  library:
+    runs-on: ubuntu-latest
+    timeout-minutes: 720
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain:
+          - v4.28.0
+          - v4.35.0
+        corpus:
+          - init
+          - std
+          - lean
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: mill-${{ runner.os }}-${{ hashFiles('build.mill') }}
+          restore-keys: mill-${{ runner.os }}-
+      - uses: actions/cache@v4
+        with:
+          path: .difftest/leanprover-lean4-${{ matrix.toolchain }}
+          key: nightly-${{ matrix.toolchain }}-${{ matrix.corpus }}-${{ hashFiles('difftest/toolchains.txt') }}
+          restore-keys: |
+            nightly-${{ matrix.toolchain }}-${{ matrix.corpus }}-
+            difftest-${{ matrix.toolchain }}-
+      - name: Install elan
+        run: |
+          curl -sSfL https://github.com/leanprover/elan/releases/latest/download/elan-x86_64-unknown-linux-gnu.tar.gz \
+            | tar xz
+          ./elan-init -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - run: ./mill difftest.run provision --toolchain ${{ matrix.toolchain }}
+      # The mutants are skipped: a corpus this size takes long enough once.
+      - run: >-
+          ./mill difftest.run run --toolchain ${{ matrix.toolchain }}
+          --corpus ${{ matrix.corpus }} --no-mutants --history
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-${{ matrix.toolchain }}-${{ matrix.corpus }}
+          path: .difftest/reports/
+
+  mathlib-sample:
+    runs-on: ubuntu-latest
+    timeout-minutes: 720
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain:
+          - v4.28.0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: mill-${{ runner.os }}-${{ hashFiles('build.mill') }}
+          restore-keys: mill-${{ runner.os }}-
+      - name: Install elan
+        run: |
+          curl -sSfL https://github.com/leanprover/elan/releases/latest/download/elan-x86_64-unknown-linux-gnu.tar.gz \
+            | tar xz
+          ./elan-init -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      # mathlib is pinned to the toolchain under test, and its cached build is
+      # fetched rather than compiled.
+      # mathlib has to be at the tag matching the toolchain under test: a
+      # checkout pinning a different release would export declarations this
+      # run's profile does not describe. A mismatch fails rather than silently
+      # exporting the wrong thing.
+      - name: Check out and fetch mathlib
+        run: |
+          git clone --quiet --depth 1 --branch ${{ matrix.toolchain }} \
+            https://github.com/leanprover-community/mathlib4.git mathlib4
+          cd mathlib4
+          pinned="$(cat lean-toolchain)"
+          expected="leanprover/lean4:${{ matrix.toolchain }}"
+          test "$pinned" = "$expected" || {
+            echo "mathlib at ${{ matrix.toolchain }} pins $pinned, not $expected" >&2
+            exit 1
+          }
+          lake exe cache get
+      - run: ./mill difftest.run provision --toolchain ${{ matrix.toolchain }}
+      - run: >-
+          ./mill difftest.run run --toolchain ${{ matrix.toolchain }}
+          --corpus mathlib-sample --mathlib "$PWD/mathlib4" --no-mutants --history
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-mathlib-sample-${{ matrix.toolchain }}
+          path: .difftest/reports/

@@ -1,0 +1,96 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The unit suites across all three platforms. No Lean toolchain is involved,
+  # so this is the gate that has to stay fast.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Cache coursier and mill
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: mill-${{ runner.os }}-${{ hashFiles('build.mill') }}
+          restore-keys: mill-${{ runner.os }}-
+      - name: Install the Scala Native toolchain
+        run: sudo apt-get update && sudo apt-get install -y clang libunwind-dev libgc-dev libre2-dev
+      - run: ./mill __.compile
+      - run: ./mill __.test
+
+  # The differential run against Lean releases. Each toolchain is a job so a
+  # failure names the release it belongs to, and so the elan download and the
+  # tool builds cache per release.
+  difftest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain:
+          - v4.25.0
+          - v4.27.0
+          - v4.28.0
+          - v4.35.0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: mill-${{ runner.os }}-${{ hashFiles('build.mill') }}
+          restore-keys: mill-${{ runner.os }}-
+      # The toolchain, the tool builds and the export files all live under
+      # .difftest/<slug>/ and are keyed on the inputs that can change them: the
+      # toolchain list, the cases and the lean helper that picks their
+      # declarations.
+      - uses: actions/cache@v4
+        with:
+          path: .difftest/leanprover-lean4-${{ matrix.toolchain }}
+          key: >-
+            difftest-${{ matrix.toolchain }}-${{ hashFiles('difftest/toolchains.txt',
+            'difftest/cases/*.lean', 'difftest/cases-negative/*.lean',
+            'difftest/lean/ListDecls.lean') }}
+          restore-keys: difftest-${{ matrix.toolchain }}-
+      - name: Install elan
+        run: |
+          curl -sSfL https://github.com/leanprover/elan/releases/latest/download/elan-x86_64-unknown-linux-gnu.tar.gz \
+            | tar xz
+          ./elan-init -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Provision ${{ matrix.toolchain }}
+        run: ./mill difftest.run provision --toolchain ${{ matrix.toolchain }}
+      - name: Differential run
+        run: ./mill difftest.run run --toolchain ${{ matrix.toolchain }} --history
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-${{ matrix.toolchain }}
+          path: .difftest/reports/
+      # The timings are committed, so a run that changed them says so rather
+      # than leaving the working tree dirty and the change unnoticed.
+      - name: Show the history this run appended
+        if: always()
+        run: git --no-pager diff --stat -- difftest/history
