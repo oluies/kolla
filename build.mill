@@ -19,7 +19,11 @@ object v {
   val scalacheck      = "1.20.0"
 }
 
-trait KollaModule extends ScalaModule with PlatformScalaModule {
+/** Settings shared by every module. A single-platform module uses this one
+  * directly; mixing in `PlatformScalaModule` would redirect its sources to the
+  * parent directory, which for a top-level module is the repository root.
+  */
+trait KollaBase extends ScalaModule {
   def scalaVersion = v.scala
   def scalacOptions = Seq("-deprecation", "-feature", "-unchecked")
 
@@ -31,6 +35,9 @@ trait KollaModule extends ScalaModule with PlatformScalaModule {
     )
   }
 }
+
+/** A module cross-built over JVM, Scala.js and Scala Native. */
+trait KollaModule extends KollaBase with PlatformScalaModule
 
 trait KollaJsModule extends KollaModule with ScalaJSModule {
   def scalaJSVersion = v.scalaJs
@@ -52,6 +59,21 @@ object kernel extends Module {
   }
   object native extends Shared with KollaNativeModule {
     object test extends KollaTests with ScalaNativeTests
+  }
+}
+
+object difftest extends KollaBase {
+  def moduleDeps = Seq(kernel.jvm, build.`export`.jvm, dsl.jvm)
+  def mvnDeps = Seq(
+    mvn"org.typelevel::cats-core::${v.cats}",
+    mvn"org.typelevel::cats-effect::${v.catsEffect}",
+    mvn"co.fs2::fs2-core::${v.fs2}",
+    mvn"co.fs2::fs2-io::${v.fs2}"
+  )
+  object test extends KollaTests {
+    def mvnDeps = super.mvnDeps() ++ Seq(
+      mvn"org.typelevel::munit-cats-effect::${v.munitCatsEffect}"
+    )
   }
 }
 
