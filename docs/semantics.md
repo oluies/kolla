@@ -528,6 +528,17 @@ recursors confirm both: `nat-add-3.1.0.ndjson` contains the name components
 A minor premise is named by `name::replace_prefix(ind_type_name, anonymous)`, so
 `Nat.succ`'s premise is `succ`.
 
+Both are wrapped in `Name.modifyBase` (`src/Init/Meta/Defs.lean:308`), which for
+a hygienic name applies the suffix to the *unhygienic base* and re-attaches the
+macro scopes: `appendAfter` of `_ih` to `n._@.M._hyg.0` is
+`n_ih._@.M._hyg.0`, not `n._@.M._hyg.0._ih`. A name is hygienic when it ends in
+`._hyg.<scopes>` (`Name.hasMacroScopes`), and the base is the prefix of the
+rightmost `_@` component (`Name.eraseMacroScopes`). Constructor arguments
+routinely carry such names — `HAdd.mk`'s fields are `a._@._internal._hyg.0` in
+the committed export — so getting this wrong would make the `isBiEqual`
+comparison below *falsely reject* any block with a hygienic recursive argument,
+which is worse than not comparing at all.
+
 These are binder and universe-parameter names, so only `Expr.isBiEqual` and the
 positional universe renaming see them. They were wrong (`u1`, `n.ih`) while the
 export comparison used `Expr.==` alone and nothing noticed.

@@ -88,12 +88,63 @@ object Name:
         case (x: Num, y: Num) => x.value == y.value && structEq(x.pre, y.pre)
         case _                => false
 
-  /** `Name.appendAfter`: extends the last string component, or adds one. */
-  def appendAfter(n: Name, suffix: String): Name = n match
-    case s: Str => s.pre.str(s.value + suffix)
-    case other  => other.str(suffix)
+  /** `Name.hasMacroScopes`: a hygienic name ends in `._hyg.<scopes>`. */
+  @tailrec
+  def hasMacroScopes(n: Name): Boolean = n match
+    case s: Str => s.value == "_hyg"
+    case m: Num => hasMacroScopes(m.pre)
+    case _      => false
 
-  /** `name::append_after(unsigned)`, which separates the index with `_`. */
+  /** `Name.eraseMacroScopes`: the unhygienic base, that is the prefix of the
+    * rightmost `_@` component.
+    */
+  def eraseMacroScopes(n: Name): Name =
+    if !hasMacroScopes(n) then n
+    else
+      @tailrec def go(cur: Name): Name = cur match
+        case s: Str => if s.value == "_@" then s.pre else go(s.pre)
+        case m: Num => go(m.pre)
+        case _      => Name.anonymous
+      go(n)
+
+  /** `Name.modifyBase`: applies `f` to the unhygienic base and puts the macro
+    * scopes back, so a suffix lands on the readable part of the name rather than
+    * after `._hyg.<scopes>`.
+    */
+  def modifyBase(n: Name, f: Name => Name): Name =
+    if !hasMacroScopes(n) then f(n)
+    else
+      val cs = n.components
+      // The tail starts at the rightmost `_@` component.
+      var split = -1
+      cs.zipWithIndex.foreach { (c, i) =>
+        c match
+          case s: Str if s.value == "_@" => split = i
+          case _                         => ()
+      }
+      if split < 0 then f(n)
+      else
+        val base = cs.take(split).foldLeft(Name.anonymous)(appendComponent)
+        cs.drop(split).foldLeft(f(base))(appendComponent)
+
+  private def appendComponent(acc: Name, c: Name): Name = c match
+    case s: Str => acc.str(s.value)
+    case m: Num => acc.num(m.value)
+    case _      => acc
+
+  /** `Name.appendAfter`: extends the last string component of the unhygienic
+    * base, or adds one.
+    */
+  def appendAfter(n: Name, suffix: String): Name =
+    modifyBase(
+      n,
+      {
+        case s: Str => s.pre.str(s.value + suffix)
+        case other  => other.str(suffix)
+      }
+    )
+
+  /** `Name.appendIndexAfter`, which separates the index with `_`. */
   def appendIndexAfter(n: Name, i: Int): Name = appendAfter(n, s"_$i")
 
   /** `lean::name::replace_prefix`. */

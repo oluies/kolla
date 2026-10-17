@@ -93,3 +93,28 @@ class NameSuite extends munit.ScalaCheckSuite:
     assertEquals(Name.replacePrefix(Name.parse("Nat.succ"), Name.parse("Int"), Name.anonymous).toString, "Nat.succ")
     assertEquals(Name.replacePrefix(Name.parse("Nat"), Name.parse("Nat"), Name.mkSimple("X")).toString, "X")
   }
+
+  test("macro scopes are recognised") {
+    // <name>._@.<imported>.<ctx>._hyg.<scopes>
+    val hyg = Name.parse("a._@._internal._hyg").num(0)
+    assert(Name.hasMacroScopes(hyg))
+    assert(!Name.hasMacroScopes(Name.parse("a.b")))
+    assert(!Name.hasMacroScopes(Name.parse("a._hyg.b")))
+    assert(Name.hasMacroScopes(Name.parse("a._@.M._hyg").num(3).num(4)))
+    assertEquals(Name.eraseMacroScopes(hyg), Name.mkSimple("a"))
+    assertEquals(Name.eraseMacroScopes(Name.parse("x.y._@.M._hyg").num(1)), Name.parse("x.y"))
+    assertEquals(Name.eraseMacroScopes(Name.parse("a.b")), Name.parse("a.b"))
+  }
+
+  test("appendAfter lands on the unhygienic base") {
+    // Lean's modifyBase applies the suffix to the base and re-attaches the
+    // scopes, so the suffix must not end up after `._hyg.<scopes>`.
+    val hyg = Name.parse("n._@._internal._hyg").num(0)
+    assertEquals(Name.appendAfter(hyg, "_ih"), Name.parse("n_ih._@._internal._hyg").num(0))
+    assertEquals(
+      Name.appendIndexAfter(Name.parse("motive._@.M._hyg").num(2), 1),
+      Name.parse("motive_1._@.M._hyg").num(2)
+    )
+    // A plain name is unaffected.
+    assertEquals(Name.appendAfter(Name.mkSimple("n"), "_ih").toString, "n_ih")
+  }
