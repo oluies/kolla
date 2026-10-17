@@ -1,0 +1,193 @@
+package kolla.kernel
+
+/** Declaration checking, mirroring `environment::add_axiom`, `add_definition`,
+  * `add_theorem`, `add_opaque` and `add_mutual` in `src/kernel/environment.cpp`.
+  *
+  * A fresh `TypeChecker` is created per declaration, so no cache is shared.
+  */
+final class DeclarationChecker(val profile: KernelProfile = KernelProfile.default):
+
+  /** `check_no_metavar_no_fvar`. */
+  private def checkNoMetavarNoFvar(n: Name, e: Expr): Unit =
+    if e.hasExprMVar then
+      throw KernelException(ExceptionKind.DeclarationHasMetavars, n, "the declaration contains metavariables")
+    if e.hasFVar then
+      throw KernelException(ExceptionKind.DeclarationHasFreeVars, n, "the declaration contains free variables")
+
+  /** `check_constant_val`. */
+  private def checkConstantVal(env: Environment, v: ConstantVal, tc: TypeChecker): Unit =
+    env.checkName(v.name)
+    env.checkDuplicatedUnivParams(v.levelParams)
+    checkNoMetavarNoFvar(v.name, v.tpe)
+    val sort = tc.check(v.tpe, v.levelParams)
+    tc.ensureSort(sort, v.tpe)
+
+  private def checker(env: Environment, safety: DefinitionSafety): TypeChecker =
+    new TypeChecker(env, profile, safety)
+
+  private def mismatch(n: Name, given0: Expr, expected: Expr, tc: TypeChecker): Nothing =
+    throw new KernelException(
+      ExceptionKind.DefinitionTypeMismatch,
+      Some(n),
+      s"declaration has type\n  ${Pretty.expr(expected)}\nbut its value has type\n  ${Pretty.expr(given0)}",
+      tc.defeqTrace
+    )
+
+  def addAxiom(env: Environment, v: AxiomVal, check: Boolean = true): Environment =
+    if check then
+      val safety = if v.isUnsafe then DefinitionSafety.Unsafe else DefinitionSafety.Safe
+      checkConstantVal(env, v.toConstantVal, checker(env, safety))
+    env.addCore(ConstantInfo.AxiomInfo(v))
+
+  def addDefinition(env: Environment, v: DefinitionVal, check: Boolean = true): Environment =
+    val cv = v.toConstantVal
+    if v.isUnsafe then
+      // An unsafe definition may be recursive, so its header is checked, the
+      // declaration is added, and only then is the body checked.
+      if check then checkConstantVal(env, cv, checker(env, DefinitionSafety.Unsafe))
+      val newEnv = env.addCore(ConstantInfo.DefnInfo(v))
+      if check then
+        val tc = checker(newEnv, DefinitionSafety.Unsafe)
+        checkNoMetavarNoFvar(cv.name, v.value)
+        val valType = tc.check(v.value, cv.levelParams)
+        if !tc.isDefEq(valType, cv.tpe) then mismatch(cv.name, valType, cv.tpe, tc)
+      newEnv
+    else
+      if check then
+        val tc = checker(env, DefinitionSafety.Safe)
+        checkConstantVal(env, cv, tc)
+        checkNoMetavarNoFvar(cv.name, v.value)
+        val valType = tc.check(v.value, cv.levelParams)
+        if !tc.isDefEq(valType, cv.tpe) then mismatch(cv.name, valType, cv.tpe, tc)
+      env.addCore(ConstantInfo.DefnInfo(v))
+
+  def addTheorem(env: Environment, v: TheoremVal, check: Boolean = true): Environment =
+    val cv = v.toConstantVal
+    if check then
+      val tc = checker(env, DefinitionSafety.Safe)
+      checkConstantVal(env, cv, tc)
+      if !tc.isProp(cv.tpe) then
+        throw KernelException(
+          ExceptionKind.TheoremTypeIsNotProp,
+          cv.name,
+          s"the type of a theorem must be a proposition, got\n  ${Pretty.expr(cv.tpe)}"
+        )
+      checkNoMetavarNoFvar(cv.name, v.value)
+      val valType = tc.check(v.value, cv.levelParams)
+      if !tc.isDefEq(valType, cv.tpe) then mismatch(cv.name, valType, cv.tpe, tc)
+    env.addCore(ConstantInfo.ThmInfo(v))
+
+  def addOpaque(env: Environment, v: OpaqueVal, check: Boolean = true): Environment =
+    val cv = v.toConstantVal
+    if check then
+      val tc = checker(env, DefinitionSafety.Safe)
+      checkConstantVal(env, cv, tc)
+      checkNoMetavarNoFvar(cv.name, v.value)
+      val valType = tc.check(v.value, cv.levelParams)
+      if !tc.isDefEq(valType, cv.tpe) then mismatch(cv.name, valType, cv.tpe, tc)
+    env.addCore(ConstantInfo.OpaqueInfo(v))
+
+  def addMutual(env: Environment, vs: List[DefinitionVal], check: Boolean = true): Environment =
+    if vs.isEmpty then
+      throw KernelException(ExceptionKind.InvalidDeclaration, "invalid empty mutual definition")
+    val safety = vs.head.safety
+    if safety == DefinitionSafety.Safe then
+      throw KernelException(
+        ExceptionKind.InvalidDeclaration,
+        "invalid mutual definition, the declarations are not tagged unsafe or partial"
+      )
+    val lparams = vs.head.toConstantVal.levelParams
+    if check then
+      val tc = checker(env, safety)
+      vs.foreach { v =>
+        if v.toConstantVal.levelParams != lparams then
+          throw KernelException(
+            ExceptionKind.InvalidDeclaration,
+            v.toConstantVal.name,
+            "invalid mutual definition, universe parameters must match"
+          )
+        if v.safety != safety then
+          throw KernelException(
+            ExceptionKind.InvalidDeclaration,
+            v.toConstantVal.name,
+            "invalid mutual definition, safety annotations must match"
+          )
+        checkConstantVal(env, v.toConstantVal, tc)
+      }
+    val newEnv = vs.foldLeft(env)((e, v) => e.addCore(ConstantInfo.DefnInfo(v)))
+    if check then
+      val tc = checker(newEnv, safety)
+      vs.foreach { v =>
+        val cv = v.toConstantVal
+        checkNoMetavarNoFvar(cv.name, v.value)
+        val valType = tc.check(v.value, cv.levelParams)
+        if !tc.isDefEq(valType, cv.tpe) then mismatch(cv.name, valType, cv.tpe, tc)
+      }
+    newEnv
+
+  /** `environment::add(declaration, check)`. */
+  def add(env: Environment, d: Declaration, check: Boolean = true): Environment = d match
+    case Declaration.AxiomDecl(v)       => addAxiom(env, v, check)
+    case Declaration.DefnDecl(v)        => addDefinition(env, v, check)
+    case Declaration.ThmDecl(v)         => addTheorem(env, v, check)
+    case Declaration.OpaqueDecl(v)      => addOpaque(env, v, check)
+    case Declaration.MutualDefnDecl(vs) => addMutual(env, vs, check)
+    case Declaration.QuotDecl =>
+      throw KernelException(
+        ExceptionKind.InvalidDeclaration,
+        "the quotient package is not implemented yet"
+      )
+    case Declaration.InductDecl(_, _, _, _) =>
+      throw KernelException(
+        ExceptionKind.InvalidDeclaration,
+        "inductive declarations are not implemented yet"
+      )
+
+  /** Replays an environment entry from an export file.
+    *
+    * Axioms, definitions, theorems and opaques are checked exactly as
+    * `environment::add` would. Inductive types, constructors and recursors are
+    * carried over from the file with their types checked but their mutual
+    * consistency not yet validated, so `check` reports whether an entry was
+    * fully checked.
+    */
+  def addInfo(env: Environment, info: ConstantInfo): (Environment, CheckOutcome) = info match
+    case ConstantInfo.AxiomInfo(v)  => (addAxiom(env, v), CheckOutcome.Checked)
+    case ConstantInfo.DefnInfo(v)   => (addDefinition(env, v), CheckOutcome.Checked)
+    case ConstantInfo.ThmInfo(v)    => (addTheorem(env, v), CheckOutcome.Checked)
+    case ConstantInfo.OpaqueInfo(v) => (addOpaque(env, v), CheckOutcome.Checked)
+    case ConstantInfo.QuotInfo(v) =>
+      val tc = checker(env, DefinitionSafety.Safe)
+      checkConstantVal(env, v.toConstantVal, tc)
+      (env.addCore(info).markQuotInitialized, CheckOutcome.TypeOnly)
+    case ConstantInfo.InductInfo(v) =>
+      (typeOnly(env, v.toConstantVal, info), CheckOutcome.TypeOnly)
+    case ConstantInfo.CtorInfo(v) =>
+      (typeOnly(env, v.toConstantVal, info), CheckOutcome.TypeOnly)
+    case ConstantInfo.RecInfo(v) =>
+      val e1 = typeOnly(env, v.toConstantVal, info)
+      val tc = checker(e1, DefinitionSafety.Safe)
+      v.rules.foreach { r =>
+        checkNoMetavarNoFvar(v.toConstantVal.name, r.rhs)
+        tc.check(r.rhs, v.toConstantVal.levelParams)
+      }
+      (e1, CheckOutcome.TypeOnly)
+
+  private def typeOnly(env: Environment, cv: ConstantVal, info: ConstantInfo): Environment =
+    val tc = checker(env, DefinitionSafety.Safe)
+    env.checkName(cv.name)
+    env.checkDuplicatedUnivParams(cv.levelParams)
+    checkNoMetavarNoFvar(cv.name, cv.tpe)
+    // An inductive type's own constant is not in the environment while its
+    // constructors' types are checked, so the type is added first and the
+    // well-formedness check runs against the extended environment.
+    val next = env.addCore(info)
+    val tc2  = checker(next, DefinitionSafety.Safe)
+    val sort = tc2.check(cv.tpe, cv.levelParams)
+    tc2.ensureSort(sort, cv.tpe)
+    next
+
+/** How completely an entry was checked. */
+enum CheckOutcome:
+  case Checked
+  case TypeOnly

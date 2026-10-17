@@ -402,3 +402,51 @@ in `Expr` itself, where `==` compares it (E2, E3), and the kernel never reads it
 points, so a character outside the basic multilingual plane becomes one
 `Char.ofNat` application. `ExprOps.codePoints` iterates code points rather than
 UTF-16 units to match.
+
+### K6 — the local context is append-only
+
+`type_checker` scopes `m_lctx` with `flet`, restoring it when `infer_lambda`,
+`infer_pi`, `infer_let`, `is_def_eq_binding` or `eta_expand` return. `kolla` lets
+it grow instead. The two agree because free variable identifiers come from one
+generator per checker and each identifier keeps the same type for the whole run,
+so a stale entry can never be read for the wrong variable; `mk_pi`/`mk_lambda`
+only consult the variables they are handed. Restoring the context would also be
+unsound under `cats.Eval`, where a deferred computation runs after the
+expression that created the scope has returned.
+
+The `idx` a declaration receives therefore counts every variable created so far
+rather than the ones currently in scope. `local_decl::get_idx` is not consulted by
+anything in `src/kernel` that affects acceptance.
+
+### K7 — the infer cache is keyed on the term alone
+
+`m_infer_type[infer_only]` is a map from expression to type, with no dependence on
+`m_lparams`. Two `check(e, ps)` calls with different `ps` on one `type_checker`
+therefore share a cache entry and the second one skips `check_level`. That is why
+there is one `type_checker` per declaration: `environment::add_*` constructs a
+fresh one, and `kolla`'s `DeclarationChecker` does the same.
+
+### K8 — what is checked, and what is not yet
+
+`DeclarationChecker` mirrors `environment::add_axiom`, `add_definition`,
+`add_theorem`, `add_opaque` and `add_mutual`. Replaying an export file's
+environment entries splits into two cases, reported as `CheckOutcome`:
+
+- `Checked`: axioms, definitions, theorems and opaques go through the same
+  sequence Lean uses, including `check_constant_val`, `check_no_metavar_no_fvar`,
+  the theorem-is-a-Prop test and the value-against-type `is_def_eq`.
+- `TypeOnly`: inductive types, constructors, recursors and the quotient package
+  have their types checked and a recursor's rule right-hand sides type checked,
+  but the block is not yet validated — no `add_inductive`, no recursor
+  regeneration, no `check_uniform_ind_occs`, no `check_recursors`.
+
+A `TypeOnly` verdict is not a judgement about the declaration, so the differential
+platform must not treat it as agreement with `lean4checker`.
+
+### K9 — a step budget replaces `scope_rec_depth`
+
+Lean bounds reduction with `scope_rec_depth` and `check_system`. Since the
+`cats.Eval` trampoline has no stack to overflow, `kolla` counts reduction steps
+instead and raises `KernelException(DeepRecursion)` past `maxSteps`. An ill-typed
+term can make `whnf` diverge in either implementation; the budget is what stops
+it.
