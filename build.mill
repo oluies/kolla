@@ -64,6 +64,7 @@ object kernel extends Module {
 
 object difftest extends KollaBase {
   def moduleDeps = Seq(kernel.jvm, build.`export`.jvm, dsl.jvm)
+  def mainClass = Some("kolla.difftest.Main")
   def mvnDeps = Seq(
     mvn"org.typelevel::cats-core::${v.cats}",
     mvn"org.typelevel::cats-effect::${v.catsEffect}",

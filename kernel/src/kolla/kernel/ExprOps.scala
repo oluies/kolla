@@ -355,9 +355,10 @@ object ExprOps:
       case other => if !strict then hasLooseBVar(other, vidx) else false
 
   /** `lean::infer_implicit`: marks a binder implicit when its variable occurs in
-    * a later domain. Binder annotations do not take part in `Expr.==`, but they
-    * do take part in `Expr.isBiEqual`, which is how a generated recursor's type
-    * is compared against the one an export file ships.
+    * a later domain. The annotation it computes does not take part in `Expr.==`
+    * and cannot be checked against an export file, which does not preserve it
+    * (docs/semantics.md X14); it is still needed so the environment kolla builds
+    * holds the same binder annotations Lean's does.
     *
     * Unlike the rest of this file, this pair is not stack-safe for an arbitrary
     * term: the spine walk below is iterative, but `hasLooseBVarsInDomain`

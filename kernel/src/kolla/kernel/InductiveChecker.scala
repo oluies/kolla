@@ -802,14 +802,11 @@ object InductiveChecker:
           n,
           s"the recursor type is\n  ${Pretty.expr(gcv.tpe)}\nbut the kernel derives\n  ${Pretty.expr(rename(wcv.tpe))}"
         )
-      // `Expr.==` ignores binder names and annotations, so without this the
-      // `inferImplicit` and `appendAfter` naming would never be compared.
-      if !Expr.isBiEqual(rename(wcv.tpe), gcv.tpe) then
-        throw KernelException(
-          ExceptionKind.InvalidDeclaration,
-          n,
-          "the recursor type agrees up to binder names and annotations but not exactly"
-        )
+      // Binder names and `BinderInfo` are deliberately not compared: an export
+      // file cannot carry them. lean4export interns expressions in a
+      // `HashMap Expr Nat` keyed on Lean's `BEq Expr`, which is `is_equal` and
+      // ignores both, so a shape gets whichever binder names were written
+      // first. See docs/semantics.md X14.
       if got.rules.length != want.rules.length then
         mismatch(n, "the rule count", got.rules.length, want.rules.length)
       val wantRules = want.rules.map(r => r.ctor -> r).toMap
@@ -822,12 +819,6 @@ object InductiveChecker:
             ExceptionKind.InvalidDeclaration,
             gr.ctor,
             s"the recursor rule is\n  ${Pretty.expr(gr.rhs)}\nbut the kernel derives\n  ${Pretty.expr(rename(wr.rhs))}"
-          )
-        if !Expr.isBiEqual(rename(wr.rhs), gr.rhs) then
-          throw KernelException(
-            ExceptionKind.InvalidDeclaration,
-            gr.ctor,
-            "the recursor rule agrees up to binder names and annotations but not exactly"
           )
       }
     }

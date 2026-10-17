@@ -319,6 +319,15 @@ have this property, and `ExportWriter` reproduces it by keying its table on
 A term round-trips with its binder names and annotations intact only when no
 binder-equal variant of it appears elsewhere in the same file.
 
+The consequence for `InductiveChecker.validateRecursors` is that a regenerated
+recursor can only be compared to the exported one with `Expr.==`. Comparing with
+`Expr.isBiEqual` rejects correct declarations: `PProd.rec`'s computation rule
+ends in `fun (x : _) (y : _) => _ _ _`, the same shape as `And.rec`'s, which is
+written first with binder names `left`/`right`, so the file hands PProd's rule
+those names where the kernel derives `fst`/`snd` from `PProd.mk`'s type. The
+annotations `infer_implicit` computes still have to be right, because they go
+into the environment kolla builds; they just cannot be checked against a file.
+
 ## Kernel
 
 ### K1 — the kernel is not behaviourally stable across Lean releases
@@ -716,3 +725,72 @@ a numeral: concatenating `$i` straight onto a literal part that begins with a
 digit merges the two, so `lean"f ${a}1 ${b}"` built the source `f $01 $1` and
 read the first marker as index 1, silently expanding to `f b b` with the literal
 `1` gone.
+
+## Differential platform
+
+### P1 — a tool revision must pin exactly the target toolchain
+
+`lean4export` and `lean4checker` are written against Lean's internal APIs, so a
+revision compiles only against the toolchain its own `lean-toolchain` names.
+`Provision.resolveRevision` therefore requires an exact match — a tag named
+after the toolchain, else the newest commit pinning that spec — and
+`Provision.lakeBuild` leaves `lean-toolchain` alone.
+
+Rewriting it to the target instead, or falling back to the newest revision at or
+below the target, builds the wrong source: `lean4checker` at its v4.29.0-rc8 head
+calls `Environment.addDeclCore` with the v4.29 signature, which v4.35 changed,
+and `lake build` fails. Accepting a near-miss revision would be worse than
+failing, because a reference checker built from the wrong source is not a
+reference.
+
+### P2 — `lean4checker` has no release for every toolchain
+
+`lean4checker`'s newest tag is v4.29.0-rc8. By P1 it cannot be built for
+v4.35.0, so `difftest/toolchains.txt` marks that toolchain `no-reference` rather
+than attempting and failing the build on every run. v4.28.0 is in the matrix for
+the same reason: it is the newest release both tools tag, and it carries the same
+NDJSON 3.1.0 format as v4.35.0, so the reader and the reference comparison are
+exercised against `lean4checker` on that format.
+
+### P3 — a positive corpus is its own reference
+
+Every corpus is the export of an environment Lean itself built and accepted, so
+each declaration in it must be accepted. `Report.falseRejections` holds kolla to
+that independently of any reference checker, which is what makes a toolchain
+marked `no-reference` under P2 still worth running: a false rejection there is
+caught without `lean4checker`.
+
+### P4 — `lean4checker` reports per module, not per declaration
+
+`lean4checker`'s `main` replays a module and, on the first failure, prints
+`lean4checker found a problem in <module>` and rethrows; it names no declaration
+and does not continue. Its runs therefore carry `perDeclaration = false` and a
+single synthetic `DeclResult`, and are compared only through `CheckerRun.overall`
+by `Compare.overall`. `Compare` itself stays per declaration, for kolla against
+kolla across toolchains and platforms.
+
+Because `lean4checker` aborts, kolla runs with `stopOnFirstRejection` whenever a
+reference is available, so the two corpus-level verdicts mean the same thing.
+
+### P5 — a handwritten case exports its own declarations, not its environment
+
+`lean4export` with no declaration list exports the whole environment, which for
+any file importing `Init` is around 330 MB. A handwritten case is instead
+exported as the names its own module declares — read from the olean's
+`constNames` by `difftest/lean/ListDecls.lean` — plus their dependencies, which
+`lean4export` follows. `case-eta` goes from 330 MB to 105 KB that way. The whole
+standard library is still covered, by the `init`, `std` and `lean` corpora.
+
+`lean4checker` gets `--fresh` for a single-module handwritten case, which replays
+that module's imports as well, so the two checkers see the same declaration set.
+
+### P6 — a rejected declaration is still carried into the environment
+
+`KollaChecker` adds a rejected declaration to the environment unchecked before
+moving on. Leaving it out would make every later declaration mentioning it fail
+with an unknown constant, turning one disagreement into a cascade of spurious
+ones and hiding the first.
+
+This only matters when `stopOnFirstRejection` is off, which is how the negative
+corpus runs: a mutant has exactly one corruption, and the run has to show which
+declaration it was caught at rather than a wall of consequences.

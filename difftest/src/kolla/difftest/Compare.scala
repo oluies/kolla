@@ -112,3 +112,45 @@ object Compare:
 
   /** Compares two subject runs that must agree exactly, used across platforms. */
   def platforms(a: CheckerRun, b: CheckerRun): Comparison = apply(a, b)
+
+  /** Compares only the corpus-level decision, which is all a checker that
+    * reports per module can be held to.
+    */
+  def overall(reference: CheckerRun, subject: CheckerRun): OverallAgreement =
+    OverallAgreement(reference, subject)
+
+/** Agreement on the corpus-level accept/reject decision. */
+final case class OverallAgreement(reference: CheckerRun, subject: CheckerRun):
+  def referenceVerdict: Verdict = reference.overall
+  def subjectVerdict: Verdict   = subject.overall
+
+  /** Both sides must have reached a judgement, and it must be the same one. */
+  def agrees: Boolean =
+    referenceVerdict.isJudgement && subjectVerdict.isJudgement &&
+      referenceVerdict.label == subjectVerdict.label
+
+  def json: String =
+    Json.obj(
+      "toolchain" -> Json.str(subject.toolchain),
+      "corpus"    -> Json.str(subject.corpus),
+      "platform"  -> Json.str(subject.platform),
+      "reference" -> Json.str(reference.checker),
+      "subject"   -> Json.str(subject.checker),
+      "agrees"    -> Json.bool(agrees),
+      "referenceVerdict" -> Json.str(referenceVerdict.label),
+      "referenceDetail"  -> referenceVerdict.detail.fold("null")(Json.str),
+      "subjectVerdict"   -> Json.str(subjectVerdict.label),
+      "subjectDetail"    -> subjectVerdict.detail.fold("null")(Json.str),
+      "referenceWallNanos" -> Json.num(reference.wallNanos),
+      "subjectWallNanos"   -> Json.num(subject.wallNanos)
+    )
+
+  def render: String =
+    val sb = new StringBuilder
+    sb ++= s"${subject.toolchain} / ${subject.corpus} / ${subject.platform}: "
+    sb ++= (if agrees then "agrees" else "DISAGREES")
+    sb ++= s" (${reference.checker} ${referenceVerdict.label} vs ${subject.checker} ${subjectVerdict.label})\n"
+    if !agrees then
+      referenceVerdict.detail.foreach(d => sb ++= s"  ${reference.checker}: $d\n")
+      subjectVerdict.detail.foreach(d => sb ++= s"  ${subject.checker}: $d\n")
+    sb.result()

@@ -1,0 +1,24 @@
+# Declarations exported from a mathlib checkout for the nightly run, with their
+# transitive dependencies. Chosen to cover the kernel paths that the standard
+# library alone does not reach: deep instance chains, large universe
+# expressions, `Classical.choice`, well-founded recursion and quotient types.
+Mathlib.Algebra.Group.Defs
+Nat.gcd_comm
+Nat.Prime
+Finset.sum_comm
+List.Perm
+Quotient.mk
+Setoid.r
+Classical.em
+Function.Bijective
+Equiv.refl
+Multiset.card
+Polynomial.degree
+Matrix.mul_assoc
+Set.image
+Filter.Tendsto
+Cardinal.mk
+Ordinal.type
+EuclideanDomain.gcd
+IsUnit
+Module.Free

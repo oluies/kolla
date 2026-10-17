@@ -43,7 +43,7 @@ object KollaChecker:
         * A rejected declaration is still carried into the environment, unchecked,
         * by `recover`. Leaving it out would make every later declaration that
         * mentions it fail with an unknown constant, turning one disagreement into
-        * a cascade of spurious ones. See docs/semantics.md T2.
+        * a cascade of spurious ones. See docs/semantics.md P6.
         */
       def one(
           step: () => (Environment, CheckOutcome),
@@ -180,7 +180,8 @@ object KollaChecker:
       profile: KernelProfile,
       toolchain: String,
       corpus: String,
-      platform: String = "jvm"
+      platform: String = "jvm",
+      stopOnFirstRejection: Boolean = false
   ): IO[CheckerRun] =
     IO.blocking(Layout.readFile(path)).flatMap { contents =>
       IO(ExportReader.fromString(contents)).attempt.flatMap {
@@ -188,6 +189,6 @@ object KollaChecker:
           IO.pure(
             CheckerRun(name, toolchain, corpus, platform, Vector.empty, 0L, 0L, Some(e.getMessage))
           )
-        case Right(env) => check(env.items, profile, toolchain, corpus, platform)
+        case Right(env) => check(env.items, profile, toolchain, corpus, platform, stopOnFirstRejection)
       }
     }

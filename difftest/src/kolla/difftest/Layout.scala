@@ -27,6 +27,9 @@ object Layout:
   /** `difftest/mathlib-sample.txt`. */
   def mathlibSampleFile: Path = repoFile("difftest/mathlib-sample.txt")
 
+  /** `difftest/lean/ListDecls.lean`, which prints a module's own declarations. */
+  def listDeclsScript: Path = repoFile("difftest/lean/ListDecls.lean")
+
   /** `difftest/cases/`, the handwritten corpus. */
   def casesDir: Path = repoFile("difftest/cases")
 

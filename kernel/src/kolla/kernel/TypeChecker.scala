@@ -1001,25 +1001,28 @@ final class TypeChecker(
   private def lazyDeltaReductionStep(t: Expr, s: Expr, eager: Boolean): Eval[(ReductionStatus, Expr, Expr)] =
     val dt = isDelta(t)
     val ds = isDelta(s)
-    val stepped: Eval[(Expr, Expr)] =
+    // `Left` is a status the step reached on its own, `Right` the pair to retry
+    // `quick_is_def_eq` on. The two cannot be collapsed into a non-local return:
+    // `Eval` runs its continuations after this method's frame is gone.
+    val stepped: Eval[Either[(ReductionStatus, Expr, Expr), (Expr, Expr)]] =
       (dt, ds) match
-        case (None, None) => return Eval.now((ReductionStatus.DefUnknown, t, s))
+        case (None, None) => Eval.now(Left((ReductionStatus.DefUnknown, t, s)))
         case (Some(_), None) =>
           Eval.defer(tryUnfoldProjApp(s)).flatMap {
-            case Some(sNew) => Eval.now((t, sNew))
+            case Some(sNew) => Eval.now(Right((t, sNew)))
             case None =>
-              Eval.defer(whnfCoreE(unfoldDefinition(t).get, false, true)).map(tn => (tn, s))
+              Eval.defer(whnfCoreE(unfoldDefinition(t).get, false, true)).map(tn => Right((tn, s)))
           }
         case (None, Some(_)) =>
           Eval.defer(tryUnfoldProjApp(t)).flatMap {
-            case Some(tNew) => Eval.now((tNew, s))
+            case Some(tNew) => Eval.now(Right((tNew, s)))
             case None =>
-              Eval.defer(whnfCoreE(unfoldDefinition(s).get, false, true)).map(sn => (t, sn))
+              Eval.defer(whnfCoreE(unfoldDefinition(s).get, false, true)).map(sn => Right((t, sn)))
           }
         case (Some(a), Some(b)) =>
           val c = ReducibilityHints.compare(a.hints, b.hints)
-          if c < 0 then Eval.defer(whnfCoreE(unfoldDefinition(t).get, false, true)).map(tn => (tn, s))
-          else if c > 0 then Eval.defer(whnfCoreE(unfoldDefinition(s).get, false, true)).map(sn => (t, sn))
+          if c < 0 then Eval.defer(whnfCoreE(unfoldDefinition(t).get, false, true)).map(tn => Right((tn, s)))
+          else if c > 0 then Eval.defer(whnfCoreE(unfoldDefinition(s).get, false, true)).map(sn => Right((t, sn)))
           else
             val sameAndRegular =
               t.isInstanceOf[Expr.App] && s.isInstanceOf[Expr.App] && a.name == b.name && a.hints.isRegular
@@ -1035,18 +1038,21 @@ final class TypeChecker(
                 else { cacheFailure(t, s); Eval.False }
               else Eval.False
             shortcut.flatMap { hit =>
-              if hit then return Eval.now((ReductionStatus.DefEqual, t, s))
-              for
-                tn <- Eval.defer(whnfCoreE(unfoldDefinition(t).get, false, true))
-                sn <- Eval.defer(whnfCoreE(unfoldDefinition(s).get, false, true))
-              yield (tn, sn)
+              if hit then Eval.now(Left((ReductionStatus.DefEqual, t, s)))
+              else
+                for
+                  tn <- Eval.defer(whnfCoreE(unfoldDefinition(t).get, false, true))
+                  sn <- Eval.defer(whnfCoreE(unfoldDefinition(s).get, false, true))
+                yield Right((tn, sn))
             }
-    stepped.flatMap { (tn, sn) =>
-      Eval.defer(quickIsDefEq(tn, sn, eager)).map {
-        case Some(true)  => (ReductionStatus.DefEqual, tn, sn)
-        case Some(false) => (ReductionStatus.DefDiff, tn, sn)
-        case None        => (ReductionStatus.Continue, tn, sn)
-      }
+    stepped.flatMap {
+      case Left(done) => Eval.now(done)
+      case Right((tn, sn)) =>
+        Eval.defer(quickIsDefEq(tn, sn, eager)).map {
+          case Some(true)  => (ReductionStatus.DefEqual, tn, sn)
+          case Some(false) => (ReductionStatus.DefDiff, tn, sn)
+          case None        => (ReductionStatus.Continue, tn, sn)
+        }
     }
 
   private def isNatZero(t: Expr): Boolean = t match

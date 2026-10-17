@@ -55,7 +55,12 @@ final case class CheckerRun(
     results: Vector[DeclResult],
     wallNanos: Long,
     peakHeapBytes: Long,
-    failure: Option[String] = None
+    failure: Option[String] = None,
+    /** Whether `results` carries a verdict per declaration. `lean4checker`
+      * reports one accept/reject for a whole module, so its run is comparable
+      * only through `overall`.
+      */
+    perDeclaration: Boolean = true
 ):
   def accepted: Int   = results.count(_.verdict == Verdict.Accepted)
   def rejected: Int   = results.count(_.verdict.isInstanceOf[Verdict.Rejected])
@@ -63,6 +68,26 @@ final case class CheckerRun(
   def errored: Int    = results.count(_.verdict.isInstanceOf[Verdict.Error])
 
   def byName: Map[Name, DeclResult] = results.map(r => r.name -> r).toMap
+
+  /** Declarations rejected or errored, which a positive corpus must not have. */
+  def unexpected: Vector[DeclResult] =
+    results.filter(r => r.verdict.isInstanceOf[Verdict.Rejected] || r.verdict.isInstanceOf[Verdict.Error])
+
+  /** The corpus-level decision: rejected if anything was rejected, accepted
+    * only if at least one declaration was judged and none were rejected. This
+    * is the granularity `lean4checker` reports at.
+    */
+  def overall: Verdict =
+    failure match
+      case Some(f) => Verdict.Error(f)
+      case None =>
+        results.collectFirst { case DeclResult(n, Verdict.Rejected(r), _, _) => Verdict.Rejected(s"$n: $r") } match
+          case Some(v) => v
+          case None =>
+            results.collectFirst { case DeclResult(n, Verdict.Error(r), _, _) => Verdict.Error(s"$n: $r") } match
+              case Some(v)                 => v
+              case None if accepted > 0    => Verdict.Accepted
+              case None                    => Verdict.NotChecked("no declaration was judged")
 
   def json: String =
     Json.obj(
@@ -73,6 +98,9 @@ final case class CheckerRun(
       "wallNanos"     -> Json.num(wallNanos),
       "peakHeapBytes" -> Json.num(peakHeapBytes),
       "failure"       -> failure.fold("null")(Json.str),
+      "perDeclaration" -> Json.bool(perDeclaration),
+      "overall"        -> Json.str(overall.label),
+      "overallDetail"  -> overall.detail.fold("null")(Json.str),
       "counts" -> Json.obj(
         "accepted"   -> Json.num(accepted.toLong),
         "rejected"   -> Json.num(rejected.toLong),
