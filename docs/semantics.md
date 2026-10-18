@@ -963,6 +963,26 @@ library comparison stops at `init`. `lean4checker`'s own verdict on `Std` at
 v4.28.0 is recorded here rather than in `difftest/history`, since no kolla run
 completed to compare it against.
 
+It is one declaration, not the corpus. A streamed run over `std` at the v4_27
+profile accepts 19,574 declarations and then stops making progress on
+
+    Std.Tactic.BVDecide.BVExpr.bitblast.blastUdiv.blastDivSubtractShift
+
+which bit-blasts a division subtract-and-shift step; its eight `_proof_*`
+lemmas are accepted immediately before it. Isolating it with `--check` (P14),
+so that the other 87,308 declarations of the same file are admitted unchecked
+and only this one is checked:
+
+| profile | result |
+|---|---|
+| v4.35.0 | accepted, whole run 80s, 2.57 GB resident |
+| v4.27.0 | no verdict after 17 minutes, resident pinned at 5.93 GB of a 6 GB heap |
+
+Nothing differs between those two but `cacheDefEqSuccess`. Whatever work the
+positive cache absorbs, this declaration generates enough of it to exhaust a
+heap that the entire corpus fits in otherwise, which makes it the term to
+profile rather than the corpus.
+
 ### P13 — the hoisting pass holds a window, not the file
 
 `Replay` is fed with `feed` and `finish` rather than constructed from a
