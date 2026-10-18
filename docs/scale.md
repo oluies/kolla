@@ -1,8 +1,15 @@
 # What it costs
 
-Measured on one host: Apple M-series, 48 GB, JDK 27, commit 2597da6. Every
-figure is `/usr/bin/time -l` peak resident set size for the `cli.jvm` assembly,
-not heap, so it includes the JVM itself.
+Measured on one host: Apple M-series, 48 GB, JDK 27. Every figure is
+`/usr/bin/time -l` peak resident set size for the `cli.jvm` assembly, not heap,
+so it includes the JVM itself, and every size is decimal GB.
+
+The commit matters, because the flags did not all exist at once. The `init`,
+`std` and `lean` rows are from 2597da6. The Mathlib rows are from 009ed9b:
+`--cache` arrives in 0af1260 and the digest memoisation in c40e06f, and before
+that last one a Mathlib run stalled at 150,036 declarations whatever the flags
+(docs/semantics.md P16), so none of the Mathlib figures is reproducible at
+2597da6.
 
 ## Corpora
 
@@ -15,13 +22,18 @@ not heap, so it includes the JVM itself.
 | `lean` v4.35.0 | 707 MB | 171,705 | 260.9s | 3.09 GB |
 | `Mathlib` v4.35.0, read and admitted | 6.26 GB | 729,263 | 83.0s | 9.40 GB |
 | `Mathlib` v4.35.0, same with `--cache` | 6.26 GB | 729,263 | 80.5s | 14.36 GB |
-| `Mathlib` v4.35.0, fully checked | 6.26 GB | 729,263 | no verdict | — |
+| `Mathlib` v4.35.0, fully checked | 6.26 GB | 729,263 in the file | stopped at 325,090 | — |
 
-The rows without a resident figure were run through `difftest`, which reports
-peak heap instead: 0.69 GB for `mathlib-sample`, 2.74 GB for `init`, 3.77 GB
-for `std`, 5.09 GB for `lean`. Those runs read the whole file into a `Vector`;
-the two `cli` rows stream it. `init` is the pair to compare, 2.74 GB of heap
-against 1.19 GB resident, and `lean` 5.09 GB against 3.09 GB.
+`mathlib-sample` and `std` carry no resident figure because they were run
+through `difftest`, which reports peak heap instead: 0.69 GB and 3.77 GB, with
+2.74 GB for `init` and 5.09 GB for `lean`. Those runs read the whole file into
+a `Vector`; every `cli` row streams it. `init` is the pair to compare, 2.74 GB
+of heap against 1.19 GB resident, and `lean` 5.09 GB against 3.09 GB.
+
+The fully-checked Mathlib row is neither: it is a `cli` run against a 24 GB
+heap that never reached a verdict, so there is no total to quote. Its
+declaration count is the file's, not a count of what was checked — the run
+stopped after 325,090 of them.
 
 ## Per frontend
 

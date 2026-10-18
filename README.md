@@ -214,8 +214,8 @@ Reading one is routine: module `Mathlib` at v4.35.0 is 6.26 GB and 729,263
 declarations, and kolla reads and admits all of them in 83 seconds and 9.40 GB.
 Checking them is not: a full check stops making progress 325,090 declarations
 in, on `CategoryTheory.Localization.Monoidal.braidingNatIso`, with memory to
-spare. docs/scale.md has the figures and docs/semantics.md K19 the three
-declarations of that shape now on record.
+spare. docs/scale.md has the figures and docs/semantics.md K19 the two
+declarations of that shape on record, one of them explained.
 
 `init` at v4.28.0 adds 51,759 more against `lean4checker`. Read that precisely:
 both references report one verdict for a whole file, so the agreement is at file

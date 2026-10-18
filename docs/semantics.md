@@ -1197,22 +1197,29 @@ seven cores and a live set under 4 GB against a 24 GB ceiling. So it is not
 exhaustion, and `--defeq-cache` is not the answer either: this is the v4_35
 profile, where the positive `is_def_eq` cache is already on.
 
-That makes three declarations of this shape now on record, all single terms
-that swallow unbounded time rather than memory:
+That makes two declarations of this shape on record, single terms that swallow
+unbounded time rather than memory:
 
-| declaration | profile | what it was |
+| declaration | profile | what it is |
 |---|---|---|
 | `Std.…blastUdiv.blastDivSubtractShift` | v4_27 | P12, the missing positive cache |
-| `Real.log` | v4.35.0 | one core, 30 min, no safepoint |
-| `CategoryTheory.…braidingNatIso` | v4.35.0 | 325,090 declarations in |
+| `CategoryTheory.…braidingNatIso` | v4.35.0 | 325,090 declarations in, unexplained |
 
-The first is explained by the cache P12 describes. The other two are not
-explained; they are on the profile that caches and they are not short of heap.
-What they have in common is that none of them could be profiled from outside:
-`jstack`, `jcmd` and `SIGQUIT` were all refused, because the thread does not
-reach a safepoint. Finding out what the kernel is doing in them needs
-instrumentation inside the checking loop rather than a thread dump, and that
-has not been done.
+A third was nearly recorded here and should not be. An earlier run with
+`--check Real.log` over the same export also stopped dead, and it was tempting
+to read that as a third expensive declaration. It was not: a run over the same
+file that checked nothing at all stalled at the identical point — 150,036
+declarations, 1,235 MB — which is the unmemoised digest of P16, and the fix
+removed it. Attributing it to the kernel would have sent someone chasing a bug
+that is already closed.
+
+What remains unexplained is `braidingNatIso`. It is on the profile that caches,
+it is not short of heap, and the full check that reaches it passes no cache, so
+P16's digest is not computed at all. It also cannot be profiled from outside:
+`jstack`, `jcmd` and `SIGQUIT` are all refused, because the thread does not
+reach a safepoint. Finding out what the kernel is doing there needs
+instrumentation inside the checking loop rather than a thread dump, and that has
+not been done.
 
 ### F8 — resource exhaustion is its own exit code
 
