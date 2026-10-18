@@ -82,6 +82,8 @@ class EnvironmentSuite extends munit.FunSuite:
     val r = RecursorVal(cv, List(Name.parse("Nat")), 0, 0, 1, 2, Nil, false, false)
     assertEquals(r.majorIdx, 3)
     assertEquals(r.majorInduct, Name.parse("Nat"))
+    // Read off the recursor's type, not `all`: see the nested case below.
+    assertEquals(r.all, List(Name.parse("Nat")))
   }
 
   test("Declaration names") {
@@ -96,4 +98,42 @@ class EnvironmentSuite extends munit.FunSuite:
     )
     assert(!Declaration.QuotDecl.anyUnsafe)
     assertEquals(Declaration.QuotDecl.declNames, Nil)
+  }
+
+  test("a nested recursor's major premise is not the block's own type") {
+    // `SnapshotTree.rec_3` in Lean's own source has `all = [SnapshotTree]` but
+    // a major premise of type `SnapshotTask SnapshotTree`. Taking `all.head`
+    // asks `to_cnstr_when_structure` about the wrong inductive, which decides
+    // whether a structure major gets eta-expanded into a constructor
+    // application, so iota silently fails to fire. See docs/semantics.md K17.
+    val tree = Name.parse("Tree")
+    val task = Name.parse("Task")
+    val u    = Name.mkSimple("u")
+    def pi(n: String, dom: Expr, body: Expr): Expr =
+      Expr.ForallE(Name.mkSimple(n), dom, body, BinderInfo.Default)
+
+    // motive, minor, major : Task Tree  ->  Sort u
+    val tpe =
+      pi("motive", Expr.Sort(Level.Param(u)),
+        pi("minor", Expr.Sort(Level.Param(u)),
+          pi("t", Expr.App(Expr.Const(task, Nil), Expr.Const(tree, Nil)), Expr.Sort(Level.Param(u)))))
+    val rec = RecursorVal(
+      ConstantVal(Name.parse("Tree.rec_3"), List(u), tpe),
+      all = List(tree),
+      numParams = 0, numIndices = 0, numMotives = 1, numMinors = 1,
+      rules = Nil, k = false, isUnsafe = false
+    )
+    assertEquals(rec.majorIdx, 2)
+    assertEquals(rec.majorInduct, task)
+    assertNotEquals(rec.majorInduct, rec.all.head)
+  }
+
+  test("majorInduct falls back when the type is not a recursor telescope") {
+    val rec = RecursorVal(
+      ConstantVal(Name.parse("Bad.rec"), Nil, Expr.Sort(Level.zero)),
+      all = List(Name.parse("Bad")),
+      numParams = 0, numIndices = 0, numMotives = 1, numMinors = 1,
+      rules = Nil, k = false, isUnsafe = false
+    )
+    assertEquals(rec.majorInduct, Name.parse("Bad"))
   }

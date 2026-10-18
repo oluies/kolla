@@ -583,6 +583,30 @@ are implemented:
   levels. An occurrence with *more* than `nparams` arguments is skipped at that
   node and its parameter application is checked as a subterm.
 
+### K17 — a nested recursor's major premise is not the block's own type
+
+`recursor_val::get_major_induct` reads the major premise's inductive off the
+recursor's own type: it walks `majorIdx` binders, takes that binder's domain and
+returns its head constant (`src/kernel/declaration.cpp:145`). It is not
+`all.head`, and for the recursors a nested inductive generates the two differ.
+`Lean.Language.SnapshotTree.rec_3` has `all = [SnapshotTree]`, because every
+recursor of the block shares the block's `all`, while its major premise has type
+`SnapshotTask SnapshotTree`.
+
+The distinction is load-bearing because `majorInduct` is what
+`to_cnstr_when_structure` is asked about, and that decides whether a major which
+is not yet a constructor application gets eta-expanded into one so that iota can
+fire. `SnapshotTask` is a non-recursive structure and `SnapshotTree` is not, so
+asking about the block's own type answers "no" where Lean answers "yes": the
+recursor application stays stuck, and a proof that needed one iota step fails
+with a type mismatch two levels up.
+
+Nothing but a nested inductive shows this, and only one whose nested occurrence
+is a non-recursive structure. The handwritten corpora did not reach it; the
+`lean` corpus rejected nine `_sizeOf_N_eq` lemmas on `SnapshotTree`,
+`Do.Code`, `DiscrTree.Trie`, `TacticParsedSnapshot` and `EqCnstr`, while `init`
+and `std` passed clean across 159,000 declarations.
+
 ### K16 — nested inductives
 
 `AddInductive.add` is `environment::add_inductive`, and it is the entry point for

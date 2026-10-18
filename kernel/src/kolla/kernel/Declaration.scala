@@ -87,7 +87,32 @@ final case class RecursorVal(
     isUnsafe: Boolean
 ):
   def majorIdx: Int = numParams + numMotives + numMinors + numIndices
-  def majorInduct: Name = all.head
+
+  /** `recursor_val::get_major_induct`: the inductive the major premise belongs
+    * to, read off this recursor's own type.
+    *
+    * Not `all.head`. The recursors a nested inductive generates for its nested
+    * occurrences share the block's `all`, so `SnapshotTree.rec_3` has
+    * `all = [SnapshotTree]` while its major premise is a
+    * `SnapshotTask SnapshotTree`. Asking about `SnapshotTree` there is asking
+    * about the wrong type, and the answer decides whether iota gets to
+    * eta-expand a structure major into a constructor application
+    * (`to_cnstr_when_structure`). See docs/semantics.md K17.
+    *
+    * `declaration.cpp` walks `majorIdx` binders, takes the domain and returns
+    * its head constant; this does the same, falling back to `all.head` on a
+    * type that is not the Pi telescope a recursor must have.
+    */
+  def majorInduct: Name =
+    var t = toConstantVal.tpe
+    var i = 0
+    while i < majorIdx do
+      t match
+        case f: Expr.ForallE => t = f.body; i += 1
+        case _               => i = majorIdx
+    t match
+      case f: Expr.ForallE => Expr.constName(Expr.getAppFn(f.binderType)).getOrElse(all.head)
+      case _               => all.head
 
 final case class Constructor(name: Name, tpe: Expr)
 
