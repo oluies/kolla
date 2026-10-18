@@ -67,6 +67,29 @@ object Options:
   def profileOf(o: Options): KernelProfile =
     if o.defeqCache then o.profile.withDefEqSuccessCache else o.profile
 
+  /** Above this many bytes an export is a library rather than a fixture.
+    *
+    * The largest committed fixture is 17 MB and the smallest library corpus,
+    * `init`, is 292 MB, so anything over this is the scale at which a missing
+    * positive `is_def_eq` cache stops being a slowdown and starts being a
+    * run that does not finish. See docs/semantics.md K18 and P12.
+    */
+  val libraryScaleBytes: Long = 128L * 1024L * 1024L
+
+  /** The advisory to print before a run that is unlikely to finish.
+    *
+    * `None` when the profile keeps the cache, when `--defeq-cache` was asked
+    * for, or when the input is too small for it to matter.
+    */
+  def defeqCacheAdvice(o: Options, bytes: Long): Option[String] =
+    if o.defeqCache || o.profile.cacheDefEqSuccess || bytes < libraryScaleBytes then None
+    else
+      Some(
+        s"warning: ${o.profile.label} has no positive is_def_eq cache and this input is " +
+          f"${bytes / 1048576.0}%.0f MB; a library corpus can exceed 24 GB of heap on this " +
+          "profile. Pass --defeq-cache to keep the cache, which changes no verdict."
+      )
+
   /** The predicate `--check` amounts to: a name matches a prefix exactly or is
     * under it. No prefixes means everything is checked.
     */

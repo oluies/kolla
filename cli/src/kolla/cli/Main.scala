@@ -50,9 +50,22 @@ object Main extends IOApp:
 
     val profile = Options.profileOf(o)
 
+    // Said before the run rather than after it: the point is not to start a
+    // run that cannot finish. Standard input has no size to go on.
+    val advise: IO[Unit] =
+      if file == "-" then IO.unit
+      else
+        Files[IO]
+          .size(Path(file))
+          .attempt
+          .flatMap {
+            case Right(n) => Options.defeqCacheAdvice(o, n).fold(IO.unit)(Console[IO].errorln)
+            case Left(_)  => IO.unit
+          }
+
     val withCache: IO[Option[CacheStore]] = o.cache.fold(IO.pure(None))(CacheStore.load(_).map(Some(_)))
 
-    withCache.flatMap { store =>
+    advise *> withCache.flatMap { store =>
       Check
         .stream(
           file, read(file), profile, o.abortOnReject, emit, progress,

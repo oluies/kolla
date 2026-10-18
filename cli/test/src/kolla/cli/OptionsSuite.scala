@@ -73,3 +73,41 @@ class OptionsSuite extends munit.FunSuite:
   test("the usage names every exit code the tool returns") {
     List("0", "1", "2").foreach(c => assert(Options.usage.contains(c), clue(c)))
   }
+
+  test("the defeq-cache advice fires only where it is needed") {
+    val small = Options.libraryScaleBytes - 1
+    val large = Options.libraryScaleBytes
+
+    // An uncached profile at library scale: advise.
+    val warned = Options.defeqCacheAdvice(Options(profile = KernelProfile.v4_27), large)
+    assert(warned.isDefined)
+    assert(warned.get.contains("--defeq-cache"), clue(warned))
+    assert(warned.get.contains(KernelProfile.v4_27.label), clue(warned))
+
+    // Below library scale, nothing to say.
+    assertEquals(Options.defeqCacheAdvice(Options(profile = KernelProfile.v4_27), small), None)
+
+    // Already asked for it.
+    assertEquals(
+      Options.defeqCacheAdvice(Options(profile = KernelProfile.v4_27, defeqCache = true), large),
+      None
+    )
+
+    // A profile that keeps the cache anyway.
+    assertEquals(Options.defeqCacheAdvice(Options(profile = KernelProfile.v4_35), large), None)
+  }
+
+  test("every profile without the cache is covered by the advice") {
+    // Derived from the profiles rather than naming v4_25 and v4_27, so a
+    // profile added later is covered the day it is added.
+    for p <- KernelProfile.all do
+      val advice = Options.defeqCacheAdvice(Options(profile = p), Options.libraryScaleBytes)
+      assertEquals(advice.isDefined, !p.cacheDefEqSuccess, clue(p.label))
+  }
+
+  test("the threshold sits between the largest fixture and the smallest library") {
+    // 17 MB is the largest committed fixture and `init` is 292 MB; the point of
+    // the threshold is to separate them, so assert that rather than the number.
+    assert(Options.libraryScaleBytes > 17L * 1024 * 1024, clue(Options.libraryScaleBytes))
+    assert(Options.libraryScaleBytes < 292L * 1024 * 1024, clue(Options.libraryScaleBytes))
+  }
