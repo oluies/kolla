@@ -826,11 +826,25 @@ Lean toolchain and one build serves every release. What it is tied to is the
 export format: `check_semver` in its `src/parser.rs` accepts 3.1.0 up to but not
 including 3.2.0, which in this matrix is v4.28.0 and v4.35.0.
 
+Two gates apply, and only the second narrows the toolchains. `Nanoda.supports`
+is about the reader, and since lean4export backported 3.1.0 to every release tag
+every export in this matrix is readable. `Nanoda.matchesKernel` is what makes
+nanoda a reference for v4.35.0 alone, and it is the gate to look at when nanoda
+did not run: nanoda has no notion of a release, so it implements the v4.35
+behaviours unconditionally and looks up `String.ofList`, which does not exist
+before v4.27. Running it against v4.25.0 reproduces the `case-strlit` rejection
+of P10 for its own reason, which says nothing about kolla.
+
 That makes it the reference for v4.35.0, which `lean4checker` has no release for
 (P2). Like `lean4checker` it reports one verdict for the whole file — a bad
 declaration panics out of `check_all_declars` — so it is compared through
 `CheckerRun.overall` and kolla runs with `stopOnFirstRejection` whenever either
 reference is in play.
+
+nanoda's revision is pinned in `Nanoda.rev` for the reason P1 gives for the Lean
+tools: it tracks current Lean, so an unpinned clone would make the v4.35.0 run
+disagree the first time upstream implements a kernel change, with nothing in
+kolla having moved.
 
 `nat_extension` and `string_extension` are off by default in nanoda and are
 turned on, since Lean's kernel has them. `unpermitted_axiom_hard_error` is off:
@@ -853,10 +867,18 @@ kernel always runs with `Init` imported, and `lean4checker` replays a module
 into an environment that already holds its imports.
 
 `KollaChecker.hoistExtensionConstants` moves those constants, and the groups
-they depend on, to the front. It is a stable partition of whole groups, so each
-half keeps its order and every declaration still follows its dependencies; an
-inductive block stays contiguous, which the checker loop requires. Nothing is
-added unchecked and nothing is checked twice.
+they depend on, to the front. An inductive block stays contiguous, which the
+checker loop requires; nothing is added unchecked and nothing is checked twice.
+
+The ordering guarantee is relative, not absolute: the pass never turns a
+dependency the file satisfied into one it does not. Being a stable partition of
+whole groups, it leaves every edge within a half untouched; an edge from a
+hoisted group to a group declared earlier cannot escape, because `require`
+follows it and hoists that group too; and an edge into a hoisted group is only
+satisfied earlier than before. The pass does not claim to repair a file whose
+declarations were not topologically ordered — an edge that already pointed
+forwards still does, and such a file fails identically with the pass turned
+off.
 
 ### P11 — a mutant is credited only with rejections the baseline did not have
 
@@ -865,3 +887,7 @@ Without that, a corpus with a pre-existing failure makes every mutant look
 correct, including `ChangeDefinitionalHeight`, which must stay accepted: the
 v4.25.0 run before P10 reported `change-definitional-height` as a rejection of
 `appendLit`, a declaration the mutation had not touched.
+
+The subtraction is also why a negative corpus is never mutated. Its baseline
+rejects by construction, so a mutation of the declaration already rejected
+produces no new rejection and would be reported as a bad mutant.

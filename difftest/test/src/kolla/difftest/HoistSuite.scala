@@ -145,6 +145,127 @@ class HoistSuite extends munit.FunSuite:
     assert(hoisted.contains("Nat") && hoisted.contains("Nat.succ"), clue(hoisted.toString))
   }
 
+  /** The constants an item mentions, as a dependency edge's target names. */
+  private def mentions(it: ExportItem): Set[Name] =
+    val into = scala.collection.mutable.HashSet.empty[Name]
+    def walk(e: Expr): Unit =
+      ExprOps.forEach(e) { (x, _) =>
+        x match
+          case c: Expr.Const => into += c.name
+          case pr: Expr.Proj => into += pr.typeName
+          case _             => ()
+        true
+      }
+    it match
+      case ExportItem.Info(info) =>
+        walk(info.tpe)
+        info match
+          case ConstantInfo.DefnInfo(v)   => walk(v.value)
+          case ConstantInfo.ThmInfo(v)    => walk(v.value)
+          case ConstantInfo.OpaqueInfo(v) => walk(v.value)
+          case ConstantInfo.RecInfo(v)    => v.rules.foreach(r => walk(r.rhs))
+          case _                          => ()
+      case ExportItem.Decl(d) =>
+        d match
+          case Declaration.AxiomDecl(v)       => walk(v.toConstantVal.tpe)
+          case Declaration.DefnDecl(v)        => walk(v.toConstantVal.tpe); walk(v.value)
+          case Declaration.ThmDecl(v)         => walk(v.toConstantVal.tpe); walk(v.value)
+          case Declaration.OpaqueDecl(v)      => walk(v.toConstantVal.tpe); walk(v.value)
+          case Declaration.QuotDecl           => ()
+          case Declaration.MutualDefnDecl(ds) => ds.foreach(v => { walk(v.toConstantVal.tpe); walk(v.value) })
+          case Declaration.InductDecl(_, _, ts, _) =>
+            ts.foreach(t => { walk(t.tpe); t.ctors.foreach(c => walk(c.tpe)) })
+      case ExportItem.DefnWithoutHints(_, _, t, v) => walk(t); walk(v)
+    into.toSet
+
+  /** Every dependency edge the file satisfies, as (user, dependency) positions. */
+  private def satisfiedEdges(xs: Vector[ExportItem]): Set[(Int, Int)] =
+    val declaredAt = xs.zipWithIndex.flatMap((it, i) => it.names.map(_ -> i)).toMap
+    (for
+      (it, i) <- xs.zipWithIndex
+      d       <- mentions(it)
+      j       <- declaredAt.get(d)
+      if j < i
+    yield (i, j)).toSet
+
+  /** An axiom item named `name` whose type mentions each of `deps`. */
+  private def axiom(name: String, deps: String*): ExportItem =
+    val tpe = deps.foldLeft(Expr.sort(Level.Zero): Expr)((acc, d) => Expr.App(acc, Expr.const(n(d))))
+    ExportItem.Info(ConstantInfo.AxiomInfo(AxiomVal(ConstantVal(n(name), Nil, tpe), isUnsafe = false)))
+
+  /** A file where an extension constant depends on something declared earlier.
+    *
+    * None of the committed fixtures has this shape, and it is the only shape
+    * that exercises the `require` closure: hoisting `String.ofList` has to pull
+    * `Helper` along, or `Helper` is left behind in the back half and ends up
+    * after the group that needs it.
+    */
+  private val withBackwardDep: Vector[ExportItem] =
+    Vector(
+      axiom("Unrelated"),
+      axiom("Helper", "Unrelated"),
+      axiom("String.ofList", "Helper"),
+      axiom("User", "String.ofList")
+    )
+
+  test("an extension constant drags its earlier dependencies into the prefix") {
+    val out = KollaChecker.hoistExtensionConstants(withBackwardDep, KernelProfile.v4_35)
+    val order = out.flatMap(_.names).map(_.toString)
+    assertEquals(order, Vector("Unrelated", "Helper", "String.ofList", "User"))
+    // `Helper` and `Unrelated` are not extension constants; they are in the
+    // prefix only because `String.ofList` depends on them.
+    val t = trace(withBackwardDep, out)
+    val boundary = t.sliding(2).indexWhere(w => w.length == 2 && w(1) < w(0)) + 1
+    assertEquals(boundary, 0, clue(t))
+  }
+
+  test("hoisting never turns a satisfied dependency into an unsatisfied one") {
+    // This is the guarantee the pass actually makes (docs/semantics.md P10): it
+    // does not repair a file that was not topologically ordered, it declines to
+    // break one that was. The demoted fixture is included because it is the only
+    // input here the pass actually reorders.
+    val inputs =
+      fixtures.map(items) ++ List(
+        demote(items("nat-add-3.1.0.ndjson"), "Nat"),
+        withBackwardDep,
+        // The extension constant last, so the whole closure has to move.
+        withBackwardDep.reverse.updated(0, withBackwardDep(3)).updated(3, withBackwardDep(0)),
+        axiom("Filler") +: withBackwardDep
+      )
+    inputs.foreach { xs =>
+      val names = xs.map(_.names)
+      KernelProfile.all.foreach { p =>
+        val out      = KollaChecker.hoistExtensionConstants(xs, p)
+        val outIndex = out.zipWithIndex.toMap
+        val inIndex  = xs.zipWithIndex.toMap
+        satisfiedEdges(xs).foreach { (user, dep) =>
+          val u = outIndex(xs(user))
+          val d = outIndex(xs(dep))
+          assert(
+            d < u,
+            clue(s"${names(dep)} moved after ${names(user)} under ${p.label} " +
+              s"(input ${inIndex(xs(dep))} -> $d, ${inIndex(xs(user))} -> $u)")
+          )
+        }
+      }
+    }
+  }
+
+  test("the demoted fixture really has edges to break") {
+    // Otherwise the invariant above would hold vacuously on the one input that
+    // is reordered at all.
+    val xs  = demote(items("nat-add-3.1.0.ndjson"), "Nat")
+    val out = KollaChecker.hoistExtensionConstants(xs, KernelProfile.v4_35)
+    assertNotEquals(out, xs)
+    val edges = satisfiedEdges(xs)
+    assert(edges.size >= 5, clue(edges.size))
+    // And at least one of them crosses the partition, so the `require` closure
+    // is doing work rather than the halves happening not to interleave.
+    val outIndex = out.zipWithIndex.toMap
+    val moved    = xs.zipWithIndex.count((it, i) => outIndex(it) != i)
+    assert(moved > 0, clue(moved))
+  }
+
   test("a constant the kernel never reaches for is not hoisted") {
     assert(!KollaChecker.extensionConstants(KernelProfile.v4_35).contains(n("List.append")))
     assert(KollaChecker.extensionConstants(KernelProfile.v4_25).contains(n("String.mk")))

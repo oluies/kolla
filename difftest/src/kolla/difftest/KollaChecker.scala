@@ -251,9 +251,18 @@ object KollaChecker:
     * nothing to expand to and `"ab" ++ "cd" = "abcd"` fails. Lean never sees
     * this, because its kernel always runs with `Init` imported.
     *
-    * Relative order is preserved within the hoisted part and within the rest,
-    * so every declaration still comes after its dependencies and each is still
-    * checked exactly once. See docs/semantics.md P10.
+    * It is a stable partition of whole groups, which gives exactly this: no
+    * dependency that the file satisfied becomes unsatisfied. Both halves keep
+    * their order, so an edge inside one half is untouched; an edge from a
+    * hoisted group to a group declared earlier cannot escape, because `require`
+    * follows every such dependency and hoists it too; and an edge into a
+    * hoisted group can only be satisfied earlier than before. An edge that
+    * already pointed forwards in the file stays forwards — the pass does not
+    * repair a file that was not topologically ordered to begin with, it only
+    * declines to break one that was.
+    *
+    * Each declaration is still checked exactly once, and none is added
+    * unchecked. See docs/semantics.md P10.
     */
   def hoistExtensionConstants(items: Vector[ExportItem], profile: KernelProfile): Vector[ExportItem] =
     val wanted  = extensionConstants(profile)
@@ -270,6 +279,9 @@ object KollaChecker:
         needed += g
         val deps = scala.collection.mutable.LinkedHashSet.empty[Name]
         (starts(g) until ends(g)).foreach(i => exprsOf(items(i)).foreach(collect(_, deps)))
+        // Only a dependency declared *earlier* can be broken by moving `g`
+        // forward; one declared later is already forward in the file and the
+        // partition leaves it exactly where it was.
         deps.foreach(n => byName.get(n).filter(_ < g).foreach(require))
 
     def exprsOf(it: ExportItem): List[Expr] = it match

@@ -114,7 +114,9 @@ object Main extends IOApp:
   private def provisionOne(t: Toolchain, o: Options): IO[Unit] =
     IO.println(s"provisioning ${t.spec}") *>
       Provision.provision(t, o.withChecker && t.hasReference).void *>
-      (if o.withNanoda then Nanoda.provision.void else IO.unit)
+      // nanoda is a reference only for the newest profile, and its build is a
+      // full Rust release build; the other toolchains must not pay for it.
+      (if o.withNanoda && Nanoda.matchesKernel(t) then Nanoda.provision.void else IO.unit)
 
   private def exportOnly(toolchains: List[Toolchain], corpora: List[Corpus], o: Options): IO[Unit] =
     toolchains.traverseVoid { t =>
@@ -135,7 +137,10 @@ object Main extends IOApp:
 
   private def mutantsFor(t: Toolchain, corpora: List[Corpus], o: Options): IO[Vector[MutationOutcome]] =
     Provision.provision(t, withChecker = false).flatMap { tools =>
-      corpora.filter(_.appliesTo(t)).traverseAccum { c =>
+      // Mutating a corpus that is already invalid proves nothing, and with the
+      // baseline subtraction a mutation of the declaration the baseline already
+      // rejected reports no new rejection and so counts as a bad mutant.
+      corpora.filter(c => c.appliesTo(t) && !c.expectRejection).traverseAccum { c =>
         for
           path  <- Exporter.exportFile(tools, c)
           items <- IO.blocking(Layout.readFile(path)).map(s => kolla.leanexport.ExportReader.fromString(s).items)
@@ -148,7 +153,8 @@ object Main extends IOApp:
     for
       commit <- Report.commit
       at     <- Report.now
-      nanoda <- if o.withNanoda then Nanoda.provision else IO.pure(None)
+      nanoda <- if o.withNanoda && toolchains.exists(Nanoda.matchesKernel) then Nanoda.provision
+                else IO.pure(None)
       parts  <- toolchains.traverseAccum(t => oneToolchain(t, corpora, o, nanoda).map(Vector(_)))
       runs        = parts.flatMap(_._1)
       overall     = parts.flatMap(_._2)

@@ -73,6 +73,13 @@ jobs:
             'difftest/cases/*.lean', 'difftest/cases-negative/*.lean',
             'difftest/lean/ListDecls.lean') }}
           restore-keys: difftest-${{ matrix.toolchain }}-
+      # nanoda is a Rust release build, keyed on the revision Nanoda.rev pins.
+      # Only the v4.35.0 job provisions it, and only that job can use it.
+      - uses: actions/cache@v4
+        with:
+          path: .difftest/nanoda
+          key: nanoda-${{ runner.os }}-${{ hashFiles('difftest/src/kolla/difftest/Nanoda.scala') }}
+          restore-keys: nanoda-${{ runner.os }}-
       - name: Install elan
         run: |
           curl -sSfL https://github.com/leanprover/elan/releases/latest/download/elan-x86_64-unknown-linux-gnu.tar.gz \
