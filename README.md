@@ -108,8 +108,10 @@ minutes, where the v4.35.0 profile checks the same corpus in 305 seconds and
 3.8 GB; Lean's own cache-free kernel does those modules in 74 seconds. It is
 one declaration rather than the corpus —
 `Std.Tactic.BVDecide.BVExpr.bitblast.blastUdiv.blastDivSubtractShift` — and
-docs/semantics.md P12 has the isolation. A library corpus on a pre-v4.35
-profile is therefore not something kolla finishes today.
+docs/semantics.md P12 has the isolation. So it is `std` that is out of reach on
+a pre-v4.35 profile, not library corpora as such: `init` completes there,
+51,759 declarations in 77 seconds against 48 on v4.35.0. `lean` is larger than
+`std` and has not been tried on that profile.
 
 ## The differential platform
 
