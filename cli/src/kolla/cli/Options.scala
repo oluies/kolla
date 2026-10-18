@@ -22,6 +22,8 @@ final case class Options(
       * Everything else is admitted into the environment unchecked.
       */
     checkOnly: List[String] = Nil,
+    /** A file of accepted content digests to reuse and extend. */
+    cache: Option[String] = None,
     help: Boolean = false,
     version: Boolean = false,
     listProfiles: Boolean = false
@@ -48,6 +50,7 @@ object Options:
       |  -v, --verbose   name each declaration as it is checked
       |  -q, --quiet     only the counts and the verdict
       |  --progress      note declarations and bytes read on stderr
+      |  --cache <file>  reuse and extend a file of accepted digests
       |  --profiles      list the profiles and exit
       |  -h, --help      this message
       |  --version       the version and the default profile
@@ -80,6 +83,7 @@ object Options:
       case "--profiles" :: _         => Right(o.copy(listProfiles = true))
       case "--only" :: v :: t        => go(t, o.copy(only = o.only :+ v))
       case "--check" :: v :: t       => go(t, o.copy(checkOnly = o.checkOnly :+ v))
+      case "--cache" :: v :: t       => go(t, o.copy(cache = Some(v)))
       case "--profile" :: v :: t =>
         KernelProfile.all.find(p => p.label == v || p.label == s"v$v") match
           case Some(p) => go(t, o.copy(profile = p))

@@ -41,6 +41,7 @@ kolla [options] <export-file>...
   -v, --verbose   name each declaration as it is checked
   -q, --quiet     only the counts and the verdict
   --progress      note declarations and bytes read on stderr
+  --cache <file>  reuse and extend a file of accepted digests
   --profiles      list the profiles and exit
 ```
 
@@ -55,6 +56,12 @@ suits a project with a few declarations of its own on top of a large library:
 it admits everything outside the prefix into the environment unchecked and
 reports how many, so the verdict covers the selection rather than the file
 (P14). `--only` filters the report instead, and changes no checking.
+
+`--cache` keys each declaration by a digest of itself and of everything it
+depends on, so a rerun skips what has not changed and a run that dies partway
+keeps the digests it had already accepted. Reusing an entry is trusting it; the
+file is part of what the verdict rests on, which is why it is opt-in. See
+docs/semantics.md P15.
 
 `mill cli.native.nativeLink` builds a native binary. It is the faster of the two
 on small inputs and much the slower on large ones; see docs/semantics.md F7.

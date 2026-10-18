@@ -1025,6 +1025,55 @@ outside the prefix is not reached, which is why the count is reported rather
 than left implicit; a caller that treats exit 0 as "this file is sound" would
 be wrong about every declaration it declined to check.
 
+### P15 — a cache entry is a digest of the dependency closure
+
+A declaration's verdict is not a function of its own text. It depends on every
+constant it reaches, so a cache keyed on the declaration alone would report a
+hit after a dependency changed underneath it and accept something that had
+never been checked in that form. `Digest` is therefore a Merkle hash: an
+`Expr.Const` mixes in the digest of what it names, and a `Expr.Proj` the digest
+of the structure it projects from. A name not yet declared contributes its name
+instead, which is the most that can be said about a forward reference.
+
+Three things join the declaration in the key.
+
+The profile, because the same declaration is accepted on one and rejected on
+another — that is what the matrix exists to show.
+
+The ambient constants, in a fixed order, because the kernel reaches for them
+when it expands a literal without the declaration naming them (P10). A digest
+that omitted them could hit after `Nat.succ` changed. They are mixed into every
+declaration's digest rather than only into the ones containing literals, which
+is conservative and costs nothing.
+
+`Digest.epoch`, bumped by hand when kernel semantics change. This is the part
+that cannot be derived from the input, and it is the sharp edge: if the kernel
+changes what it accepts and the epoch does not change, every existing entry is
+a false accept.
+
+Binder names and `BinderInfo` are deliberately left out. `Expr.==` is
+`lean::is_equal`, which ignores both (X14), so two declarations differing only
+there are one declaration to the kernel and must not miss.
+
+A hit is `ReplayOutcome.Cached`, counted apart from `accepted`, and
+`ReplayTally.ok` treats it as judged. That makes the cache file part of what a
+verdict rests on, which is why `--cache` is opt-in and why `difftest` never
+passes one: a comparison against a reference has to be this run's own verdict,
+not a stored answer. A rejection is never written, so a broken declaration is
+re-checked every run.
+
+The digest is not a cryptographic hash and does not need to be. Anything that
+can write the cache file can put any digest in it, so collision resistance
+against an adversary buys nothing that trusting the file has not already given
+away; what matters is the accidental rate, and 128 bits is ample for millions
+of declarations.
+
+Measured on `init` v4.35.0, 59,349 declarations: 47.7s with no cache, 96.0s
+cold while writing one, 26.7s reusing it. A warm run is not free because the
+file still has to be read and digested to know it is the same file, and the
+digest is a second walk over every expression — so the cold cost is roughly
+double. The gain follows how much of the run is checking rather than parsing.
+
 ### F8 — resource exhaustion is its own exit code
 
 Exit 2 means the file could not be read and 1 that a declaration was rejected.

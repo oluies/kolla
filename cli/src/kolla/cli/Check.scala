@@ -20,7 +20,8 @@ object Check:
       tally: ReplayTally,
       wallNanos: Long,
       lateAmbient: List[Name] = Nil,
-      admittedUnchecked: Int = 0
+      admittedUnchecked: Int = 0,
+      reusedFromCache: Int = 0
   )
 
   /** Why a file produced no verdict.
@@ -98,10 +99,15 @@ object Check:
       abortOnReject: Boolean,
       emit: (Name, ReplayOutcome, Long) => IO[Unit],
       progress: Option[Progress => IO[Unit]] = None,
-      check: Name => Boolean = _ => true
+      check: Name => Boolean = _ => true,
+      cache: Option[ReplayCache] = None,
+      /** Run periodically and once at the end, so that a run which dies
+        * partway leaves behind the digests it did accept.
+        */
+      checkpoint: Option[IO[Unit]] = None
   ): IO[Either[Failure, Result]] =
     IO.monotonic.flatMap { start =>
-      val replay  = new Replay(profile, true, Replay.defaultHoistWindow, check)
+      val replay  = new Replay(profile, true, Replay.defaultHoistWindow, check, cache)
       var tally   = ReplayTally()
       var read    = 0L
       var seen    = 0L
@@ -112,11 +118,10 @@ object Check:
       // be built at run time: `IO(...) *> drain()` would call `drain()` while
       // the first effect was still unevaluated and always see an empty buffer.
       def note: IO[Unit] = IO.defer {
-        progress match
-          case Some(f) if seen - noted >= progressEvery =>
-            noted = seen
-            f(Progress(seen, read))
-          case _ => IO.unit
+        if seen - noted < progressEvery then IO.unit
+        else
+          noted = seen
+          progress.fold(IO.unit)(f => f(Progress(seen, read))) *> checkpoint.getOrElse(IO.unit)
       }
 
       def drain(): IO[Unit] = IO.defer {
@@ -152,11 +157,19 @@ object Check:
         .compile
         .drain
         .flatMap(_ => IO(replay.finish()) *> drain())
+        // The checkpoint runs whether or not the body succeeded, so an
+        // exhausted run still keeps what it accepted.
+        .guarantee(checkpoint.getOrElse(IO.unit))
         .attempt
         .flatMap {
           case Right(_) =>
             IO.monotonic.map(end =>
-              Right(Result(tally, (end - start).toNanos, replay.lateAmbientConstants, replay.admittedUnchecked))
+              Right(
+                Result(
+                  tally, (end - start).toNanos, replay.lateAmbientConstants,
+                  replay.admittedUnchecked, replay.reusedFromCache
+                )
+              )
             )
           case Left(e: OutOfMemoryError) =>
             IO.pure(Left(Failure.Exhausted(s"$name: ran out of memory after $seen declarations")))

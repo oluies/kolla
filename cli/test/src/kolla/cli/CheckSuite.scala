@@ -217,3 +217,57 @@ class CheckSuite extends CatsEffectSuite:
     assert(!sel(Name.parse("PropulsionOther")))
     assert(!sel(Name.parse("Mathlib.Data.Nat")))
   }
+
+  /** A cache in memory, standing in for the file one: the file is tested by
+    * `CacheStoreSuite`, and this is about what `Check.stream` does with it.
+    */
+  private final class MemCache extends kolla.leanexport.ReplayCache:
+    private val seen = scala.collection.mutable.HashSet.empty[kolla.leanexport.Digest]
+    def contains(d: kolla.leanexport.Digest): Boolean = seen.contains(d)
+    def accepted(d: kolla.leanexport.Digest): Unit = seen += d
+    def size: Int = seen.size
+
+  test("a second streamed run reuses the cache and checks nothing") {
+    val cache = new MemCache
+    for
+      first  <- Check.stream("x", bytesOf(good, 11), KernelProfile.v4_35, abortOnReject = false,
+                             silent, None, _ => true, Some(cache))
+      second <- Check.stream("x", bytesOf(good, 11), KernelProfile.v4_35, abortOnReject = false,
+                             silent, None, _ => true, Some(cache))
+    yield
+      val a = first.getOrElse(fail("no first result"))
+      val b = second.getOrElse(fail("no second result"))
+      assertEquals(a.tally.accepted, 2)
+      assertEquals(a.reusedFromCache, 0)
+      assertEquals(b.tally.accepted, 0)
+      assertEquals(b.reusedFromCache, 2)
+      assert(b.tally.ok, "a fully cached run is still ok")
+  }
+
+  test("a rejection is never cached") {
+    val cache = new MemCache
+    for
+      _ <- Check.stream("x", bytesOf(bad, 17), KernelProfile.v4_35, abortOnReject = false,
+                        silent, None, _ => true, Some(cache))
+      r <- Check.stream("x", bytesOf(bad, 17), KernelProfile.v4_35, abortOnReject = false,
+                        silent, None, _ => true, Some(cache))
+    yield
+      val x = r.getOrElse(fail("no result"))
+      // The two good declarations come back cached; the broken one is checked
+      // again and rejected again, because nothing records a rejection.
+      assertEquals(x.reusedFromCache, 2)
+      assertEquals(x.tally.rejected, 1)
+      assert(!x.tally.ok)
+  }
+
+  test("the checkpoint runs even when the stream fails") {
+    val flushed = IO.ref(0)
+    flushed.flatMap { ref =>
+      val junk = fs2.Stream.emits("this is not an export".getBytes("UTF-8").toSeq)
+      Check
+        .stream("x", junk, KernelProfile.v4_35, abortOnReject = false, silent, None,
+                _ => true, None, Some(ref.update(_ + 1)))
+        .flatMap(_ => ref.get)
+        .map(n => assertEquals(n, 1, "an unreadable file must still checkpoint"))
+    }
+  }

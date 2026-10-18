@@ -48,10 +48,25 @@ object Main extends IOApp:
           Console[IO].errorln(f"  ${p.declarations}%,d declarations, ${p.bytesRead / 1048576.0}%.0f MB read")
         )
 
-    Check.stream(file, read(file), o.profile, o.abortOnReject, emit, progress, Options.selects(o)).flatMap {
+    val withCache: IO[Option[CacheStore]] = o.cache.fold(IO.pure(None))(CacheStore.load(_).map(Some(_)))
+
+    withCache.flatMap { store =>
+      Check
+        .stream(
+          file, read(file), o.profile, o.abortOnReject, emit, progress,
+          Options.selects(o), store, store.map(_.flush)
+        )
+        .flatMap(reportOne(o, file, _))
+    }
+
+  private def reportOne(o: Options, file: String, out: Either[Check.Failure, Check.Result]): IO[ExitCode] =
+    out match
       case Left(f: Check.Failure.Exhausted)  => Console[IO].errorln(f.message).as(ExitCode(3))
       case Left(f: Check.Failure.Unreadable) => Console[IO].errorln(f.message).as(ExitCode(2))
       case Right(r) =>
+        val reused =
+          if r.reusedFromCache == 0 then IO.unit
+          else Console[IO].errorln(f"  ${r.reusedFromCache}%,d reused from the cache")
         val admitted =
           if r.admittedUnchecked == 0 then IO.unit
           else Console[IO].errorln(f"  ${r.admittedUnchecked}%,d admitted unchecked")
@@ -65,8 +80,7 @@ object Main extends IOApp:
           if o.json then Console[IO].println(Render.summaryJson(file, o.profile.label, platform, r.tally, r.wallNanos))
           else if o.quiet then Console[IO].println(r.tally.counts)
           else Console[IO].print(Render.summary(file, o.profile.label, r.tally, r.wallNanos))
-        admitted *> late *> report.as(if r.tally.ok then ExitCode.Success else ExitCode(1))
-    }
+        reused *> admitted *> late *> report.as(if r.tally.ok then ExitCode.Success else ExitCode(1))
 
   /** `-` is standard input, so the CLI composes with a pipeline. */
   private def read(file: String): fs2.Stream[IO, Byte] =
