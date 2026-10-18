@@ -4,6 +4,7 @@ package build
 import mill.*
 import mill.scalalib.*
 import mill.scalajslib.*
+import mill.scalajslib.api.ModuleKind
 import mill.scalanativelib.*
 
 object v {
@@ -75,6 +76,69 @@ object difftest extends KollaBase {
     def mvnDeps = super.mvnDeps() ++ Seq(
       mvn"org.typelevel::munit-cats-effect::${v.munitCatsEffect}"
     )
+  }
+}
+
+/** The command line, on the JVM and as a native binary. */
+object cli extends Module {
+  trait Shared extends KollaModule {
+    def mvnDeps = Seq(
+      mvn"org.typelevel::cats-core::${v.cats}",
+      mvn"org.typelevel::cats-effect::${v.catsEffect}",
+      mvn"co.fs2::fs2-core::${v.fs2}",
+      mvn"co.fs2::fs2-io::${v.fs2}"
+    )
+  }
+  object jvm extends Shared {
+    def moduleDeps = Seq(kernel.jvm, build.`export`.jvm, dsl.jvm)
+    def mainClass = Some("kolla.cli.Main")
+    object test extends KollaTests {
+      def mvnDeps = super.mvnDeps() ++ Seq(mvn"org.typelevel::munit-cats-effect::${v.munitCatsEffect}")
+    }
+  }
+  object native extends Shared with KollaNativeModule {
+    def moduleDeps = Seq(kernel.native, build.`export`.native, dsl.native)
+    def mainClass = Some("kolla.cli.Main")
+    object test extends KollaTests with ScalaNativeTests {
+      def mvnDeps = super.mvnDeps() ++ Seq(mvn"org.typelevel::munit-cats-effect::${v.munitCatsEffect}")
+    }
+  }
+}
+
+/** The browser front end. */
+object web extends Module {
+  object js extends KollaModule with KollaJsModule {
+    def moduleDeps = Seq(kernel.js, build.`export`.js, dsl.js)
+    def mvnDeps = Seq(
+      mvn"org.typelevel::cats-core::${v.cats}",
+      mvn"org.typelevel::cats-effect::${v.catsEffect}"
+    )
+    def mainClass = Some("kolla.web.Main")
+    def moduleKind = ModuleKind.NoModule
+
+    /** The page that loads the bundle. Declared as a source so a change to it
+      * invalidates `bundle`.
+      */
+    def indexHtml = Task.Source(moduleDir / "index.html")
+
+    /** A servable directory: the linked bundle next to the page that loads it. */
+    def bundle = Task {
+      val out = Task.dest
+      os.copy(fastLinkJS().dest.path, out, mergeFolders = true, replaceExisting = true)
+      os.copy.over(indexHtml().path, out / "index.html")
+      PathRef(out)
+    }
+
+    /** The same, fully optimised, for publishing. */
+    def bundleOpt = Task {
+      val out = Task.dest
+      os.copy(fullLinkJS().dest.path, out, mergeFolders = true, replaceExisting = true)
+      os.copy.over(indexHtml().path, out / "index.html")
+      PathRef(out)
+    }
+    object test extends KollaTests with ScalaJSTests {
+      def mvnDeps = super.mvnDeps() ++ Seq(mvn"org.typelevel::munit-cats-effect::${v.munitCatsEffect}")
+    }
   }
 }
 

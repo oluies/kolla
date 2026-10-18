@@ -891,3 +891,51 @@ v4.25.0 run before P10 reported `change-definitional-height` as a rejection of
 The subtraction is also why a negative corpus is never mutated. Its baseline
 rejects by construction, so a mutation of the declaration already rejected
 produces no new rejection and would be reported as a bad mutant.
+
+## Frontends
+
+### F1 — the checking is one implementation, the driver loop is three
+
+`kolla.leanexport.Replay` replays an export file's declarations into an
+environment one step at a time and has no effect type of its own. A step is one
+declaration, or one whole inductive block, which has to be added at once since
+the kernel derives its constructors and recursors together.
+
+The three frontends differ only in how they interleave. `cli` wraps it in `IO`
+with an `IO.cede` every 32 declarations. `difftest` does the same and records a
+verdict per declaration. `web` runs it in slices on the browser's event loop.
+If the loop were the shared part instead, each frontend would carry its own copy
+of the block grouping and the hoisting pass, and the three could disagree about
+what kolla accepts.
+
+`ReplayTally` is shared for the same reason: "accepted" means one thing, and the
+command line's exit code, the browser's banner and the platform's verdict all
+come from it.
+
+### F2 — the browser slices by time, not by count
+
+`web.Main.sliceMillis` is a time budget per animation frame, not a number of
+declarations. Declarations differ in cost by orders of magnitude — one `String`
+theorem outweighs a thousand constructors — so a count either stutters on the
+expensive ones or wastes frames on the cheap ones. A single declaration is still
+atomic: a slice can overrun its budget by whatever one step costs, and nothing
+can be done about that without splitting the kernel's own work.
+
+### F3 — the page builds itself
+
+`web/index.html` loads the bundle and declares nothing else; `web.Layout` creates
+every element. The ids `web.Main` writes to are therefore the ids that exist, and
+renaming one cannot leave a dangling lookup in markup nobody compiles.
+
+`scalajs-dom` is not among the dependencies the project allows, so the handful
+of browser calls are declared in `web.Dom`.
+
+### F4 — the command line is `fs2.io.file`, not `java.nio`
+
+`cli` is cross-built for the JVM and Scala Native, so it is subject to the same
+rule as the other cross modules: no JVM-only APIs. Reading a file is
+`fs2.io.file.Files`, and `-` is standard input, so one source builds both.
+
+Exit codes are 0 for a file whose every declaration was accepted, 1 for a
+rejection, and 2 for a file that could not be read — a distinction a caller
+needs, since an unreadable file is not a proof of anything.

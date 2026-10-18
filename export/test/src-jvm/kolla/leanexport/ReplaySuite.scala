@@ -1,9 +1,8 @@
-package kolla.difftest
+package kolla.leanexport
 
 import kolla.kernel.*
-import kolla.leanexport.*
 
-class HoistSuite extends munit.FunSuite:
+class ReplaySuite extends munit.FunSuite:
 
   private def items(name: String): Vector[ExportItem] =
     val in = getClass.getResourceAsStream("/" + name)
@@ -19,7 +18,7 @@ class HoistSuite extends munit.FunSuite:
 
   /** The items an inductive block spans, by group, as the checker loop sees it. */
   private def blocks(xs: Vector[ExportItem]): List[List[String]] =
-    val starts = KollaChecker.groupStarts(xs)
+    val starts = Replay.groupStarts(xs)
     val ends   = starts.drop(1) :+ xs.length
     starts.indices.toList.map(g => (starts(g) until ends(g)).toList.flatMap(i => xs(i).names.map(_.toString)))
 
@@ -46,7 +45,7 @@ class HoistSuite extends munit.FunSuite:
     fixtures.foreach { f =>
       val xs = items(f)
       KernelProfile.all.foreach { p =>
-        val out  = KollaChecker.hoistExtensionConstants(xs, p)
+        val out  = Replay.hoistExtensionConstants(xs, p)
         val want = blocks(xs).map(_.toSet).toSet
         val got  = blocks(out).map(_.toSet).toSet
         assertEquals(got, want, clue((f, p.label)))
@@ -58,10 +57,10 @@ class HoistSuite extends munit.FunSuite:
     fixtures.foreach { f =>
       val xs = items(f)
       KernelProfile.all.foreach { p =>
-        val out = KollaChecker.hoistExtensionConstants(xs, p)
+        val out = Replay.hoistExtensionConstants(xs, p)
         assertEquals(out.length, xs.length, clue((f, p.label)))
         assertEquals(out.toSet, xs.toSet, clue((f, p.label)))
-        assertEquals(KollaChecker.hoistExtensionConstants(out, p), out, clue((f, p.label)))
+        assertEquals(Replay.hoistExtensionConstants(out, p), out, clue((f, p.label)))
       }
     }
   }
@@ -77,7 +76,7 @@ class HoistSuite extends munit.FunSuite:
     fixtures.foreach { f =>
       val xs = items(f)
       KernelProfile.all.foreach { p =>
-        val t = trace(xs, KollaChecker.hoistExtensionConstants(xs, p))
+        val t = trace(xs, Replay.hoistExtensionConstants(xs, p))
         val descents = t.sliding(2).count(w => w.length == 2 && w(1) < w(0))
         assert(descents <= 1, clue((f, p.label, descents)))
       }
@@ -90,7 +89,7 @@ class HoistSuite extends munit.FunSuite:
     * reproduced by moving a block the kernel needs behind its first use.
     */
   private def demote(xs: Vector[ExportItem], name: String): Vector[ExportItem] =
-    val starts = KollaChecker.groupStarts(xs)
+    val starts = Replay.groupStarts(xs)
     val ends   = starts.drop(1) :+ xs.length
     val g      = starts.indices.find(k => (starts(k) until ends(k)).exists(i => xs(i).names.exists(_.toString == name)))
     assert(g.isDefined, s"no group declares $name")
@@ -98,23 +97,28 @@ class HoistSuite extends munit.FunSuite:
     xs.zipWithIndex.filter((_, i) => !span.contains(i)).map(_._1) ++
       xs.zipWithIndex.filter((_, i) => span.contains(i)).map(_._1)
 
+  /** Replays every item and returns each step's outcome. */
+  private def replayAll(xs: Vector[ExportItem], p: KernelProfile, hoist: Boolean): Vector[ReplayStep] =
+    val r   = new Replay(xs, p, hoist)
+    val out = Vector.newBuilder[ReplayStep]
+    while r.hasNext do out += r.next()
+    out.result()
+
   test("a demoted Nat block is rejected unhoisted and accepted hoisted") {
-    import cats.effect.unsafe.implicits.global
-    val xs = items("nat-add-3.1.0.ndjson")
-    val p  = KernelProfile.v4_35
+    val xs  = items("nat-add-3.1.0.ndjson")
+    val p   = KernelProfile.v4_35
     val bad = demote(xs, "Nat")
     assertNotEquals(bad, xs)
 
     // Without the pass the Nat literal has nothing to expand to.
-    val raw = KollaChecker.check(bad, p, "t", "t", hoist = false).unsafeRunSync()
-    assert(raw.rejected > 0, clue(raw.results.map(r => r.name.toString -> r.verdict.label).toString))
+    val raw = replayAll(bad, p, hoist = false)
+    assert(raw.exists(_.outcome.isRejection), clue(raw.map(s => s.names.toString -> s.outcome).toString))
 
     // With it the file checks, and the order is the one the file started with.
-    val fixed = KollaChecker.hoistExtensionConstants(bad, p)
-    assertEquals(fixed.map(_.names), xs.map(_.names))
-    val good = KollaChecker.check(bad, p, "t", "t").unsafeRunSync()
-    assertEquals(good.unexpected.length, 0, clue(good.unexpected.map(_.name.toString).toString))
-    assertEquals(good.accepted, xs.length)
+    assertEquals(Replay.hoistExtensionConstants(bad, p).map(_.names), xs.map(_.names))
+    val good = replayAll(bad, p, hoist = true)
+    assertEquals(good.count(_.outcome != ReplayOutcome.Checked), 0, clue(good.map(_.outcome).toString))
+    assertEquals(good.flatMap(_.names).length, xs.length)
   }
 
   test("every extension constant present lands in the hoisted half") {
@@ -123,21 +127,21 @@ class HoistSuite extends munit.FunSuite:
     // has nothing to expand to. See docs/semantics.md P10.
     val xs = items("nat-add-3.1.0.ndjson")
     val p  = KernelProfile.v4_35
-    val out = KollaChecker.hoistExtensionConstants(xs, p)
+    val out = Replay.hoistExtensionConstants(xs, p)
     val t   = trace(xs, out)
     // The hoisted half is the first increasing run.
     val boundary = t.sliding(2).indexWhere(w => w.length == 2 && w(1) < w(0)) match
       case -1 => t.length
       case k  => k + 1
     val hoisted = out.take(boundary).flatMap(_.names).toSet
-    val present = KollaChecker.extensionConstants(p).filter(c => xs.exists(_.names.contains(c)))
+    val present = Replay.extensionConstants(p).filter(c => xs.exists(_.names.contains(c)))
     assert(present.nonEmpty, clue(xs.flatMap(_.names).map(_.toString).take(40).toString))
     present.foreach(c => assert(hoisted.contains(c), clue(s"$c is not in the hoisted half")))
   }
 
   test("the hoisted half really is a prefix when the file needs reordering") {
     val xs  = demote(items("nat-add-3.1.0.ndjson"), "Nat")
-    val out = KollaChecker.hoistExtensionConstants(xs, KernelProfile.v4_35)
+    val out = Replay.hoistExtensionConstants(xs, KernelProfile.v4_35)
     val t   = trace(xs, out)
     val boundary = t.sliding(2).indexWhere(w => w.length == 2 && w(1) < w(0)) + 1
     assert(boundary > 0 && boundary < out.length, clue((boundary, out.length)))
@@ -209,7 +213,7 @@ class HoistSuite extends munit.FunSuite:
     )
 
   test("an extension constant drags its earlier dependencies into the prefix") {
-    val out = KollaChecker.hoistExtensionConstants(withBackwardDep, KernelProfile.v4_35)
+    val out = Replay.hoistExtensionConstants(withBackwardDep, KernelProfile.v4_35)
     val order = out.flatMap(_.names).map(_.toString)
     assertEquals(order, Vector("Unrelated", "Helper", "String.ofList", "User"))
     // `Helper` and `Unrelated` are not extension constants; they are in the
@@ -235,7 +239,7 @@ class HoistSuite extends munit.FunSuite:
     inputs.foreach { xs =>
       val names = xs.map(_.names)
       KernelProfile.all.foreach { p =>
-        val out      = KollaChecker.hoistExtensionConstants(xs, p)
+        val out      = Replay.hoistExtensionConstants(xs, p)
         val outIndex = out.zipWithIndex.toMap
         val inIndex  = xs.zipWithIndex.toMap
         satisfiedEdges(xs).foreach { (user, dep) =>
@@ -255,7 +259,7 @@ class HoistSuite extends munit.FunSuite:
     // Otherwise the invariant above would hold vacuously on the one input that
     // is reordered at all.
     val xs  = demote(items("nat-add-3.1.0.ndjson"), "Nat")
-    val out = KollaChecker.hoistExtensionConstants(xs, KernelProfile.v4_35)
+    val out = Replay.hoistExtensionConstants(xs, KernelProfile.v4_35)
     assertNotEquals(out, xs)
     val edges = satisfiedEdges(xs)
     assert(edges.size >= 5, clue(edges.size))
@@ -267,8 +271,8 @@ class HoistSuite extends munit.FunSuite:
   }
 
   test("a constant the kernel never reaches for is not hoisted") {
-    assert(!KollaChecker.extensionConstants(KernelProfile.v4_35).contains(n("List.append")))
-    assert(KollaChecker.extensionConstants(KernelProfile.v4_25).contains(n("String.mk")))
-    assert(KollaChecker.extensionConstants(KernelProfile.v4_35).contains(n("String.ofList")))
-    assert(!KollaChecker.extensionConstants(KernelProfile.v4_35).contains(n("String.mk")))
+    assert(!Replay.extensionConstants(KernelProfile.v4_35).contains(n("List.append")))
+    assert(Replay.extensionConstants(KernelProfile.v4_25).contains(n("String.mk")))
+    assert(Replay.extensionConstants(KernelProfile.v4_35).contains(n("String.ofList")))
+    assert(!Replay.extensionConstants(KernelProfile.v4_35).contains(n("String.mk")))
   }

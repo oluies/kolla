@@ -1,0 +1,105 @@
+package kolla.cli
+
+import cats.effect.IO
+import kolla.kernel.*
+import kolla.leanexport.*
+import munit.CatsEffectSuite
+
+class CheckSuite extends CatsEffectSuite:
+
+  /** A hand-built export: an axiom, a definition that uses it, and a broken
+    * definition whose stated type is a proposition and whose value is a type.
+    *
+    * Built rather than read from a file so the suite runs on the native build
+    * too, where there is no classpath to load a resource from.
+    */
+  private val prop: Expr = Expr.Sort(Level.zero)
+  private val type0: Expr = Expr.Sort(Level.Succ(Level.zero))
+
+  private def axiom(name: String, tpe: Expr): ExportItem =
+    ExportItem.Info(ConstantInfo.AxiomInfo(AxiomVal(ConstantVal(Name.parse(name), Nil, tpe), isUnsafe = false)))
+
+  private def defn(name: String, tpe: Expr, value: Expr): ExportItem =
+    ExportItem.Info(
+      ConstantInfo.DefnInfo(
+        DefinitionVal(
+          ConstantVal(Name.parse(name), Nil, tpe), value,
+          ReducibilityHints.Abbrev, DefinitionSafety.Safe, List(Name.parse(name))
+        )
+      )
+    )
+
+  private val good: Vector[ExportItem] =
+    Vector(axiom("P", prop), defn("Q", type0, prop))
+
+  private val bad: Vector[ExportItem] =
+    good :+ defn("Broken", prop, type0)
+
+  private def silent(n: Name, o: ReplayOutcome, nanos: Long): IO[Unit] = IO.unit
+
+  test("a well-formed export is accepted and reports a wall time") {
+    Check.run(good, KernelProfile.v4_35, abortOnReject = false, silent).map { r =>
+      assertEquals(r.tally.accepted, 2)
+      assertEquals(r.tally.rejected, 0)
+      assert(r.tally.ok)
+      assert(r.wallNanos >= 0L)
+    }
+  }
+
+  test("a broken declaration is rejected and named") {
+    Check.run(bad, KernelProfile.v4_35, abortOnReject = false, silent).map { r =>
+      assertEquals(r.tally.rejected, 1)
+      assert(!r.tally.ok)
+      assertEquals(r.tally.firstRejection.map(_._1.toString), Some("Broken"))
+    }
+  }
+
+  test("emit sees every declaration, in order") {
+    for
+      seen <- IO.ref(Vector.empty[(String, String)])
+      _ <- Check.run(
+             bad, KernelProfile.v4_35, abortOnReject = false,
+             (n, o, _) => seen.update(_ :+ (n.toString, Render.label(o)))
+           )
+      got <- seen.get
+    yield assertEquals(got, Vector(("P", "accepted"), ("Q", "accepted"), ("Broken", "rejected")))
+  }
+
+  test("--abort stops after the first rejection and counts the rest unreached") {
+    val items = bad :+ defn("After", type0, prop)
+    for
+      seen <- IO.ref(Vector.empty[String])
+      r    <- Check.run(items, KernelProfile.v4_35, abortOnReject = true, (n, _, _) => seen.update(_ :+ n.toString))
+      got  <- seen.get
+    yield
+      assertEquals(r.tally.rejected, 1)
+      assertEquals(r.tally.notReached, 1)
+      assertEquals(r.tally.total, 4)
+      // `After` was never checked, so it was never emitted.
+      assertEquals(got, Vector("P", "Q", "Broken"))
+  }
+
+  test("without --abort the run continues past a rejection") {
+    val items = bad :+ defn("After", type0, prop)
+    Check.run(items, KernelProfile.v4_35, abortOnReject = false, silent).map { r =>
+      assertEquals(r.tally.notReached, 0)
+      assertEquals(r.tally.accepted, 3)
+      assertEquals(r.tally.rejected, 1)
+    }
+  }
+
+  test("an unreadable file is a left, not an exception") {
+    Check.file("x", "this is not an export", KernelProfile.v4_35, false, silent).map {
+      case Left(m)  => assert(clue(m).startsWith("x: "))
+      case Right(r) => fail(s"expected a read failure, got $r")
+    }
+  }
+
+  test("a readable file goes through the same path as items") {
+    val fmt  = ExportFormat.Ndjson("3.1.0")
+    val text = ExportWriter.toString(ExportEnv(fmt, None, good), fmt)
+    Check.file("x", text, KernelProfile.v4_35, false, silent).map {
+      case Left(m)  => fail(m)
+      case Right(r) => assertEquals(r.tally.accepted, 2)
+    }
+  }
