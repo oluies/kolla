@@ -27,6 +27,23 @@ The checking itself is `kolla.leanexport.Replay`, a pure stepper shared by all
 three frontends; they differ only in how they interleave its steps — a fiber
 yield, an animation frame, a blocking loop.
 
+## As a library
+
+`kernel`, `export` and `dsl` publish their JVM artifacts under
+`io.github.oluies`:
+
+```scala
+mvn"io.github.oluies::kolla-kernel:0.1.0"
+mvn"io.github.oluies::kolla-export:0.1.0"
+mvn"io.github.oluies::kolla-dsl:0.1.0"
+```
+
+Nothing has been released yet — the workflow is tag-driven and has not been
+run, so for now `./mill kernel.jvm.publishM2Local` is the way to depend on it.
+`docs/build.md` has the release path and why there is no cross-build over Scala
+versions: Scala 3 reads the TASTy of earlier 3.x releases, so a consumer on
+3.10 can use an artifact built with the pinned 3.9.0.
+
 ## The command line
 
 ```
@@ -84,6 +101,16 @@ source references.
 An export is accepted under its own profile and generally rejected under the
 others, which is the signal the profiles are there for.
 
+One profile difference costs more than correctness. Lean added a positive
+`is_def_eq` cache in v4.35 and kolla does not keep one below that release
+either. `std` then costs more than a 24 GB heap, exhausting it after 55
+minutes, where the v4.35.0 profile checks the same corpus in 305 seconds and
+3.8 GB; Lean's own cache-free kernel does those modules in 74 seconds. It is
+one declaration rather than the corpus —
+`Std.Tactic.BVDecide.BVExpr.bitblast.blastUdiv.blastDivSubtractShift` — and
+docs/semantics.md P12 has the isolation. A library corpus on a pre-v4.35
+profile is therefore not something kolla finishes today.
+
 ## The differential platform
 
 `difftest` runs kolla against other checkers and against kolla's own builds.
@@ -119,6 +146,30 @@ mill difftest.run mutants                   # the negative corpus
 every push, and a job per toolchain; `nightly.yml` runs the libraries and the
 mathlib sample.
 
+### What it has found
+
+At v4.35.0, every declaration of four corpora was accepted, with an independent
+checker accepting each of the same four export files:
+
+| corpus | declarations | reference |
+|---|---|---|
+| `init` | 59,349 | nanoda |
+| `std` | 99,619 | nanoda |
+| `lean` | 171,705 | nanoda |
+| `mathlib-sample` | 19,020 | nanoda |
+
+`init` at v4.28.0 adds 51,759 more against `lean4checker`. Read that precisely:
+both references report one verdict for a whole file, so the agreement is at file
+granularity. Only the comparison of kolla's own four builds is declaration by
+declaration.
+
+Two kernel bugs came out of it, neither of which the unit suites reached:
+the kernel's literal extensions refer to constants that are not syntactic
+dependencies, so an export can declare them after their first use
+(docs/semantics.md P10); and a nested inductive's recursor took its major
+premise from the block's head rather than from its own type, which falsely
+rejected 9 declarations (K17).
+
 ## docs/semantics.md
 
 Every place where the behaviour was not obvious from the specification is
@@ -137,7 +188,8 @@ Mill, pinned by `.mill-version`; `./mill` bootstraps it.
 ```
 
 Scala Native needs clang and the usual native toolchain; the browser smoke test
-needs Playwright.
+needs Playwright. `docs/build.md` covers the Scala version pin, the Scala.js
+linker failure behind it, and publishing.
 
 ## What it costs
 
