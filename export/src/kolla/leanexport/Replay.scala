@@ -32,40 +32,155 @@ final case class ReplayStep(names: List[Name], outcome: ReplayOutcome)
   * together. Each step gets its own `TypeChecker`, as `environment::add_*`
   * does, which `DeclarationChecker` arranges.
   */
+/** Replays an export file's declarations into an environment, one step at a
+  * time, with no effect type of its own.
+  *
+  * The driver loops in `cli`, `web` and `difftest` differ only in how they
+  * interleave: a fiber yield, an animation frame, a blocking loop. The checking
+  * itself is the same and lives here, so the three cannot drift.
+  *
+  * A step is one declaration, or one whole inductive block: a block has to be
+  * added at once, since the kernel derives its constructors and recursors
+  * together. Each step gets its own `TypeChecker`, as `environment::add_*`
+  * does, which `DeclarationChecker` arranges.
+  *
+  * Items are pushed in with `feed` and `finish`, so a driver can supply them
+  * from a stream and never hold the whole file. Only the hoisting prefix is
+  * retained; see `Replay.hoistExtensionConstants` and docs/semantics.md P13.
+  */
 final class Replay(
-    source: Vector[ExportItem],
     val profile: KernelProfile,
     /** Whether to move the kernel's ambient constants to the front first. Off
       * only to show what the pass is for; a real run leaves it on.
       */
-    hoist: Boolean = true
+    hoist: Boolean = true,
+    /** How many items the hoisting pass may hold back. The prefix is released
+      * at the first group boundary once every ambient constant has been
+      * declared or this many items are held, whichever comes first, so a
+      * stream never retains more than a window. See docs/semantics.md P13.
+      */
+    hoistWindow: Int = Replay.defaultHoistWindow
 ):
 
-  /** The items in the order they are replayed. */
-  val items: Vector[ExportItem] =
-    if hoist then Replay.hoistExtensionConstants(source, profile) else source
+  /** Feeds a whole file at once, which is what a frontend with the items
+    * already in memory wants.
+    */
+  def this(items: Vector[ExportItem], profile: KernelProfile, hoist: Boolean) =
+    // An unbounded window: the items are already in memory, so holding them
+    // costs nothing and the order is exactly what the whole-file pass gives.
+    this(profile, hoist, Int.MaxValue)
+    items.foreach(feed)
+    finish()
+
+  def this(items: Vector[ExportItem], profile: KernelProfile) =
+    this(items, profile, true)
 
   private val dc = new DeclarationChecker(profile)
 
   private var env: Environment = Environment.empty
-  private var i: Int           = 0
+
+  /** Items whose order is settled and which have not been stepped yet. */
+  private val ready = mutable.ArrayDeque.empty[ExportItem]
+
+  /** Items held back while the ambient constants are still being waited for. */
+  private val prefix = mutable.ArrayBuffer.empty[ExportItem]
+
+  private var hoisting: Boolean = hoist
+  private val awaited           = mutable.Set.from(Replay.extensionConstants(profile))
+  private var completedAt: Int  = -1
+  private var block: Option[Set[Name]] = None
+
+  private val late                 = mutable.ArrayBuffer.empty[Name]
+  private var consumed: Int        = 0
+  private var fed: Int             = 0
+  private var finished: Boolean    = false
 
   def environment: Environment = env
-  def position: Int            = i
-  def size: Int                = items.length
-  def hasNext: Boolean         = i < items.length
+  def position: Int            = consumed
 
-  /** The names of every remaining item, consuming them without checking.
+  /** The number of items fed, once known; `-1` while a stream is still open. */
+  def size: Int = if finished then fed else -1
+
+  /** Ambient constants the file declared after the hoisting prefix was cut.
+    *
+    * Empty for every export whose `Init` comes first, which is every export
+    * lean4export produces for a real project. Non-empty means the window was
+    * too small to hoist them, so a literal expansion may have had nothing to
+    * expand to; a frontend reports it rather than calling the result a
+    * disagreement. See docs/semantics.md P13.
+    */
+  def lateAmbientConstants: List[Name] = late.toList
+
+  def hasNext: Boolean = stepLength().isDefined
+
+  /** Accepts one more item. */
+  def feed(item: ExportItem): Unit =
+    require(!finished, "Replay.feed after finish()")
+    fed += 1
+    if !hoisting then
+      // Past the cut the pass can no longer place this first, so record it:
+      // a rejection downstream may be P10 rather than a real disagreement.
+      item.names.foreach(n => if awaited.remove(n) then late += n)
+      ready += item
+    else
+      val startsGroup = !block.exists(Replay.continuesBlock(item, _))
+      if startsGroup && (completedAt >= 0 || prefix.length >= hoistWindow) then
+        // Either every ambient constant is in, or the window is full. Either
+        // way a group has just closed, so the held prefix can be released.
+        flushPrefix()
+        item.names.foreach(n => if awaited.remove(n) then late += n)
+        ready += item
+      else
+        if startsGroup then
+          block = item match
+            case ExportItem.Info(ConstantInfo.InductInfo(first)) => Some(first.all.toSet)
+            case _                                               => None
+        prefix += item
+        item.names.foreach(awaited.remove)
+        if awaited.isEmpty && completedAt < 0 then completedAt = prefix.length - 1
+
+  /** Declares that no more items are coming. */
+  def finish(): Unit =
+    if !finished then
+      if hoisting then flushPrefix()
+      finished = true
+
+  private def flushPrefix(): Unit =
+    val head = prefix.toVector
+    ready ++= (if hoist then Replay.hoistExtensionConstants(head, profile) else head)
+    prefix.clear()
+    hoisting = false
+
+  /** The names of every buffered item, consuming them without checking.
     *
     * Used when a frontend abandons the rest of a file, which is how
-    * `lean4checker`'s abort-on-first-problem behaviour is matched.
+    * `lean4checker`'s abort-on-first-problem behaviour is matched. A streaming
+    * driver has to account for the items it never fed itself.
     */
   def skipRest(): Vector[List[Name]] =
+    if hoisting then flushPrefix()
     val out = Vector.newBuilder[List[Name]]
-    while i < items.length do
-      out += items(i).names
-      i += 1
+    while ready.nonEmpty do
+      out += ready.removeHead().names
+      consumed += 1
     out.result()
+
+  /** How many buffered items the next step consumes, or `None` if that is not
+    * yet settled: an inductive block is only known to have ended once the item
+    * after it has arrived, or the stream has closed.
+    */
+  private def stepLength(): Option[Int] =
+    if ready.isEmpty then None
+    else
+      ready.head match
+        case ExportItem.Info(ConstantInfo.InductInfo(first)) =>
+          val b        = first.all.toSet
+          var j        = 0
+          var scanning = true
+          while scanning && j < ready.length do
+            if Replay.continuesBlock(ready(j), b) then j += 1 else scanning = false
+          if !scanning || finished then Some(j) else None
+        case _ => Some(1)
 
   /** Replays one declaration or block and advances past it.
     *
@@ -75,8 +190,13 @@ final class Replay(
     * spurious ones. See docs/semantics.md P6.
     */
   def next(): ReplayStep =
-    require(hasNext, "Replay.next() past the end")
-    val (names, step, recover) = pending()
+    val n = stepLength()
+    require(n.isDefined, "Replay.next() without a complete step")
+    val slice = Vector.tabulate(n.get)(ready(_))
+    var k     = 0
+    while k < n.get do { ready.removeHead(); k += 1 }
+    consumed += n.get
+    val (names, step, recover) = pending(slice)
     val (outcome, nextEnv) =
       try
         val (e, out) = step()
@@ -92,26 +212,19 @@ final class Replay(
     nextEnv.foreach(e => env = e)
     ReplayStep(names, outcome)
 
-  /** The step at the current position, advancing `i` past what it consumes. */
-  private def pending(): (List[Name], () => (Environment, CheckOutcome), Environment => Environment) =
-    items(i) match
-      case ExportItem.Info(ConstantInfo.InductInfo(first)) =>
-        val block = first.all.toSet
+  /** The step the slice amounts to: one declaration, or one inductive block. */
+  private def pending(slice: Vector[ExportItem]): (List[Name], () => (Environment, CheckOutcome), Environment => Environment) =
+    slice.head match
+      case ExportItem.Info(ConstantInfo.InductInfo(_)) =>
         val inds  = List.newBuilder[InductiveVal]
         val ctors = List.newBuilder[ConstructorVal]
         val recs  = List.newBuilder[RecursorVal]
-        var j        = i
-        var scanning = true
-        while scanning && j < items.length do
-          items(j) match
-            case ExportItem.Info(ConstantInfo.InductInfo(v)) if block.contains(v.toConstantVal.name) =>
-              inds += v; j += 1
-            case ExportItem.Info(ConstantInfo.CtorInfo(v)) if block.contains(v.induct) =>
-              ctors += v; j += 1
-            case ExportItem.Info(ConstantInfo.RecInfo(v)) if v.all.toSet == block =>
-              recs += v; j += 1
-            case _ => scanning = false
-        i = j
+        slice.foreach {
+          case ExportItem.Info(ConstantInfo.InductInfo(v)) => inds += v
+          case ExportItem.Info(ConstantInfo.CtorInfo(v))   => ctors += v
+          case ExportItem.Info(ConstantInfo.RecInfo(v))    => recs += v
+          case _                                           => ()
+        }
         val exportedInds  = inds.result()
         val exportedCtors = ctors.result()
         val exportedRecs  = recs.result()
@@ -135,17 +248,14 @@ final class Replay(
           e => blockInfos.foldLeft(e)((acc, x) => if acc.contains(x.name) then acc else acc.addCore(x))
         )
       case ExportItem.Info(info) =>
-        i += 1
         (
           List(info.name),
           () => dc.addInfo(env, info),
           e => if e.contains(info.name) then e else e.addCore(info)
         )
       case ExportItem.Decl(d) =>
-        i += 1
         (d.declNames, () => (dc.add(env, d), CheckOutcome.Checked), identity)
       case ExportItem.DefnWithoutHints(n, lp, t, v) =>
-        i += 1
         // Text v1 carries no reducibility hint; the kernel supplies one.
         val defn = DefinitionVal(ConstantVal(n, lp, t), v, ReducibilityHints.Regular(0), DefinitionSafety.Safe, List(n))
         (
@@ -155,6 +265,28 @@ final class Replay(
         )
 
 object Replay:
+
+  /** How many items a streaming hoist holds back by default.
+    *
+    * The pass only has to span the distance between an ambient constant's
+    * first use and its declaration. lean4export orders by syntactic
+    * dependency, and the widest case measured is the v4.25.0 `case-strlit`
+    * export, where `appendLit` is item 406 and `String.mk` item 1822. A window
+    * of this size covers that by three orders of magnitude while bounding what
+    * a stream retains.
+    */
+  val defaultHoistWindow: Int = 1 << 16
+
+  /** Whether `item` belongs to the inductive block whose `all` list is `block`.
+    *
+    * The same predicate decides where a group ends in `groupStarts` and where
+    * the next step ends in `Replay.stepLength`, so the two cannot disagree.
+    */
+  def continuesBlock(item: ExportItem, block: Set[Name]): Boolean = item match
+    case ExportItem.Info(ConstantInfo.InductInfo(v)) => block.contains(v.toConstantVal.name)
+    case ExportItem.Info(ConstantInfo.CtorInfo(v))   => block.contains(v.induct)
+    case ExportItem.Info(ConstantInfo.RecInfo(v))    => v.all.toSet == block
+    case _                                           => false
 
   /** The constants the kernel's literal extensions refer to by name.
     *
@@ -184,15 +316,11 @@ object Replay:
       starts += i
       items(i) match
         case ExportItem.Info(ConstantInfo.InductInfo(first)) =>
-          val block = first.all.toSet
+          val block    = first.all.toSet
           var j        = i + 1
           var scanning = true
           while scanning && j < items.length do
-            items(j) match
-              case ExportItem.Info(ConstantInfo.InductInfo(v)) if block.contains(v.toConstantVal.name) => j += 1
-              case ExportItem.Info(ConstantInfo.CtorInfo(v)) if block.contains(v.induct)               => j += 1
-              case ExportItem.Info(ConstantInfo.RecInfo(v)) if v.all.toSet == block                    => j += 1
-              case _ => scanning = false
+            if continuesBlock(items(j), block) then j += 1 else scanning = false
           i = j
         case _ => i += 1
     starts.result()
