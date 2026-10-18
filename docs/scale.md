@@ -53,6 +53,26 @@ The remaining 56,642 are reported as admitted unchecked on stderr. A verdict
 under `--check` covers the selection and not the file; see docs/semantics.md
 P14.
 
+## Checking again
+
+`--cache <file>` keys each declaration by a digest of itself and everything it
+depends on. On `init` v4.35.0, 59,349 declarations:
+
+| run | result | wall |
+|---|---|---|
+| no cache | 59,349 accepted | 47.7s |
+| cold, writing the cache | 59,349 accepted | 96.0s |
+| warm, reusing it | 59,349 cached | 26.7s |
+
+The cache file holds 57,919 digests for 59,349 declarations, because an
+inductive block is one step and its names share a digest.
+
+A warm run is not free: the file still has to be read and digested to establish
+that it is the same file, and the digest is a second walk over every
+expression, which is why the cold run costs about double. The gain therefore
+follows how much of a run is checking rather than parsing — about half for
+`init`, and far more for a corpus where single declarations are expensive.
+
 ## Profiles are not equal
 
 The v4.35 kernel keeps a positive `is_def_eq` cache and earlier releases do
