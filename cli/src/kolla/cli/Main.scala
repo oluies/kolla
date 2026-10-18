@@ -21,6 +21,8 @@ object Main extends IOApp:
       case Right(o) if o.help    => Console[IO].println(Options.usage).as(ExitCode.Success)
       case Right(o) if o.version =>
         Console[IO].println(s"kolla $version, default profile ${o.profile.label}").as(ExitCode.Success)
+      // A listing is an answer, not a misuse: stdout and exit 0, so it pipes.
+      case Right(o) if o.listProfiles => Console[IO].println(Options.profiles).as(ExitCode.Success)
       case Right(o) => checkAll(o)
 
   private def checkAll(o: Options): IO[ExitCode] =

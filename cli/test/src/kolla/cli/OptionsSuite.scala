@@ -58,9 +58,16 @@ class OptionsSuite extends munit.FunSuite:
     assert(m.contains("kolla [options]"))
   }
 
-  test("--profiles is a listing, not a run") {
-    val m = err("--profiles")
-    KernelProfile.all.foreach(p => assert(m.contains(p.label), clue(p.label)))
+  test("--profiles is a listing, not a run and not an error") {
+    val o = ok("--profiles")
+    assert(o.listProfiles)
+    assert(o.files.isEmpty, clue(o.files))
+    KernelProfile.all.foreach(p => assert(Options.profiles.contains(p.label), clue(p.label)))
+  }
+
+  test("a listing takes precedence over a missing file") {
+    // `--profiles`, `--help` and `--version` all answer without a file.
+    List("--profiles", "--help", "--version").foreach(f => Options.parse(List(f)).fold(m => fail(s"$f: $m"), identity))
   }
 
   test("the usage names every exit code the tool returns") {

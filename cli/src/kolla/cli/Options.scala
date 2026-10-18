@@ -17,7 +17,8 @@ final case class Options(
     /** Restrict the report to these declarations; empty means all. */
     only: List[String] = Nil,
     help: Boolean = false,
-    version: Boolean = false
+    version: Boolean = false,
+    listProfiles: Boolean = false
 )
 
 object Options:
@@ -54,7 +55,7 @@ object Options:
       case ("-q" | "--quiet") :: t   => go(t, o.copy(quiet = true))
       case ("-h" | "--help") :: _    => Right(o.copy(help = true))
       case "--version" :: _          => Right(o.copy(version = true))
-      case "--profiles" :: _         => Left(profiles)
+      case "--profiles" :: _         => Right(o.copy(listProfiles = true))
       case "--only" :: v :: t        => go(t, o.copy(only = o.only :+ v))
       case "--profile" :: v :: t =>
         KernelProfile.all.find(p => p.label == v || p.label == s"v$v") match
@@ -63,7 +64,7 @@ object Options:
       case f :: _ if f.startsWith("-") && f != "-" => Left(s"unknown option $f\n\n$usage")
       case f :: t                                  => go(t, o.copy(files = o.files :+ f))
     go(args, Options()).flatMap { o =>
-      if o.help || o.version then Right(o)
+      if o.help || o.version || o.listProfiles then Right(o)
       else if o.files.isEmpty then Left(s"no export file given\n\n$usage")
       else if o.quiet && o.verbose then Left("--quiet and --verbose are mutually exclusive")
       else Right(o)
