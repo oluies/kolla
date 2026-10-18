@@ -30,3 +30,28 @@ start on macOS 27:
 
 So no text v1 export could be produced on this machine; the text v1 reader is
 tested against hand-written files transcribed from `dumpConstant` at `d797849`.
+
+## Publishing
+
+The three library modules publish from the JVM platform only:
+
+| module | artifact |
+|---|---|
+| `kernel.jvm` | `io.github.oluies::kolla-kernel` |
+| `export.jvm` | `io.github.oluies::kolla-export` |
+| `dsl.jvm` | `io.github.oluies::kolla-dsl` |
+
+`cli` and `web` are programs rather than libraries and `difftest` is a test
+harness, so none of them publish.
+
+There is no cross-build over Scala versions, because one is not needed to serve
+a consumer on a later release. Scala 3 reads the TASTy of earlier 3.x versions,
+so an artifact built with 3.9.0 can be depended on from 3.10.0; only the
+reverse fails. Verified rather than assumed: `kernel.jvm.publishM2Local`
+followed by a Mill module with `scalaVersion = "3.10.0"` depending on
+`io.github.oluies::kolla-kernel:0.1.0` compiles and runs. The repository
+already relies on the same guarantee in the other direction of the dependency
+graph, since `cats-core_3:2.13.0` is built with Scala 3.3.4.
+
+The 3.9.0 pin above is therefore about Scala.js linking, not about what a
+consumer can use.

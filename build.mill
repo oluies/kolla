@@ -6,6 +6,7 @@ import mill.scalalib.*
 import mill.scalajslib.*
 import mill.scalajslib.api.ModuleKind
 import mill.scalanativelib.*
+import mill.scalalib.publish.*
 
 object v {
   val scala           = "3.9.0"
@@ -37,6 +38,25 @@ trait KollaBase extends ScalaModule {
   }
 }
 
+/** Publishing, for the JVM artifacts only.
+  *
+  * Scala 3 reads the TASTy of earlier 3.x releases, so a consumer on a later
+  * minor can depend on an artifact built with `v.scala`; the reverse does not
+  * hold. That is why there is no cross-build over Scala versions here. See
+  * docs/build.md.
+  */
+trait KollaPublish extends PublishModule {
+  def publishVersion = "0.1.0"
+  def pomSettings = PomSettings(
+    description = "A Lean 4 kernel type checker",
+    organization = "io.github.oluies",
+    url = "https://github.com/oluies/kolla",
+    licenses = Seq(License.`Apache-2.0`),
+    versionControl = VersionControl.github("oluies", "kolla"),
+    developers = Seq(Developer("oluies", "oluies", "https://github.com/oluies"))
+  )
+}
+
 /** A module cross-built over JVM, Scala.js and Scala Native. */
 trait KollaModule extends KollaBase with PlatformScalaModule
 
@@ -52,7 +72,8 @@ object kernel extends Module {
   trait Shared extends KollaModule {
     def mvnDeps = Seq(mvn"org.typelevel::cats-core::${v.cats}")
   }
-  object jvm extends Shared {
+  object jvm extends Shared with KollaPublish {
+    def artifactName = "kolla-kernel"
     object test extends KollaTests
   }
   object js extends Shared with KollaJsModule {
@@ -161,7 +182,8 @@ object dsl extends Module {
   trait Shared extends KollaModule {
     def mvnDeps = Seq(mvn"org.typelevel::cats-core::${v.cats}")
   }
-  object jvm extends Shared {
+  object jvm extends Shared with KollaPublish {
+    def artifactName = "kolla-dsl"
     def moduleDeps = Seq(kernel.jvm)
     object test extends KollaTests {
       def moduleDeps = super.moduleDeps ++ Seq(build.`export`.jvm)
@@ -184,7 +206,8 @@ object `export` extends Module {
       mvn"co.fs2::fs2-core::${v.fs2}"
     )
   }
-  object jvm extends Shared {
+  object jvm extends Shared with KollaPublish {
+    def artifactName = "kolla-export"
     def moduleDeps = Seq(kernel.jvm)
     object test extends KollaTests
   }
