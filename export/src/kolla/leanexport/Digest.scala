@@ -75,7 +75,34 @@ object Digest:
     case Level.Param(n)    => mixName(mix(d, 5L), n)
     case Level.MVar(n)     => mixName(mix(d, 6L), n)
 
-  /** The expression, with every `Const` and `Proj` standing for what it names.
+  /** A memo of subterm digests, shared across one declaration.
+    *
+    * An export names expressions by index, so a declaration's term graph is a
+    * DAG and the same subterm instance is reached many times. Walking it
+    * structurally re-digests every shared subterm on every path, which is
+    * exponential in the sharing, not linear in the nodes — on Mathlib it does
+    * not finish. The memo is keyed by identity, which is exactly the sharing
+    * the reader produced. See docs/semantics.md P16.
+    */
+  final class Memo:
+    private val seen = scala.collection.mutable.HashMap.empty[Memo.Key, Digest]
+    def getOrElseUpdate(e: Expr)(compute: => Digest): Digest =
+      seen.getOrElseUpdate(new Memo.Key(e), compute)
+    def size: Int = seen.size
+
+  object Memo:
+    /** Identity rather than structure: `Expr.equals` is `is_equal`, which is
+      * O(size) on terms that are equal but not the same instance, and the
+      * point here is to recognise the instances the reader shared.
+      */
+    private final class Key(val e: Expr):
+      override val hashCode: Int = System.identityHashCode(e)
+      override def equals(that: Any): Boolean = that match
+        case k: Key => k.e eq e
+        case _      => false
+
+  /** The digest of one expression, with every `Const` and `Proj` standing for
+    * what it names.
     *
     * `dep` supplies the digest of a constant already declared. A constant that
     * is not known yet — a forward reference, or one the export never declares —
@@ -86,42 +113,57 @@ object Digest:
     * there are the same declaration to the kernel and must not miss the cache.
     * See docs/semantics.md X14.
     */
-  def mixExpr(d0: Digest, e0: Expr, dep: Name => Option[Digest]): Digest =
-    var acc = d0
-    def go(e: Expr): Unit = e match
-      case Expr.BVar(i)            => acc = mixAll(acc, 10L, i.toLong)
-      case Expr.FVar(id)           => acc = mixName(mix(acc, 11L), id)
-      case Expr.MVar(id)           => acc = mixName(mix(acc, 12L), id)
-      case Expr.Sort(l)            => acc = mixLevel(mix(acc, 13L), l)
-      case Expr.Const(n, ls) =>
-        acc = mix(acc, 14L)
-        dep(n) match
-          case Some(x) => acc = mixAll(acc, 1L, x.hi, x.lo)
-          case None    => acc = mixName(mix(acc, 0L), n)
-        acc = mix(acc, ls.length.toLong)
-        ls.foreach(l => acc = mixLevel(acc, l))
-      case Expr.App(f, a)          => acc = mix(acc, 15L); go(f); go(a)
-      case Expr.Lam(_, t, b, _)    => acc = mix(acc, 16L); go(t); go(b)
-      case Expr.ForallE(_, t, b, _) => acc = mix(acc, 17L); go(t); go(b)
-      case Expr.LetE(_, t, v, b, nd) =>
-        acc = mixAll(acc, 18L, if nd then 1L else 0L); go(t); go(v); go(b)
-      case Expr.Lit(Literal.NatVal(v)) => acc = mixString(mix(acc, 19L), v.toString)
-      case Expr.Lit(Literal.StrVal(v)) => acc = mixString(mix(acc, 20L), v)
-      case Expr.MData(_, x)        => acc = mix(acc, 21L); go(x)
-      case Expr.Proj(tn, i, s) =>
-        acc = mix(acc, 22L)
-        dep(tn) match
-          case Some(x) => acc = mixAll(acc, 1L, x.hi, x.lo)
-          case None    => acc = mixName(mix(acc, 0L), tn)
-        acc = mix(acc, i.toLong)
-        go(s)
-    go(e0)
-    acc
+  def exprDigest(e: Expr, dep: Name => Option[Digest], memo: Memo): Digest =
+    memo.getOrElseUpdate(e) {
+      e match
+        case Expr.BVar(i)  => mixAll(seed, 10L, i.toLong)
+        case Expr.FVar(id) => mixName(mix(seed, 11L), id)
+        case Expr.MVar(id) => mixName(mix(seed, 12L), id)
+        case Expr.Sort(l)  => mixLevel(mix(seed, 13L), l)
+        case Expr.Const(n, ls) =>
+          val a = dep(n) match
+            case Some(x) => mixAll(mix(seed, 14L), 1L, x.hi, x.lo)
+            case None    => mixName(mixAll(seed, 14L, 0L), n)
+          ls.foldLeft(mix(a, ls.length.toLong))(mixLevel)
+        case Expr.App(f, a) =>
+          val x = exprDigest(f, dep, memo)
+          val y = exprDigest(a, dep, memo)
+          mixAll(seed, 15L, x.hi, x.lo, y.hi, y.lo)
+        case Expr.Lam(_, t, b, _) =>
+          val x = exprDigest(t, dep, memo)
+          val y = exprDigest(b, dep, memo)
+          mixAll(seed, 16L, x.hi, x.lo, y.hi, y.lo)
+        case Expr.ForallE(_, t, b, _) =>
+          val x = exprDigest(t, dep, memo)
+          val y = exprDigest(b, dep, memo)
+          mixAll(seed, 17L, x.hi, x.lo, y.hi, y.lo)
+        case Expr.LetE(_, t, v, b, nd) =>
+          val x = exprDigest(t, dep, memo)
+          val y = exprDigest(v, dep, memo)
+          val z = exprDigest(b, dep, memo)
+          mixAll(seed, 18L, if nd then 1L else 0L, x.hi, x.lo, y.hi, y.lo, z.hi, z.lo)
+        case Expr.Lit(Literal.NatVal(v)) => mixString(mix(seed, 19L), v.toString)
+        case Expr.Lit(Literal.StrVal(v)) => mixString(mix(seed, 20L), v)
+        case Expr.MData(_, x) =>
+          val y = exprDigest(x, dep, memo)
+          mixAll(seed, 21L, y.hi, y.lo)
+        case Expr.Proj(tn, i, st) =>
+          val a = dep(tn) match
+            case Some(x) => mixAll(mix(seed, 22L), 1L, x.hi, x.lo)
+            case None    => mixName(mixAll(seed, 22L, 0L), tn)
+          val y = exprDigest(st, dep, memo)
+          mixAll(a, i.toLong, y.hi, y.lo)
+    }
 
-  private def mixConstantVal(d: Digest, v: ConstantVal, dep: Name => Option[Digest]): Digest =
+  /** Mixes an expression into a running digest, sharing a memo. */
+  def mixExpr(d: Digest, e: Expr, dep: Name => Option[Digest], memo: Memo): Digest =
+    val x = exprDigest(e, dep, memo)
+    mixAll(d, x.hi, x.lo)
+
+  private def mixConstantVal(d: Digest, v: ConstantVal, dep: Name => Option[Digest], memo: Memo): Digest =
     val a = mixName(d, v.name)
     val b = v.levelParams.foldLeft(mix(a, v.levelParams.length.toLong))(mixName)
-    mixExpr(b, v.tpe, dep)
+    mixExpr(b, v.tpe, dep, memo)
 
   private def mixHints(d: Digest, h: ReducibilityHints): Digest = h match
     case ReducibilityHints.Opaque     => mix(d, 30L)
@@ -133,35 +175,35 @@ object Digest:
     case DefinitionSafety.Safe    => mix(d, 41L)
     case DefinitionSafety.Partial => mix(d, 42L)
 
-  def mixInfo(d: Digest, info: ConstantInfo, dep: Name => Option[Digest]): Digest = info match
+  def mixInfo(d: Digest, info: ConstantInfo, dep: Name => Option[Digest], memo: Memo): Digest = info match
     case ConstantInfo.AxiomInfo(v) =>
-      mixAll(mixConstantVal(mix(d, 50L), v.toConstantVal, dep), if v.isUnsafe then 1L else 0L)
+      mixAll(mixConstantVal(mix(d, 50L), v.toConstantVal, dep, memo), if v.isUnsafe then 1L else 0L)
     case ConstantInfo.DefnInfo(v) =>
-      val a = mixConstantVal(mix(d, 51L), v.toConstantVal, dep)
-      mixSafety(mixHints(mixExpr(a, v.value, dep), v.hints), v.safety)
+      val a = mixConstantVal(mix(d, 51L), v.toConstantVal, dep, memo)
+      mixSafety(mixHints(mixExpr(a, v.value, dep, memo), v.hints), v.safety)
     case ConstantInfo.ThmInfo(v) =>
-      mixExpr(mixConstantVal(mix(d, 52L), v.toConstantVal, dep), v.value, dep)
+      mixExpr(mixConstantVal(mix(d, 52L), v.toConstantVal, dep, memo), v.value, dep, memo)
     case ConstantInfo.OpaqueInfo(v) =>
-      mixAll(mixExpr(mixConstantVal(mix(d, 53L), v.toConstantVal, dep), v.value, dep),
+      mixAll(mixExpr(mixConstantVal(mix(d, 53L), v.toConstantVal, dep, memo), v.value, dep, memo),
              if v.isUnsafe then 1L else 0L)
     case ConstantInfo.QuotInfo(v) =>
-      mixConstantVal(mix(d, 54L), v.toConstantVal, dep)
+      mixConstantVal(mix(d, 54L), v.toConstantVal, dep, memo)
     case ConstantInfo.InductInfo(v) =>
-      val a = mixConstantVal(mix(d, 55L), v.toConstantVal, dep)
+      val a = mixConstantVal(mix(d, 55L), v.toConstantVal, dep, memo)
       val b = mixAll(a, v.numParams.toLong, v.numIndices.toLong,
                      if v.isRec then 1L else 0L, if v.isUnsafe then 1L else 0L,
                      if v.isReflexive then 1L else 0L)
       val c = v.all.foldLeft(mix(b, v.all.length.toLong))(mixName)
       v.ctors.foldLeft(mix(c, v.ctors.length.toLong))(mixName)
     case ConstantInfo.CtorInfo(v) =>
-      val a = mixConstantVal(mix(d, 56L), v.toConstantVal, dep)
+      val a = mixConstantVal(mix(d, 56L), v.toConstantVal, dep, memo)
       mixName(mixAll(a, v.cidx.toLong, v.numParams.toLong, v.numFields.toLong,
                      if v.isUnsafe then 1L else 0L), v.induct)
     case ConstantInfo.RecInfo(v) =>
-      val a = mixConstantVal(mix(d, 57L), v.toConstantVal, dep)
+      val a = mixConstantVal(mix(d, 57L), v.toConstantVal, dep, memo)
       val b = mixAll(a, v.numParams.toLong, v.numIndices.toLong, v.numMotives.toLong,
                      v.numMinors.toLong, if v.k then 1L else 0L, if v.isUnsafe then 1L else 0L)
       val c = v.all.foldLeft(mix(b, v.all.length.toLong))(mixName)
       v.rules.foldLeft(mix(c, v.rules.length.toLong)) { (acc, r) =>
-        mixExpr(mixAll(mixName(acc, r.ctor), r.nfields.toLong), r.rhs, dep)
+        mixExpr(mixAll(mixName(acc, r.ctor), r.nfields.toLong), r.rhs, dep, memo)
       }

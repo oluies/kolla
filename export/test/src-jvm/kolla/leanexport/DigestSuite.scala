@@ -113,24 +113,24 @@ class DigestSuite extends munit.FunSuite:
     val base = Expr.ForallE(Name.parse("x"), Expr.Sort(Level.zero), Expr.BVar(0), BinderInfo.Default)
     val renamed = Expr.ForallE(Name.parse("y"), Expr.Sort(Level.zero), Expr.BVar(0), BinderInfo.Default)
     val implicitly_ = Expr.ForallE(Name.parse("x"), Expr.Sort(Level.zero), Expr.BVar(0), BinderInfo.Implicit)
-    val d0 = Digest.mixExpr(Digest.seed, base, _ => None)
-    assertEquals(Digest.mixExpr(Digest.seed, renamed, _ => None), d0)
-    assertEquals(Digest.mixExpr(Digest.seed, implicitly_, _ => None), d0)
+    val d0 = Digest.mixExpr(Digest.seed, base, _ => None, new Digest.Memo)
+    assertEquals(Digest.mixExpr(Digest.seed, renamed, _ => None, new Digest.Memo), d0)
+    assertEquals(Digest.mixExpr(Digest.seed, implicitly_, _ => None, new Digest.Memo), d0)
   }
 
   test("structure does change the digest") {
     val a = Expr.App(Expr.Sort(Level.zero), Expr.BVar(0))
     val b = Expr.App(Expr.BVar(0), Expr.Sort(Level.zero))
-    assertNotEquals(Digest.mixExpr(Digest.seed, a, _ => None), Digest.mixExpr(Digest.seed, b, _ => None))
+    assertNotEquals(Digest.mixExpr(Digest.seed, a, _ => None, new Digest.Memo), Digest.mixExpr(Digest.seed, b, _ => None, new Digest.Memo))
     val n0 = Expr.Lit(Literal.NatVal(BigInt(1)))
     val n1 = Expr.Lit(Literal.NatVal(BigInt(2)))
-    assertNotEquals(Digest.mixExpr(Digest.seed, n0, _ => None), Digest.mixExpr(Digest.seed, n1, _ => None))
+    assertNotEquals(Digest.mixExpr(Digest.seed, n0, _ => None, new Digest.Memo), Digest.mixExpr(Digest.seed, n1, _ => None, new Digest.Memo))
   }
 
   test("a resolved constant digests differently from an unresolved one") {
     val e   = Expr.Const(Name.parse("Nat"), Nil)
-    val one = Digest.mixExpr(Digest.seed, e, _ => None)
-    val two = Digest.mixExpr(Digest.seed, e, _ => Some(Digest.seed))
+    val one = Digest.mixExpr(Digest.seed, e, _ => None, new Digest.Memo)
+    val two = Digest.mixExpr(Digest.seed, e, _ => Some(Digest.seed), new Digest.Memo)
     assertNotEquals(one, two)
   }
 
@@ -175,4 +175,41 @@ class DigestSuite extends munit.FunSuite:
     runWith(xs, KernelProfile.v4_35, Some(cache))
     val other = runWith(xs, KernelProfile.v4_27, Some(cache))
     assertEquals(other.count(_.outcome.isInstanceOf[ReplayOutcome.Cached]), 0)
+  }
+
+  test("a shared subterm is digested once, not once per path") {
+    // The defect this guards: an export names expressions by index, so a
+    // declaration's term graph is a DAG. Walking it structurally re-digests
+    // every shared subterm on every path. This term has 2^depth paths and
+    // depth+1 distinct nodes; without the memo the walk does not finish.
+    val depth = 40
+    var e: Expr = Expr.Sort(Level.zero)
+    for _ <- 1 to depth do e = Expr.App(e, e)
+
+    val memo = new Digest.Memo
+    val d    = Digest.exprDigest(e, _ => None, memo)
+    assertEquals(memo.size, depth + 1, clue(memo.size))
+    assertNotEquals(d, Digest.seed)
+  }
+
+  test("the memo does not change the digest") {
+    // Two memos, same answer: the memo is an optimisation, so a fresh one must
+    // not alter the value, or a cache written by one run would miss in the next.
+    val e = Expr.App(Expr.Lam(Name.parse("x"), Expr.Sort(Level.zero), Expr.BVar(0), BinderInfo.Default),
+                     Expr.Sort(Level.Succ(Level.zero)))
+    val a = Digest.exprDigest(e, _ => None, new Digest.Memo)
+    val b = Digest.exprDigest(e, _ => None, new Digest.Memo)
+    assertEquals(a, b)
+  }
+
+  test("sharing does not make two different terms agree") {
+    // The memo keys on identity, so it must not conflate distinct shapes that
+    // happen to share subterms.
+    val leaf = Expr.Sort(Level.zero)
+    val x    = Expr.App(Expr.App(leaf, leaf), leaf)
+    val y    = Expr.App(leaf, Expr.App(leaf, leaf))
+    assertNotEquals(
+      Digest.exprDigest(x, _ => None, new Digest.Memo),
+      Digest.exprDigest(y, _ => None, new Digest.Memo)
+    )
   }

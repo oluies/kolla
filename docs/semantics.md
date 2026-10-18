@@ -1149,6 +1149,39 @@ advice and names the flag: the largest committed fixture is 17 MB and `init` is
 292 MB, so the threshold separates a fixture from a library and anything above
 it is the scale at which the missing cache stops being a slowdown.
 
+### P16 — a digest walks a DAG, so it has to memoise
+
+An export names expressions by index, so a declaration's term graph is a DAG
+and the reader hands out the same `Expr` instance everywhere a subterm is
+shared. `Digest.exprDigest` walked it structurally at first, which re-digests
+every shared subterm once per path: exponential in the sharing rather than
+linear in the nodes.
+
+It is not a theoretical cost. On the v4.35.0 export of `Mathlib` — 6.26 GB,
+110,895,826 lines — a run stopped making progress after 150,036 declarations
+and 1,235 MB, one core busy, resident flat at 1.5 GB of a 24 GB heap, and
+stayed there for over thirty minutes. The JVM would not answer `jstack`,
+`jcmd` or `SIGQUIT`, because the thread never reached a safepoint. Two runs
+with different flags stalled at the same byte, which is what ruled out the
+kernel: one of them checked nothing at all.
+
+`Digest.Memo` fixes it, keyed on identity rather than structure —
+`Expr.equals` is `is_equal` and O(size) on terms that are equal without being
+the same instance, and what matters here is exactly the instances the reader
+shared. `DigestSuite` builds a term of 2^40 paths over 41 distinct nodes and
+requires the memo to hold 41 entries; without it that test does not finish.
+
+The digest is also computed only when a cache is in use. It had been
+unconditional, so every run paid a full extra walk over every expression for an
+answer nothing consulted — which is why a run with no `--cache` stalled in the
+same place as one with it.
+
+Two things this changes that are worth stating. Digest values differ from the
+pre-memo implementation, so a cache file written before it will miss rather
+than hit; `Digest.epoch` is left alone because a stale entry can only fail to
+match, not match something it should not. And a run without `--cache` no longer
+maintains the name-to-digest map at all, so it carries nothing per declaration.
+
 ### F8 — resource exhaustion is its own exit code
 
 Exit 2 means the file could not be read and 1 that a declaration was rejected.

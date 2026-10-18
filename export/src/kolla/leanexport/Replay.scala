@@ -185,11 +185,23 @@ final class Replay(
     * one of those simply never hits the cache.
     */
   private def stepDigest(slice: Vector[ExportItem]): Option[Digest] =
-    val infos = slice.collect { case ExportItem.Info(i) => i }
-    if infos.length != slice.length then None
+    // Only when a cache is in play. The walk is not free — it visits every
+    // expression of the declaration — and a run with no cache has nothing to
+    // do with the answer. See docs/semantics.md P16.
+    if cache.isEmpty then None
     else
-      val dep: Name => Option[Digest] = digests.get
-      Some(infos.foldLeft(Digest.mix(baseDigest(), slice.length.toLong))((acc, i) => Digest.mixInfo(acc, i, dep)))
+      val infos = slice.collect { case ExportItem.Info(i) => i }
+      if infos.length != slice.length then None
+      else
+        val dep: Name => Option[Digest] = digests.get
+        // One memo per step, so subterms shared inside a declaration are
+        // digested once.
+        val memo = new Digest.Memo
+        Some(
+          infos.foldLeft(Digest.mix(baseDigest(), slice.length.toLong))((acc, i) =>
+            Digest.mixInfo(acc, i, dep, memo)
+          )
+        )
 
   def hasNext: Boolean = stepLength().isDefined
 
