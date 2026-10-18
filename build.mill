@@ -53,7 +53,14 @@ trait KollaPublish extends SonatypeCentralPublishModule {
     url = "https://github.com/oluies/kolla",
     licenses = Seq(License.`Apache-2.0`),
     versionControl = VersionControl.github("oluies", "kolla"),
-    developers = Seq(Developer("oluies", "oluies", "https://github.com/oluies"))
+    developers = Seq(
+      Developer("oluies", "Örjan Lundberg", "https://github.com/oluies"),
+      Developer(
+        "anthony-lundberg",
+        "Anthony Lundberg",
+        "https://www.linkedin.com/in/anthony-lundberg2/"
+      )
+    )
   )
 }
 

@@ -29,20 +29,25 @@ yield, an animation frame, a blocking loop.
 
 ## As a library
 
-`kernel`, `export` and `dsl` publish their JVM artifacts under
-`io.github.oluies`:
+**Nothing is published yet.** `repo1.maven.org` has no `kolla-kernel_3`, there
+is no release tag, and the release workflow has never run, so a dependency on a
+Central coordinate does not resolve today. To depend on kolla now, build it
+locally:
 
-```scala
-mvn"io.github.oluies::kolla-kernel:0.1.0"
-mvn"io.github.oluies::kolla-export:0.1.0"
-mvn"io.github.oluies::kolla-dsl:0.1.0"
+```bash
+./mill kernel.jvm.publishM2Local     # also export.jvm, dsl.jvm
 ```
 
-Nothing has been released yet — the workflow is tag-driven and has not been
-run, so for now `./mill kernel.jvm.publishM2Local` is the way to depend on it.
-`docs/build.md` has the release path and why there is no cross-build over Scala
-versions: Scala 3 reads the TASTy of earlier 3.x releases, so a consumer on
-3.10 can use an artifact built with the pinned 3.9.0.
+and take the dependency from your own `~/.m2`. `kernel`, `export` and `dsl` are
+the three that publish; `cli` and `web` are programs and `difftest` is a test
+harness. When a release does happen the coordinates will be
+`io.github.oluies::kolla-kernel`, `::kolla-export` and `::kolla-dsl`, at the
+version in `publishVersion`.
+
+`docs/build.md` has the release path, the three workflow modes, and why there is
+no cross-build over Scala versions: Scala 3 reads the TASTy of earlier 3.x
+releases, so a consumer on 3.10 can use an artifact built with the pinned
+3.9.0.
 
 ## The command line
 
@@ -59,6 +64,8 @@ kolla [options] <export-file>...
   -q, --quiet     only the counts and the verdict
   --progress      note declarations and bytes read on stderr
   --cache <file>  reuse and extend a file of accepted digests
+  --defeq-cache   keep the positive is_def_eq cache on a profile that
+                  predates it; needed for a library corpus before v4.35
   --profiles      list the profiles and exit
 ```
 
@@ -66,6 +73,33 @@ kolla [options] <export-file>...
 that one was rejected, 2 that the file could not be read — an unreadable file
 is not a proof of anything — and 3 that kolla ran out of memory before
 reaching a verdict, which a script can retry with more room.
+
+### What a green run means
+
+Every declaration was re-derived, inductive blocks included. A block is added
+through `AddInductive` and then checked against what the file claimed by
+`InductiveChecker.validate`, so its constructors and recursors are not taken on
+trust. The summary counts say so for themselves, and the one to read is
+`carried over`: it is the number of declarations the file supplied and the
+kernel did not re-derive, and on `init`, `std`, `lean` and the mathlib sample it
+is zero.
+
+Two qualifications, both visible in the output rather than only here.
+
+A declaration is carried over rather than checked when the file presents a
+constructor or a recursor detached from its own inductive block, since a rule's
+right-hand side may call a sibling recursor and cannot be checked one entry at a
+time. A well-formed lean4export file never does this, which is why the count is
+zero above; if it is not zero, that many declarations were admitted on the
+file's word. `--check` and `--cache` also move declarations out of `accepted`,
+into `carried over` and `cached` respectively, and both print their own count.
+
+How much is checked depends on the profile, because Lean's kernel changed. The
+extra `check_recursors` pass — each generated recursor's type, and each
+computation rule checked to be type-preserving — exists from v4.35 and is gated
+on `KernelProfile.checkRecursors`, so a run on an older profile does not perform
+it, exactly as that release did not. The profile is named in every summary line
+for this reason.
 
 The file is checked as it is read, so a large export is never materialised;
 `docs/semantics.md` P13 covers what that costs the hoisting pass. `--check`
@@ -101,17 +135,32 @@ source references.
 An export is accepted under its own profile and generally rejected under the
 others, which is the signal the profiles are there for.
 
-One profile difference costs more than correctness. Lean added a positive
-`is_def_eq` cache in v4.35 and kolla does not keep one below that release
-either. `std` then costs more than a 24 GB heap, exhausting it after 55
-minutes, where the v4.35.0 profile checks the same corpus in 305 seconds and
-3.8 GB; Lean's own cache-free kernel does those modules in 74 seconds. It is
-one declaration rather than the corpus —
-`Std.Tactic.BVDecide.BVExpr.bitblast.blastUdiv.blastDivSubtractShift` — and
-docs/semantics.md P12 has the isolation. So it is `std` that is out of reach on
-a pre-v4.35 profile, not library corpora as such: `init` completes there,
-51,759 declarations in 77 seconds against 48 on v4.35.0. `lean` is larger than
-`std` and has not been tried on that profile.
+### A library corpus before v4.35 needs `--defeq-cache`
+
+Lean added a positive `is_def_eq` cache in v4.35, and kolla follows the release,
+so `v4.25.0` and `v4.27.0` do without one. At library scale that is the
+difference between slow and unfinishable:
+
+| corpus | profile | result |
+|---|---|---|
+| `init` | v4.27.0 | 51,759 accepted, 127s, 1.10 GB |
+| `init` | v4.27.0 `--defeq-cache` | 51,759 accepted, 95s, 1.65 GB |
+| `std` | v4.27.0 | no verdict; exceeds a 24 GB heap after 55 minutes |
+| `std` | v4.35.0 | 99,619 accepted, 305s, 3.8 GB |
+
+`--defeq-cache` keeps the cache on a profile that predates it. It is an
+optimisation and not a change of profile: an entry is written only where
+`is_def_eq` already answered true. On the `init` export above, the two runs
+agree name by name and verdict by verdict across all 51,759 declarations, and
+`DefEqCacheEquivalenceSuite` requires the same of every fixture on both uncached
+profiles. The profile is reported as `v4.27.0+defeq-cache` so a summary never
+claims to be a plain run of that release.
+
+Without the flag, kolla says so before starting rather than after failing — an
+export over 128 MB on an uncached profile prints the advice and names the flag.
+The remaining cost is concentrated in one declaration,
+`Std.Tactic.BVDecide.BVExpr.bitblast.blastUdiv.blastDivSubtractShift`; docs/semantics.md
+P12 has the isolation and K18 the cache.
 
 ## The differential platform
 
@@ -198,6 +247,16 @@ linker failure behind it, and publishing.
 `docs/scale.md` has measured wall times and peak memory per corpus, what a
 Mathlib-scale export costs, and why a pre-v4.35 profile costs more.
 
+## Authors
+
+Örjan Lundberg and
+[Anthony Lundberg](https://www.linkedin.com/in/anthony-lundberg2/).
+
 ## Licence
 
 Apache-2.0, the licence Lean 4 and nanoda_lib use. See `LICENSE`.
+
+---
+
+kolla — Örjan Lundberg and
+[Anthony Lundberg](https://www.linkedin.com/in/anthony-lundberg2/)

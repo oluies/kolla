@@ -1261,3 +1261,8 @@ rule as the other cross modules: no JVM-only APIs. Reading a file is
 Exit codes are 0 for a file whose every declaration was accepted, 1 for a
 rejection, and 2 for a file that could not be read — a distinction a caller
 needs, since an unreadable file is not a proof of anything.
+
+---
+
+kolla — Örjan Lundberg and
+[Anthony Lundberg](https://www.linkedin.com/in/anthony-lundberg2/)

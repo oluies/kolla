@@ -109,3 +109,8 @@ heap on the v4_35 profile and exhausts a 24 GB heap after 55 minutes on v4_27.
 `lean4checker` checks the same modules at v4.28.0 in 74s and 1.1 GB resident
 with no positive cache of its own, so the gap is kolla's. See
 docs/semantics.md P12.
+
+---
+
+kolla — Örjan Lundberg and
+[Anthony Lundberg](https://www.linkedin.com/in/anthony-lundberg2/)

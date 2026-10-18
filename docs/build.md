@@ -124,3 +124,8 @@ MILL_SONATYPE_PASSWORD="$(security find-generic-password -a "$USER" -s kolla-son
 used: an argument is visible in `ps` to every process on the machine for as long
 as the publish runs, while an environment variable assigned as a prefix like
 this is confined to the one command and never reaches the shell's history.
+
+---
+
+kolla — Örjan Lundberg and
+[Anthony Lundberg](https://www.linkedin.com/in/anthony-lundberg2/)
