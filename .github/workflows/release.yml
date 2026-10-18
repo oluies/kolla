@@ -1,0 +1,54 @@
+name: release
+
+# A tag is the trigger, so the version published is the version tagged and
+# nothing else decides it. `workflow_dispatch` runs everything up to the
+# upload, which is what a dry run needs.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Cache coursier and mill
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.cache/mill
+          key: mill-${{ runner.os }}-${{ hashFiles('build.mill') }}
+          restore-keys: mill-${{ runner.os }}-
+
+      # The tag has to agree with the version in the build, or the artifact
+      # would not be the one the tag names.
+      - name: Check the tag against publishVersion
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          built=$(./mill show kernel.jvm.publishVersion | tr -d '"')
+          tagged=${GITHUB_REF_NAME#v}
+          echo "built=$built tagged=$tagged"
+          test "$built" = "$tagged"
+
+      - run: ./mill __.jvm.compile
+      - run: ./mill kernel.jvm.test + export.jvm.test + dsl.jvm.test
+
+      # Signing and upload. Mill reads all four from the environment; none of
+      # them is echoed. A dispatch run stops short of releasing.
+      - name: Publish to Maven Central
+        env:
+          MILL_SONATYPE_USERNAME: ${{ secrets.MILL_SONATYPE_USERNAME }}
+          MILL_SONATYPE_PASSWORD: ${{ secrets.MILL_SONATYPE_PASSWORD }}
+          MILL_PGP_SECRET_BASE64: ${{ secrets.MILL_PGP_SECRET_BASE64 }}
+          MILL_PGP_PASSPHRASE: ${{ secrets.MILL_PGP_PASSPHRASE }}
+        run: |
+          release=${{ startsWith(github.ref, 'refs/tags/v') }}
+          ./mill mill.javalib.SonatypeCentralPublishModule/publishAll \
+            --publishArtifacts __.jvm.publishArtifacts \
+            --shouldRelease "$release"

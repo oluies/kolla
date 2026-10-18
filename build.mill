@@ -45,7 +45,7 @@ trait KollaBase extends ScalaModule {
   * hold. That is why there is no cross-build over Scala versions here. See
   * docs/build.md.
   */
-trait KollaPublish extends PublishModule {
+trait KollaPublish extends SonatypeCentralPublishModule {
   def publishVersion = "0.1.0"
   def pomSettings = PomSettings(
     description = "A Lean 4 kernel type checker",

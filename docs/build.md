@@ -55,3 +55,30 @@ graph, since `cats-core_3:2.13.0` is built with Scala 3.3.4.
 
 The 3.9.0 pin above is therefore about Scala.js linking, not about what a
 consumer can use.
+
+### Releasing
+
+`io.github.oluies` is already a verified namespace on the Central Portal, so
+kolla publishes under it without further namespace work. The release workflow is
+tag-driven: pushing `v<version>` publishes, and it first asserts that the tag
+agrees with `publishVersion` so that the artifact is the one the tag names.
+`workflow_dispatch` runs everything up to the upload, which is the dry run.
+
+Four repository secrets, named for the environment variables Mill reads:
+
+| secret | what it is |
+|---|---|
+| `MILL_SONATYPE_USERNAME` | Central Portal user token, name |
+| `MILL_SONATYPE_PASSWORD` | Central Portal user token, password |
+| `MILL_PGP_SECRET_BASE64` | the signing key, armored then base64, one line |
+| `MILL_PGP_PASSPHRASE` | that key's passphrase |
+
+Set them with `gh secret set <name> --repo oluies/kolla`, which prompts rather
+than taking the value on the command line. None of the four is ever echoed by
+the workflow, and none belongs in the repository or in a conversation: a leaked
+Portal token can publish under the namespace permanently, because Central
+releases are immutable. Revoke and reissue in the Portal if one is exposed.
+
+Locally, `./mill __.jvm.publishArtifacts` builds exactly what would be uploaded
+and signs and sends nothing, and `./mill kernel.jvm.publishM2Local` is enough to
+test a consumer against a real artifact.
