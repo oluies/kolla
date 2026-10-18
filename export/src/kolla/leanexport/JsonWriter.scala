@@ -1,11 +1,11 @@
-package kolla.cli
+package kolla.leanexport
 
 /** A JSON writer for the checker's own output.
   *
-  * The reader in `kolla.leanexport.Json` parses; this only writes, and only the
-  * shapes `Render` needs.
+  * `Json` in this package parses; this only writes, and only the shapes
+  * `ReplayJson` needs.
   */
-object Json:
+object JsonWriter:
 
   def str(s: String): String =
     val sb = new StringBuilder("\"")

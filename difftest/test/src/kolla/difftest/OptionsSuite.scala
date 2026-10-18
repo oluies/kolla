@@ -40,6 +40,11 @@ class OptionsSuite extends munit.FunSuite:
     assert(o.writeHistory)
   }
 
+  test("the platform comparison is opt-in") {
+    assert(!ok().withPlatforms)
+    assert(ok("--platforms").withPlatforms)
+  }
+
   test("an unknown option is an error and help is not a command") {
     assert(Options.parse(List("--wat")).isLeft)
     assertEquals(Options.parse(List("--help")), Left(Options.usage))

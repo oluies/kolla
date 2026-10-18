@@ -25,6 +25,10 @@ final case class Corpus(
     source: Option[Path] = None,
     project: Option[Path] = None,
     expectRejection: Boolean = false,
+    /** An export file that already exists, so no toolchain is needed to make
+      * one. A committed fixture is such a corpus.
+      */
+    prebuilt: Option[Path] = None,
     /** The toolchain versions this corpus applies to, empty meaning all of
       * them. A negative case has to call `Environment.addDeclCore` to get an
       * unchecked declaration into the environment, and that signature changes
@@ -83,6 +87,26 @@ object Corpus:
   /** Every `.lean` file under `difftest/cases-negative/`. */
   def negativeCases: IO[List[Corpus]] = lean(Layout.negativeCasesDir, expectRejection = true)
 
+  /** A committed export file, usable without a Lean toolchain. */
+  def fixture(file: Path): Corpus =
+    val stem = file.getFileName.toString.replaceAll("\\.(ndjson|export)$", "")
+    Corpus(s"fixture-$stem", Nil, prebuilt = Some(file))
+
+  /** Every committed export under `difftest/test/resources/`. */
+  def fixtures: IO[List[Corpus]] =
+    IO.blocking {
+      if !Files.isDirectory(Layout.fixturesDir) then Nil
+      else
+        Files
+          .list(Layout.fixturesDir)
+          .iterator
+          .asScala
+          .filter(f => f.getFileName.toString.endsWith(".ndjson") || f.getFileName.toString.endsWith(".export"))
+          .toList
+          .sortBy(_.getFileName.toString)
+          .map(fixture)
+    }
+
   /** The declarations named in `difftest/mathlib-sample.txt`, exported from a
     * mathlib checkout the caller provides.
     */
@@ -117,11 +141,14 @@ object Exporter:
 
   /** The export file for a corpus, built if it is not cached. */
   def exportFile(tools: Provision.Tools, corpus: Corpus): IO[Path] =
-    val target = Layout.exportFile(tools.toolchain, corpus.name)
-    IO.blocking(Files.exists(target)).flatMap { cached =>
-      if cached then IO.pure(target)
-      else build(tools, corpus, target).as(target)
-    }
+    corpus.prebuilt match
+      case Some(p) => IO.pure(p)
+      case None =>
+        val target = Layout.exportFile(tools.toolchain, corpus.name)
+        IO.blocking(Files.exists(target)).flatMap { cached =>
+          if cached then IO.pure(target)
+          else build(tools, corpus, target).as(target)
+        }
 
   /** The declarations a module declares itself, sorted for determinism. */
   private def ownDecls(tools: Provision.Tools, searchPath: Path, module: String): IO[List[String]] =

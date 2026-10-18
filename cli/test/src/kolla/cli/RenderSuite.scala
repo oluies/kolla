@@ -1,7 +1,7 @@
 package kolla.cli
 
 import kolla.kernel.Name
-import kolla.leanexport.{ReplayOutcome, ReplayStep, ReplayTally}
+import kolla.leanexport.{JsonWriter, ReplayOutcome, ReplayStep, ReplayTally}
 
 class RenderSuite extends munit.FunSuite:
 
@@ -89,9 +89,9 @@ class RenderSuite extends munit.FunSuite:
   }
 
   test("json escapes what a Lean name or a kernel message can contain") {
-    assertEquals(Json.str("a\"b\\c"), "\"a\\\"b\\\\c\"")
-    assertEquals(Json.str("a\nb"), "\"a\\nb\"")
-    assertEquals(Json.str("\u0001"), "\"\\u0001\"")
+    assertEquals(JsonWriter.str("a\"b\\c"), "\"a\\\"b\\\\c\"")
+    assertEquals(JsonWriter.str("a\nb"), "\"a\\nb\"")
+    assertEquals(JsonWriter.str("\u0001"), "\"\\u0001\"")
   }
 
   test("every outcome has a distinct label") {

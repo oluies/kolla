@@ -13,6 +13,10 @@ final case class Options(
     withChecker: Boolean = true,
     withNanoda: Boolean = true,
     withMutants: Boolean = true,
+    /** Also run the native binary and the browser bundle, and compare them to
+      * the JVM run declaration by declaration.
+      */
+    withPlatforms: Boolean = false,
     writeHistory: Boolean = false
 )
 
@@ -25,6 +29,7 @@ object Options:
       |  provision    install toolchains and build lean4export and lean4checker
       |  export       produce export files only
       |  mutants      check the negative corpus only
+      |  platforms    compare the native and js builds against the jvm
       |  list         show the configured toolchains and corpora
       |
       |  --toolchain <spec>     restrict to one toolchain, repeatable
@@ -34,6 +39,7 @@ object Options:
       |  --no-checker           skip lean4checker
       |  --no-nanoda            skip nanoda
       |  --no-mutants           skip the negative corpus
+      |  --platforms            also run the native and js builds and compare
       |  --history              append timings to difftest/history/
       |""".stripMargin
 
@@ -50,6 +56,7 @@ object Options:
       case "--no-checker" :: t                     => go(t, o.copy(withChecker = false))
       case "--no-nanoda" :: t                      => go(t, o.copy(withNanoda = false))
       case "--no-mutants" :: t                     => go(t, o.copy(withMutants = false))
+      case "--platforms" :: t                      => go(t, o.copy(withPlatforms = true))
       case "--history" :: t                        => go(t, o.copy(writeHistory = true))
       case ("-h" | "--help") :: _                  => Left(usage)
       case f :: _ if f.startsWith("--")            => Left(s"unknown option $f")
@@ -73,6 +80,9 @@ object Main extends IOApp:
                 case "provision" => toolchains.traverseVoid(t => provisionOne(t, o)).as(ExitCode.Success)
                 case "export"    => exportOnly(toolchains, corpora, o).as(ExitCode.Success)
                 case "mutants"   => mutantsOnly(toolchains, corpora, o)
+                case "platforms" =>
+                  full(toolchains, corpora, o.copy(withPlatforms = true, withChecker = false,
+                    withNanoda = false, withMutants = false))
                 case "run"       => full(toolchains, corpora, o)
                 case other       => IO.println(s"unknown command $other\n\n${Options.usage}").as(ExitCode(2))
     yield code
@@ -91,11 +101,18 @@ object Main extends IOApp:
 
   private def selectedCorpora(o: Options): IO[List[Corpus]] =
     for
-      cases <- Corpus.cases
-      bad   <- Corpus.negativeCases
-      ml    <- o.mathlib.fold(IO.pure(List.empty[Corpus]))(d => Corpus.mathlibSample(d).map(List(_)))
-      all = cases ++ bad ++ List(Corpus.init, Corpus.std, Corpus.lean) ++ ml
-    yield if o.corpora.isEmpty then cases ++ bad else all.filter(c => o.corpora.contains(c.name))
+      cases    <- Corpus.cases
+      bad      <- Corpus.negativeCases
+      fixtures <- Corpus.fixtures
+      ml       <- o.mathlib.fold(IO.pure(List.empty[Corpus]))(d => Corpus.mathlibSample(d).map(List(_)))
+      all = cases ++ bad ++ fixtures ++ List(Corpus.init, Corpus.std, Corpus.lean) ++ ml
+    yield
+      if o.corpora.nonEmpty then all.filter(c => o.corpora.contains(c.name))
+      // The committed fixtures need no toolchain, so the platform comparison
+      // defaults to them and runs on every push; everything else defaults to
+      // the handwritten corpus, which does.
+      else if o.command == "platforms" then fixtures
+      else cases ++ bad
 
   private def list(toolchains: List[Toolchain], corpora: List[Corpus]): IO[Unit] =
     IO.println("toolchains") *>
@@ -159,14 +176,15 @@ object Main extends IOApp:
       runs        = parts.flatMap(_._1)
       overall     = parts.flatMap(_._2)
       mutations   = parts.flatMap(_._3)
-      report      = Report(commit, at, runs, Vector.empty, overall, mutations)
+      report      = Report(commit, at, runs, parts.flatMap(_._4), overall, mutations)
       _    <- IO.print(report.render)
       path <- Report.write(report)
       _    <- IO.println(s"report: $path")
       _    <- if o.writeHistory then History.append(report) else IO.unit
     yield if report.agrees then ExitCode.Success else ExitCode(1)
 
-  private type Part = (Vector[CheckerRun], Vector[OverallAgreement], Vector[MutationOutcome])
+  private type Part =
+    (Vector[CheckerRun], Vector[OverallAgreement], Vector[MutationOutcome], Vector[Comparison])
 
   private def mutantsOf(
       items: Vector[kolla.leanexport.ExportItem],
@@ -183,14 +201,19 @@ object Main extends IOApp:
       o: Options,
       nanoda: Option[java.nio.file.Path]
   ): IO[Part] =
-    Provision.provision(t, o.withChecker && t.hasReference).flatMap { tools =>
-      corpora.filter(_.appliesTo(t)).foldLeft(IO.pure((Vector.empty, Vector.empty, Vector.empty): Part)) { (acc, c) =>
-        acc.flatMap { (runs, agree, muts) =>
-          oneCorpus(tools, t, c, o, nanoda).map { (r, a, m) =>
-            (runs ++ r, agree ++ a, muts ++ m)
+    // A corpus that is already an export file needs no Lean at all, so a run
+    // over fixtures alone does not download a toolchain.
+    val needsLean = corpora.exists(c => c.appliesTo(t) && c.prebuilt.isEmpty)
+    Provision.provision(t, o.withChecker && t.hasReference && needsLean, skip = !needsLean).flatMap { tools =>
+      corpora
+        .filter(_.appliesTo(t))
+        .foldLeft(IO.pure((Vector.empty, Vector.empty, Vector.empty, Vector.empty): Part)) { (acc, c) =>
+          acc.flatMap { (runs, agree, muts, cmps) =>
+            oneCorpus(tools, t, c, o, nanoda).map { (r, a, m, p) =>
+              (runs ++ r, agree ++ a, muts ++ m, cmps ++ p)
+            }
           }
         }
-      }
     }
 
   private def oneCorpus(
@@ -214,12 +237,42 @@ object Main extends IOApp:
                  stopOnFirstRejection = reference || useNanoda,
                  expectRejection = c.expectRejection
                )
-      ref <- if reference then Lean4Checker.run(tools, c).map(Some(_)) else IO.pure(None)
+      // lean4checker replays oleans, which a prebuilt export does not have.
+      ref <- if reference && c.prebuilt.isEmpty then Lean4Checker.run(tools, c).map(Some(_)) else IO.pure(None)
       nd  <- if useNanoda then Nanoda.run(nanoda, t, c, env.format, path).map(Some(_)) else IO.pure(None)
       // Mutating a corpus that is already invalid proves nothing.
-      muts <- mutantsOf(items, t, c, o)
+      muts  <- mutantsOf(items, t, c, o)
+      other <- if o.withPlatforms then otherPlatforms(path, t, c, kolla) else IO.pure((Vector.empty, Vector.empty))
     yield (
-      Vector(kolla) ++ ref.toVector ++ nd.toVector,
+      Vector(kolla) ++ ref.toVector ++ nd.toVector ++ other._1,
       (ref.toVector ++ nd.toVector).map(r => Compare.overall(r, kolla)),
-      muts
+      muts,
+      other._2
     )
+
+  /** The native and js builds, compared to the JVM run declaration by
+    * declaration. A platform that is not built is skipped rather than failed:
+    * the comparison needs `mill cli.native.nativeLink` and `mill web.js.bundle`
+    * to have run, which a plain `mill difftest.run` does not do.
+    */
+  private def otherPlatforms(
+      exportFile: java.nio.file.Path,
+      t: Toolchain,
+      c: Corpus,
+      jvm: CheckerRun
+  ): IO[(Vector[CheckerRun], Vector[Comparison])] =
+    for
+      hasNative  <- Platforms.nativeAvailable
+      hasNode    <- Platforms.nodeAvailable
+      hasBrowser <- Platforms.browserAvailable
+      _ <- if hasNative then IO.unit else IO.println("  native: not built, skipping")
+      _ <- if hasNode then IO.unit else IO.println("  js: not built or node missing, skipping")
+      _ <- if hasBrowser then IO.unit else IO.println("  browser: playwright not installed, skipping")
+      nat <- if hasNative then Platforms.native(exportFile, t.profile, t.spec, c.name).map(Some(_))
+             else IO.pure(None)
+      js <- if hasNode then Platforms.node(exportFile, t.profile, t.spec, c.name).map(Some(_))
+            else IO.pure(None)
+      web <- if hasBrowser then Platforms.browser(exportFile, t.profile, t.spec, c.name).map(Some(_))
+             else IO.pure(None)
+      runs = nat.toVector ++ js.toVector ++ web.toVector
+    yield (runs, runs.map(r => Compare.platforms(jvm, r)))

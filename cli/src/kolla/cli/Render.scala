@@ -1,7 +1,7 @@
 package kolla.cli
 
 import kolla.kernel.Name
-import kolla.leanexport.{ReplayOutcome, ReplayTally}
+import kolla.leanexport.{ReplayJson, ReplayOutcome, ReplayTally}
 
 /** The command line's output formats.
   *
@@ -14,30 +14,10 @@ object Render:
 
   /** One JSON object per declaration, which is what `difftest` reads back. */
   def json(name: Name, outcome: ReplayOutcome, nanos: Long): String =
-    Json.obj(
-      "name"    -> Json.str(name.toString),
-      "verdict" -> Json.str(label(outcome)),
-      "detail"  -> ReplayTally.detail(outcome).fold("null")(Json.str),
-      "nanos"   -> Json.num(nanos),
-      "trace"   -> Json.arr(ReplayTally.trace(outcome).map(Json.str))
-    )
+    ReplayJson.declaration(name, outcome, nanos)
 
   def summaryJson(file: String, profile: String, platform: String, t: ReplayTally, wallNanos: Long): String =
-    Json.obj(
-      "summary"   -> Json.str(file),
-      "profile"   -> Json.str(profile),
-      "platform"  -> Json.str(platform),
-      "ok"        -> Json.bool(t.ok),
-      "wallNanos" -> Json.num(wallNanos),
-      "counts" -> Json.obj(
-        "accepted"    -> Json.num(t.accepted.toLong),
-        "rejected"    -> Json.num(t.rejected.toLong),
-        "carriedOver" -> Json.num(t.carriedOver.toLong),
-        "errored"     -> Json.num(t.failed.toLong),
-        "notReached"  -> Json.num(t.notReached.toLong),
-        "total"       -> Json.num(t.total.toLong)
-      )
-    )
+    ReplayJson.summary(file, profile, platform, t, wallNanos)
 
   /** The human summary: counts, then the first rejection if there was one. */
   def summary(file: String, profile: String, t: ReplayTally, wallNanos: Long): String =

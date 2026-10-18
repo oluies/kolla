@@ -133,7 +133,11 @@ object Provision:
   /** Everything one toolchain needs. `lean4checker` is optional: a toolchain
     * with no matching revision is still usable for kolla-only runs.
     */
-  def provision(t: Toolchain, withChecker: Boolean = true): IO[Tools] =
+  def provision(t: Toolchain, withChecker: Boolean = true, skip: Boolean = false): IO[Tools] =
+    if skip then IO.pure(Tools(t, Layout.toolchainCache(t).resolve("lean4export"), None))
+    else provisionNow(t, withChecker)
+
+  private def provisionNow(t: Toolchain, withChecker: Boolean): IO[Tools] =
     for
       _        <- installToolchain(t)
       exporter <- cloneForToolchain(t, lean4exportRepo, "lean4export")

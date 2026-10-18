@@ -33,6 +33,14 @@ object Layout:
   /** `difftest/cases/`, the handwritten corpus. */
   def casesDir: Path = repoFile("difftest/cases")
 
+  /** `difftest/test/resources/`, export files committed to the repository.
+    *
+    * These are real lean4export output, so they are a corpus that needs no
+    * toolchain: enough to compare kolla's own builds against each other on
+    * every push.
+    */
+  def fixturesDir: Path = repoFile("difftest/test/resources")
+
   /** `difftest/cases-negative/`, declarations the kernel has to reject. */
   def negativeCasesDir: Path = repoFile("difftest/cases-negative")
 

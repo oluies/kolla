@@ -32,6 +32,23 @@ use `scala.util.hashing.MurmurHash3` rather than Lean's `hash_str` and `Nat.hash
 resulting hash values are not Lean's. Hashes are used only as cache keys and as an
 equality short-circuit.
 
+### N4 — `parse` is the inverse of `toString`
+
+`Name.render` writes a `Num` component as bare digits and escapes a `Str` that
+looks like one as `«0»`, which is what tells the two apart. `Name.parse` has to
+read both back, or `Name.parse(n.toString) != n` for every name with a numeric
+component — every macro scope, every `_private` prefix.
+
+This is not cosmetic. `ReplayJson` identifies a declaration by `Name.toString`,
+so a name that does not survive the round trip is a name two platforms appear to
+disagree about: the first cross-platform run reported
+`_private.Init.Core.0.Lean.injEq_helper.match_1_1` as judged only by the JVM and
+`_private.Init.Core.«0».Lean.injEq_helper.match_1_1` as judged only by the
+native build, when both had accepted the same declaration.
+
+A `.` inside guillemets does not separate components, so an escaped component
+containing one survives too.
+
 ## Levels
 
 ### L1 — depth
@@ -929,6 +946,39 @@ renaming one cannot leave a dangling lookup in markup nobody compiles.
 
 `scalajs-dom` is not among the dependencies the project allows, so the handful
 of browser calls are declared in `web.Dom`.
+
+### F5 — the platforms are compared per declaration, not by a count
+
+`Platforms` runs the native binary, the bundle under Node and the page in
+Chromium, and reads their verdicts back through `ReplayJson`, the one wire
+format all three write. They are then compared with `Compare.platforms`, which
+is per declaration. A count would hide two platforms rejecting different
+declarations and arriving at the same total.
+
+That comparison is why `ReplayJson` lives in `export` rather than in `cli`: if
+the browser and the command line each spelled their output, a difference in the
+spelling would read as a difference in the verdicts.
+
+The browser run goes through `web/smoke.js`, which drives the page the way a
+person does — fill the box, pick the profile, press the button — and checks
+that what the page displays agrees with what the checker concluded before
+printing the verdicts. A page that renders a count it did not compute is a bug
+the JSON alone would not catch. It does not use `page.fill`, which types the
+value through the input pipeline and takes minutes on a multi-megabyte export.
+
+Exit codes differ in meaning and the runner is told which: `kolla --json` uses 1
+for a rejection, which is a verdict, while `smoke.js` uses 1 for a page that
+misbehaved, which is a failure, and 3 for Playwright not being installed, which
+is neither.
+
+### F6 — a committed export is a corpus
+
+`Corpus.fixtures` makes each file under `difftest/test/resources` a corpus with
+its export already built. Those are real lean4export output, so comparing
+kolla's builds against each other on them needs no Lean toolchain and no
+network: the platform comparison runs on every push in seconds, while the
+toolchain matrix runs per release. Both NDJSON format versions are represented,
+so the 3.0.0 reader is covered on every platform too.
 
 ### F4 — the command line is `fs2.io.file`, not `java.nio`
 

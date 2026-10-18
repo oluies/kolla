@@ -82,6 +82,28 @@ class CorpusSuite extends munit.FunSuite:
     assert(cs.exists(c => c.expectRejection && c.appliesTo(Toolchain("leanprover/lean4:v4.28.0"))))
   }
 
+  test("a committed export is a corpus that needs no toolchain") {
+    val cs = Corpus.fixtures.unsafeRunHere()
+    assert(cs.length >= 4, clue(cs.map(_.name)))
+    assert(cs.forall(_.prebuilt.isDefined))
+    assert(cs.forall(_.modules.isEmpty))
+    assert(cs.forall(!_.expectRejection))
+    assert(cs.forall(_.name.startsWith("fixture-")), clue(cs.map(_.name)))
+    // The suffix is dropped, not the version in the name.
+    assert(cs.exists(_.name == "fixture-nat-add-3.1.0"), clue(cs.map(_.name)))
+    // Both NDJSON format versions are present, so the platform comparison
+    // covers the 3.0.0 reader as well as the current one.
+    assert(cs.exists(_.name.endsWith("3.0.0")), clue(cs.map(_.name)))
+    assert(cs.exists(_.name.endsWith("3.1.0")))
+  }
+
+  test("a fixture corpus is distinct from a handwritten one") {
+    val handwritten = Corpus.cases.unsafeRunHere().map(_.name).toSet
+    val fixtures    = Corpus.fixtures.unsafeRunHere().map(_.name).toSet
+    assertEquals(handwritten.intersect(fixtures), Set.empty[String])
+    assert(Corpus.cases.unsafeRunHere().forall(_.prebuilt.isEmpty))
+  }
+
   test("the mathlib sample names declarations and nothing else") {
     val c = Corpus.mathlibSample(Paths.get("/tmp/mathlib4")).unsafeRunHere()
     assertEquals(c.name, "mathlib-sample")

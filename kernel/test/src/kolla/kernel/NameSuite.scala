@@ -118,3 +118,42 @@ class NameSuite extends munit.ScalaCheckSuite:
     // A plain name is unaffected.
     assertEquals(Name.appendAfter(Name.mkSimple("n"), "_ih").toString, "n_ih")
   }
+
+  test("parse inverts toString") {
+    // The wire format between kolla's platforms is `Name.toString`, so a name
+    // that does not survive the round trip is a name two platforms disagree
+    // about. See docs/semantics.md N4.
+    val names = List(
+      Name.parse("Nat"),
+      Name.parse("Nat.rec"),
+      Name.anonymous.str("_private").str("Init").str("Core").num(0).str("Lean").str("injEq_helper"),
+      Name.anonymous.str("n").str("_@").str("Init").str("Prelude").num(4011339995L).str("_hyg").num(8),
+      Name.anonymous.str("a b"),
+      Name.anonymous.str("0"),
+      Name.anonymous.str("").str("x"),
+      Name.anonymous.num(0),
+      Name.anonymous.num(BigInt("123456789012345678901234567890")),
+      Name.anonymous.str("has.dot"),
+      Name.anonymous.str("«odd»")
+    )
+    names.foreach(n => assertEquals(Name.parse(n.toString), n, clue(n.toString)))
+  }
+
+  test("a numeric component is a Num, not a string of digits") {
+    assertEquals(Name.parse("a.0"), Name.anonymous.str("a").num(0))
+    assertNotEquals(Name.parse("a.0"), Name.anonymous.str("a").str("0"))
+    // A string of digits still renders escaped, which is what tells them apart.
+    assertEquals(Name.anonymous.str("a").str("0").toString, "a.«0»")
+    assertEquals(Name.anonymous.str("a").num(0).toString, "a.0")
+  }
+
+  test("a component that only starts with a digit is a string") {
+    assertEquals(Name.parse("a.0b"), Name.anonymous.str("a").str("0b"))
+  }
+
+  test("a dot inside guillemets does not split a component") {
+    val n = Name.anonymous.str("a.b").str("c")
+    assertEquals(n.toString, "«a.b».c")
+    assertEquals(Name.parse(n.toString), n)
+    assertEquals(Name.parse(n.toString).components.length, 2)
+  }

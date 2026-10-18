@@ -57,9 +57,41 @@ object Name:
   def mkSimple(s: String): Name = Str(Anonymous, s)
 
   /** Splits on `.`; no escape handling. */
+  /** The inverse of `render`.
+    *
+    * A component of digits alone is a `Num`, as `renderComponent` writes one,
+    * and a component wrapped in guillemets is the `Str` inside them. Without
+    * that, `Name.parse(n.toString) != n` for any name with a numeric component
+    * — which is every macro scope and every `_private` prefix — and a name
+    * written to a file comes back as a different name. The round trip is the
+    * property; see docs/semantics.md N4.
+    *
+    * A `.` inside guillemets does not separate components, so an escaped
+    * component containing one survives.
+    */
   def parse(s: String): Name =
     if s.isEmpty then Anonymous
-    else s.split('.').foldLeft(anonymous)((n, c) => n.str(c))
+    else components(s).foldLeft(anonymous)(appendComponent)
+
+  /** Splits on `.`, except inside guillemets. */
+  private def components(s: String): List[String] =
+    val out   = List.newBuilder[String]
+    val sb    = new StringBuilder
+    var depth = 0
+    s.foreach {
+      case '«'            => depth += 1; sb += '«'
+      case '»'            => if depth > 0 then depth -= 1; sb += '»'
+      case '.' if depth == 0 => out += sb.result(); sb.clear()
+      case c              => sb += c
+    }
+    out += sb.result()
+    out.result()
+
+  private def appendComponent(n: Name, c: String): Name =
+    if c.length >= 2 && c.charAt(0) == '«' && c.charAt(c.length - 1) == '»' then
+      n.str(c.substring(1, c.length - 1))
+    else if c.nonEmpty && c.forall(_.isDigit) then n.num(BigInt(c))
+    else n.str(c)
 
   def apply(components: String*): Name =
     components.foldLeft(anonymous)((n, c) => n.str(c))

@@ -46,16 +46,15 @@ object LeanParser:
         case _                                                         => None
     case _ => None
 
-  /** Splits a dotted identifier into components, reading an all-digit component
-    * as a numeral as Lean's name syntax does. The string form of such a
-    * component is written `«3»` in Lean, which this syntax does not support.
+  /** Splits a dotted identifier into components.
+    *
+    * `Name.parse` is the inverse of `Name.toString` (docs/semantics.md N4), so
+    * it reads an all-digit component as a numeral, which is what this syntax
+    * means by `Foo.3`. It also reads `«...»`, which the surface syntax has no
+    * way to produce: the tokeniser only admits identifier characters, and a
+    * guillemet is not one.
     */
-  def parseName(s: String): Name =
-    if s.isEmpty then Name.anonymous
-    else
-      s.split('.').foldLeft(Name.anonymous) { (acc, c) =>
-        if c.nonEmpty && c.forall(_.isDigit) then acc.num(BigInt(c)) else acc.str(c)
-      }
+  def parseName(s: String): Name = Name.parse(s)
 
   final case class ParseError(message: String, offset: Int):
     override def toString: String = s"$message at offset $offset"

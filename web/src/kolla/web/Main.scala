@@ -18,16 +18,51 @@ object Main:
   val sliceMillis: Long = 24L
 
   def main(args: Array[String]): Unit =
-    document.title = "kolla"
-    Dom.append(document.body, Layout.page())
-    Dom.on(Dom.byId("check"), "click")(start())
-    Dom.on(Dom.byId("clear"), "click")(reset())
-    // The smoke test drives the page through this, so it does not have to
-    // synthesise browser events or know the element ids.
-    js.Dynamic.global.kolla = js.Dynamic.literal(
+    // The same bundle runs in a browser and under Node, where there is no
+    // document. Node is how the differential platform gets a JS run to compare
+    // per declaration; the page is the part that needs a DOM.
+    if hasDocument then
+      document.title = "kolla"
+      Dom.append(document.body, Layout.page())
+      Dom.on(Dom.byId("check"), "click")(start())
+      Dom.on(Dom.byId("clear"), "click")(reset())
+    // The browser smoke test drives the page through this too, so it does not
+    // have to synthesise events or know the element ids.
+    // Assigned through `globalThis` rather than as a bare name: the bundle runs
+    // in strict mode, where `kolla = ...` is a ReferenceError under Node's
+    // module scope even though a browser would make it a global.
+    js.Dynamic.global.globalThis.updateDynamic("kolla")(js.Dynamic.literal(
       check = (text: String, profile: String) => runToCompletion(text, profile),
+      checkJson = (text: String, profile: String, source: String, platform: String) =>
+        jsonLines(text, profile, source, platform),
       profiles = js.Array(KernelProfile.all.map(_.label)*)
-    )
+    ))
+
+  /** Whether there is a page to draw on.
+    *
+    * `js.isUndefined(global.document)` is not enough: the reference compiles to
+    * a bare `document`, which under Node throws a ReferenceError rather than
+    * yielding undefined. `js.typeOf` on a global-scope selection compiles to
+    * `typeof document`, which is the one way to ask without evaluating.
+    */
+  private def hasDocument: Boolean =
+    js.typeOf(js.Dynamic.global.document) != "undefined"
+
+  /** The same lines the command line writes with `--json`.
+    *
+    * `difftest` parses these back into verdicts, so a JS run and a JVM run are
+    * compared declaration by declaration rather than by a count.
+    */
+  private def jsonLines(text: String, profile: String, source: String, platform: String): js.Dynamic =
+    parse(text) match
+      case Left(message) => js.Dynamic.literal(error = message)
+      case Right(items) =>
+        // The caller names the platform: the same bundle is the `js` run under
+        // Node and the `browser` run under Playwright, and a report that called
+        // both `js` would be comparing a platform against itself.
+        val label = if platform.isEmpty then "js" else platform
+        val out   = ReplayJson.lines(items, profileOf(profile), source, label, () => js.Date.now())
+        js.Dynamic.literal(lines = js.Array(out*))
 
   private var running = false
 
@@ -95,10 +130,11 @@ object Main:
         )
 
   private def show(p: Progress): Unit =
-    Dom.setText("status", p.status)
-    Dom.setText("counts", p.counts)
-    Dom.setText("timing", p.timing)
-    Dom.setText("rejection", p.firstRejection.getOrElse(""))
-    Dom.setHtmlClass("verdict", p.verdictClass)
-    val bar = Dom.byId("bar")
-    if bar != null then bar.style.width = s"${p.percent}%"
+    if hasDocument then
+      Dom.setText("status", p.status)
+      Dom.setText("counts", p.counts)
+      Dom.setText("timing", p.timing)
+      Dom.setText("rejection", p.firstRejection.getOrElse(""))
+      Dom.setHtmlClass("verdict", p.verdictClass)
+      val bar = Dom.byId("bar")
+      if bar != null then bar.style.width = s"${p.percent}%"

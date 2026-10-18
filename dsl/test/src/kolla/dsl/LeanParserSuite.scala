@@ -220,10 +220,23 @@ class LeanParserSuite extends munit.FunSuite:
   }
 
   test("parseName reads an all-digit component as a numeral") {
-    assertEquals(LeanParser.parseName("Foo.3.bar"), Name.parse("Foo").num(3).str("bar"))
-    assertEquals(LeanParser.parseName("Nat.add"), Name.parse("Nat.add"))
+    assertEquals(LeanParser.parseName("Foo.3.bar"), Name.anonymous.str("Foo").num(3).str("bar"))
+    assertEquals(LeanParser.parseName("Nat.add"), Name.anonymous.str("Nat").str("add"))
     assertEquals(LeanParser.parseName(""), Name.anonymous)
-    // The kernel's own splitter keeps every component a string.
-    assertNotEquals(LeanParser.parseName("Foo.3"), Name.parse("Foo.3"))
-    assertEquals(p("Foo.3"), Expr.Const(Name.parse("Foo").num(3), Nil))
+    assertEquals(p("Foo.3"), Expr.Const(Name.anonymous.str("Foo").num(3), Nil))
+  }
+
+  test("parseName agrees with the kernel's own splitter") {
+    // It is the kernel's splitter: `Name.parse` is the inverse of
+    // `Name.toString` (docs/semantics.md N4), which is the same reading of a
+    // digit component that this syntax wants.
+    List("Foo.3", "Foo.3.bar", "Nat.add", "", "a.b.c").foreach(s =>
+      assertEquals(LeanParser.parseName(s), Name.parse(s), clue(s))
+    )
+  }
+
+  test("a guillemet cannot reach parseName from the surface syntax") {
+    // `Name.parse` reads `«a b»` as one component, but the tokeniser admits
+    // only identifier characters, so a name with one never gets that far.
+    assert(LeanParser.parse("«a b»").isLeft)
   }
