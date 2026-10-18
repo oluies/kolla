@@ -15,7 +15,20 @@ enum ReplayOutcome:
   case Rejected(reason: String, trace: List[String])
   case Failed(reason: String)
 
+  /** Accepted by an earlier run, identified by content digest. Not `Checked`:
+    * this run did not check it. See docs/semantics.md P15.
+    */
+  case Cached(digest: String)
+
   def isRejection: Boolean = this.isInstanceOf[ReplayOutcome.Rejected]
+
+/** Digests a run may skip, and where to record the ones it accepts.
+  *
+  * The storage is a frontend's business; `Replay` only asks and tells.
+  */
+trait ReplayCache:
+  def contains(d: Digest): Boolean
+  def accepted(d: Digest): Unit
 
 /** One step of a replay: the names it declared and what became of them. */
 final case class ReplayStep(names: List[Name], outcome: ReplayOutcome)
@@ -64,7 +77,11 @@ final class Replay(
       * the environment unchecked, exactly as a rejected one is (P6), and
       * reported as carried over. See docs/semantics.md P14.
       */
-    check: Name => Boolean = _ => true
+    check: Name => Boolean = _ => true,
+    /** Accepted digests to trust from an earlier run, and a sink for the ones
+      * this run accepts. See docs/semantics.md P15.
+      */
+    cache: Option[ReplayCache] = None
 ):
 
   /** Feeds a whole file at once, which is what a frontend with the items
@@ -73,7 +90,7 @@ final class Replay(
   def this(items: Vector[ExportItem], profile: KernelProfile, hoist: Boolean) =
     // An unbounded window: the items are already in memory, so holding them
     // costs nothing and the order is exactly what the whole-file pass gives.
-    this(profile, hoist, Int.MaxValue, _ => true)
+    this(profile, hoist, Int.MaxValue, _ => true, None)
     items.foreach(feed)
     finish()
 
@@ -97,6 +114,19 @@ final class Replay(
 
   private val late                 = mutable.ArrayBuffer.empty[Name]
   private var admitted: Int        = 0
+  private var reused: Int          = 0
+
+  /** The digest of every name declared so far, so that a declaration
+    * referring to one mixes in what it actually resolved to.
+    */
+  private val digests = mutable.HashMap.empty[Name, Digest]
+
+  /** The ambient constants, in a fixed order, so the component they contribute
+    * does not depend on the order they were declared in.
+    */
+  private val ambientNames  = Replay.extensionConstants(profile).toVector.sortBy(_.toString)
+  private var ambientBase   = Digest.seed
+  private var ambientStale  = true
   private var consumed: Int        = 0
   private var fed: Int             = 0
   private var finished: Boolean    = false
@@ -121,6 +151,43 @@ final class Replay(
     * them, as opposed to carried over because the format gave only a type.
     */
   def admittedUnchecked: Int = admitted
+
+  /** How many declarations this run skipped on a cache hit. */
+  def reusedFromCache: Int = reused
+
+  /** The profile, the cache epoch and the ambient constants, which every
+    * declaration's digest is taken against.
+    *
+    * The ambient constants are in it because the kernel reaches for them when
+    * it expands a literal without the declaration naming them (P10), so a
+    * digest that left them out could hit after `Nat.succ` changed underneath.
+    */
+  private def baseDigest(): Digest =
+    if ambientStale then
+      var a = Digest.mixString(Digest.seed, Digest.epoch)
+      a = Digest.mixString(a, profile.label)
+      ambientNames.foreach { n =>
+        digests.get(n) match
+          case Some(x) => a = Digest.mixAll(a, 1L, x.hi, x.lo)
+          case None    => a = Digest.mix(a, 0L)
+      }
+      ambientBase = a
+      ambientStale = false
+    ambientBase
+
+  /** The digest of one step, or `None` if the step is not of a shape the
+    * digest covers.
+    *
+    * Only `Info` items are covered. The two text formats carry `Decl` items
+    * instead, and rather than digest a shape that is not exercised, a run over
+    * one of those simply never hits the cache.
+    */
+  private def stepDigest(slice: Vector[ExportItem]): Option[Digest] =
+    val infos = slice.collect { case ExportItem.Info(i) => i }
+    if infos.length != slice.length then None
+    else
+      val dep: Name => Option[Digest] = digests.get
+      Some(infos.foldLeft(Digest.mix(baseDigest(), slice.length.toLong))((acc, i) => Digest.mixInfo(acc, i, dep)))
 
   def hasNext: Boolean = stepLength().isDefined
 
@@ -208,7 +275,19 @@ final class Replay(
     while k < n.get do { ready.removeHead(); k += 1 }
     consumed += n.get
     val (names, step, recover) = pending(slice)
-    if !names.exists(check) then
+    val dg = stepDigest(slice)
+    dg.foreach { d =>
+      names.foreach(n => digests.update(n, d))
+      if names.exists(ambientNames.contains) then ambientStale = true
+    }
+    if dg.exists(d => cache.exists(_.contains(d))) then
+      // Accepted by an earlier run against the same dependencies, profile and
+      // epoch. Admitted the way an unchecked declaration is, and reported as
+      // its own outcome so it is never mistaken for this run's work.
+      reused += names.length
+      scala.util.Try(recover(env)).toOption.foreach(e => env = e)
+      ReplayStep(names, ReplayOutcome.Cached(dg.get.hex))
+    else if !names.exists(check) then
       // Not selected: admit it unchecked so that what depends on it still
       // resolves, and say so. Never `Checked`, so it cannot be read as
       // agreement. See docs/semantics.md P14.
@@ -229,6 +308,8 @@ final class Replay(
           case e: ExportException =>
             (ReplayOutcome.Failed(e.getMessage), scala.util.Try(recover(env)).toOption)
       nextEnv.foreach(e => env = e)
+      if outcome == ReplayOutcome.Checked then
+        dg.foreach(d => cache.foreach(_.accepted(d)))
       ReplayStep(names, outcome)
 
   /** The step the slice amounts to: one declaration, or one inductive block. */

@@ -1,0 +1,3 @@
+commit	at	checker	toolchain	corpus	platform	declarations	accepted	rejected	wall_nanos	peak_heap_bytes
+870368f21189659869e0220023d84e0582c9c294	2026-10-18T15:51:14Z	kolla	leanprover/lean4:v4.35.0	lean	jvm	171705	171705	0	377061560459	5468877736
+870368f21189659869e0220023d84e0582c9c294	2026-10-18T15:51:14Z	nanoda	leanprover/lean4:v4.35.0	lean	jvm	1	1	0	56826302959	0

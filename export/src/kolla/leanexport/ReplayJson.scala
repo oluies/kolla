@@ -37,6 +37,7 @@ object ReplayJson:
         "accepted"    -> JsonWriter.num(t.accepted.toLong),
         "rejected"    -> JsonWriter.num(t.rejected.toLong),
         "carriedOver" -> JsonWriter.num(t.carriedOver.toLong),
+        "cached"      -> JsonWriter.num(t.cached.toLong),
         "errored"     -> JsonWriter.num(t.failed.toLong),
         "notReached"  -> JsonWriter.num(t.notReached.toLong),
         "total"       -> JsonWriter.num(t.total.toLong)

@@ -21,10 +21,15 @@ object KollaChecker:
     *
     * `CarriedOver` is `NotChecked`, never agreement: the export file supplied
     * the constant and the kernel did not re-derive it. See docs/semantics.md K8.
+    * A `Cached` outcome is `NotChecked` for the same reason, and the platform
+    * does not pass a cache in the first place.
     */
   def verdictOf(outcome: ReplayOutcome): Verdict = outcome match
     case ReplayOutcome.Checked            => Verdict.Accepted
     case ReplayOutcome.CarriedOver(r)     => Verdict.NotChecked(r)
+    // The platform never caches: a comparison has to be this run's own
+    // verdict, or it is comparing a reference against a stored answer.
+    case ReplayOutcome.Cached(d)          => Verdict.NotChecked(s"cached, digest $d")
     case ReplayOutcome.Rejected(r, _)     => Verdict.Rejected(r)
     case ReplayOutcome.Failed(r)          => Verdict.Error(r)
 
