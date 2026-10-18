@@ -66,6 +66,12 @@ object kernel extends Module {
 object difftest extends KollaBase {
   def moduleDeps = Seq(kernel.jvm, build.`export`.jvm, dsl.jvm)
   def mainClass = Some("kolla.difftest.Main")
+  /** A library corpus needs more heap than the default quarter of RAM on a
+    * small machine: `init` is 6.5 million export lines and peaks at 3 GB, and
+    * `lean` is larger again. A cap only matters if the workload reaches it, so
+    * this is safe on a runner with less memory than the number names.
+    */
+  def forkArgs = Seq(sys.env.getOrElse("KOLLA_XMX", "-Xmx16g"))
   def mvnDeps = Seq(
     mvn"org.typelevel::cats-core::${v.cats}",
     mvn"org.typelevel::cats-effect::${v.catsEffect}",

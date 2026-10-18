@@ -971,6 +971,25 @@ for a rejection, which is a verdict, while `smoke.js` uses 1 for a page that
 misbehaved, which is a failure, and 3 for Playwright not being installed, which
 is neither.
 
+### F7 — the native build is not the one to run a library corpus with
+
+On `init` — 59,349 declarations from 6.5 million export lines — the JVM peaks
+at 3.0 GB of heap and finishes in 49 seconds. The native binary does the same
+work with a peak memory footprint of 51.6 GB and takes about 13 minutes. On
+`std`, half again as large, it had reached 6.5 GB of resident memory after 43
+minutes without finishing, and exhausted a 48 GB machine.
+
+That inverts the small-corpus result, where native is usually the faster of the
+two: on the handwritten corpora it runs at 0.1x to 3x the JVM's time. The
+crossover is somewhere between a few thousand declarations and sixty thousand.
+The likely cause is the collector — Immix against a generational one, on a
+workload that allocates an `Expr` per node of every term it reads — but that is
+a hypothesis, not something measured here.
+
+What follows for the platform comparison is only that it runs on the committed
+fixtures (F6), which are thousands of declarations rather than tens of
+thousands. A library corpus is checked on the JVM.
+
 ### F6 — a committed export is a corpus
 
 `Corpus.fixtures` makes each file under `difftest/test/resources` a corpus with
