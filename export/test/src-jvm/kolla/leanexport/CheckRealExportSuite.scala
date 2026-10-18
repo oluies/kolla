@@ -24,9 +24,17 @@ class CheckRealExportSuite extends munit.FunSuite:
     }
     (env, outcomes.result())
 
-  // Fully checked counts are the number of def/thm/opaque/axiom entries in each
-  // file; inductives, constructors, recursors and the quotient package have
-  // their types checked but are not yet validated as a block.
+  // This suite drives `DeclarationChecker.addInfo` one entry at a time, which
+  // is not how a run works and is the point of it: `addInfo` can only
+  // type-check an inductive, a constructor or a recursor, because a rule's
+  // right-hand side may call a sibling recursor of the same block. So the
+  // `TypeOnly` counts below are that function's behaviour in isolation.
+  //
+  // A real run goes through `Replay`, which groups the block and validates it
+  // with `AddInductive` plus `InductiveChecker.validate`. The last test in this
+  // file is the contrast: the same fixtures, replayed properly, come back with
+  // nothing carried over. Fully checked here is the number of
+  // def/thm/opaque/axiom entries plus the quotient package.
   test("every declaration of the Nat.add export is accepted") {
     val (env, outcomes) = replay("nat-add-3.1.0.ndjson")
     assertEquals(env.size, outcomes.size)
@@ -390,4 +398,26 @@ class CheckRealExportSuite extends munit.FunSuite:
         case _ => env = dc.addInfo(env, info)._1
     }
     assert(checkedOne)
+  }
+
+  test("replayed properly, the same fixtures carry nothing over") {
+    // The guarantee the README states, and the contrast with the counts above:
+    // `addInfo` can only type-check an inductive, a constructor or a recursor,
+    // so a run that did not group blocks would report them carried over.
+    for (f, p) <- List(
+           "nat-add-3.1.0.ndjson"      -> KernelProfile.v4_35,
+           "nested-3.1.0.ndjson"       -> KernelProfile.v4_35,
+           "quot-sound-3.1.0.ndjson"   -> KernelProfile.v4_35,
+           "nat-add-succ-3.0.0.ndjson" -> KernelProfile.v4_27
+         )
+    do
+      val xs = ExportReader.fromLines(resource(f)).items
+      val r  = new Replay(xs, p, true)
+      val seen = Vector.newBuilder[(String, String)]
+      while r.hasNext do
+        val s = r.next()
+        s.names.foreach(n => seen += ((n.toString, ReplayTally.label(s.outcome))))
+      val got = seen.result()
+      assert(got.nonEmpty, clue(f))
+      assertEquals(got.filter(_._2 != "accepted"), Vector.empty[(String, String)], clue((f, p.label)))
   }

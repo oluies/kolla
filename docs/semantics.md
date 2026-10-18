@@ -1094,6 +1094,39 @@ file still has to be read and digested to know it is the same file, and the
 digest is a second walk over every expression — so the cold cost is roughly
 double. The gain follows how much of the run is checking rather than parsing.
 
+### K18 — the positive defeq cache can be kept on an older profile
+
+Lean added a positive `is_def_eq` cache in v4.35 and `KernelProfile` follows
+the release, so `v4_25` and `v4_27` do without it. P12 is what that costs: one
+declaration of `Std` exhausts a 24 GB heap on `v4_27` where the whole corpus
+takes 305 seconds on `v4_35`.
+
+`KernelProfile.withDefEqSuccessCache` keeps the cache on a profile that
+predates it, and `--defeq-cache` is the way to ask for it. It is an
+optimisation rather than a change of profile. An entry is written only where
+`is_def_eq` already answered true and `succeededBefore` does nothing but
+short-circuit to that answer; `TypeChecker` is one instance per declaration,
+and within one the environment is fixed and the local context append-only with
+globally unique free variables (K6), so a pair that answered true cannot answer
+otherwise later.
+
+It is verified rather than argued. `DefEqCacheEquivalenceSuite` replays every
+committed fixture on both uncached profiles each way and requires the outcome
+sequences to be equal, and on the v4.28.0 `init` export — 51,759 declarations
+on the `v4_27` profile — the two runs agree name by name and verdict by
+verdict, 127.2s and 1.10 GB against 95.0s and 1.65 GB. Faster and larger, as a
+cache should be.
+
+One way it can change an outcome: caching cuts the step count, so a
+declaration that would exhaust `TypeChecker.maxSteps` without it may pass with
+it. That limit is kolla's own guard and not Lean's, so the direction is towards
+Lean's behaviour rather than away from it.
+
+The label carries the change — `v4.27.0+defeq-cache` — because every summary
+line names the profile, and a run with the flag is not a faithful reproduction
+of that release's performance even though it is of its verdicts. `difftest`
+never sets it, for the same reason it never passes a cache (P15).
+
 ### F8 — resource exhaustion is its own exit code
 
 Exit 2 means the file could not be read and 1 that a declaration was rejected.

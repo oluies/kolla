@@ -40,6 +40,28 @@ final case class KernelProfile(
 ):
   def natMaxSize: Long = natMaxSizeBytes.getOrElse(Long.MaxValue)
 
+  /** The same profile, keeping the positive `is_def_eq` cache that only v4.35
+    * has.
+    *
+    * This is an optimisation and not a change of profile. An entry is written
+    * only where `is_def_eq` already answered true, and `succeededBefore` does
+    * nothing but short-circuit to that answer; `TypeChecker` is one instance
+    * per declaration, and within one the environment is fixed and the local
+    * context append-only with globally unique free variables (K6), so a pair
+    * that answered true cannot answer otherwise later.
+    *
+    * It can still change an outcome in one way: caching cuts the step count,
+    * so a declaration that would exhaust `maxSteps` without it may pass with
+    * it. That guard is kolla's and not Lean's. See docs/semantics.md K18.
+    *
+    * The label carries the change so that any report naming the profile says
+    * the kernel was not the release's. A profile that already caches is
+    * returned unchanged.
+    */
+  def withDefEqSuccessCache: KernelProfile =
+    if cacheDefEqSuccess then this
+    else copy(label = s"$label+defeq-cache", cacheDefEqSuccess = true)
+
 object KernelProfile:
 
   val stringMk: Name     = Name.parse("String.mk")

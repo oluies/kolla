@@ -24,6 +24,8 @@ final case class Options(
     checkOnly: List[String] = Nil,
     /** A file of accepted content digests to reuse and extend. */
     cache: Option[String] = None,
+    /** Keep the positive `is_def_eq` cache on a profile that predates it. */
+    defeqCache: Boolean = false,
     help: Boolean = false,
     version: Boolean = false,
     listProfiles: Boolean = false
@@ -51,6 +53,8 @@ object Options:
       |  -q, --quiet     only the counts and the verdict
       |  --progress      note declarations and bytes read on stderr
       |  --cache <file>  reuse and extend a file of accepted digests
+      |  --defeq-cache   keep the positive is_def_eq cache on a profile that
+      |                  predates it; needed for a library corpus before v4.35
       |  --profiles      list the profiles and exit
       |  -h, --help      this message
       |  --version       the version and the default profile
@@ -58,6 +62,10 @@ object Options:
 
   val profiles: String =
     KernelProfile.all.map(p => s"  ${p.label}").mkString("profiles\n", "\n", "")
+
+  /** The profile a run actually uses, which `--defeq-cache` may amend. */
+  def profileOf(o: Options): KernelProfile =
+    if o.defeqCache then o.profile.withDefEqSuccessCache else o.profile
 
   /** The predicate `--check` amounts to: a name matches a prefix exactly or is
     * under it. No prefixes means everything is checked.
@@ -84,6 +92,7 @@ object Options:
       case "--only" :: v :: t        => go(t, o.copy(only = o.only :+ v))
       case "--check" :: v :: t       => go(t, o.copy(checkOnly = o.checkOnly :+ v))
       case "--cache" :: v :: t       => go(t, o.copy(cache = Some(v)))
+      case "--defeq-cache" :: t      => go(t, o.copy(defeqCache = true))
       case "--profile" :: v :: t =>
         KernelProfile.all.find(p => p.label == v || p.label == s"v$v") match
           case Some(p) => go(t, o.copy(profile = p))
