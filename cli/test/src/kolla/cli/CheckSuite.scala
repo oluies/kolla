@@ -103,3 +103,76 @@ class CheckSuite extends CatsEffectSuite:
       case Right(r) => assertEquals(r.tally.accepted, 2)
     }
   }
+
+  private val ndjson = ExportFormat.Ndjson("3.1.0")
+
+  /** NDJSON announces itself with a `meta` header, which is how the reader
+    * knows the format; a headerless file is not a file kolla ever sees.
+    */
+  private val meta =
+    ExportMeta("lean4export", "3.1.0", "3.1.0", "4.35.0", "eb6cafb")
+
+  /** The items as an export file, in `size`-byte chunks.
+    *
+    * Small chunks on purpose: the streaming path has to survive a declaration
+    * split across two chunks, which a single-chunk stream would never show.
+    */
+  private def bytesOf(items: Vector[ExportItem], size: Int): fs2.Stream[IO, Byte] =
+    fs2.Stream
+      .emits(ExportWriter.toLines(ExportEnv(ndjson, Some(meta), items), ndjson))
+      .intersperse("\n")
+      .through(fs2.text.utf8.encode)
+      .chunkLimit(size)
+      .unchunks
+
+  test("streaming an export gives the same tally as holding it") {
+    for
+      streamed <- Check.stream("x", bytesOf(good, 7), KernelProfile.v4_35, abortOnReject = false, silent)
+      held     <- Check.run(good, KernelProfile.v4_35, abortOnReject = false, silent)
+    yield
+      val r = streamed.getOrElse(fail("the stream produced no result"))
+      assertEquals(r.tally.accepted, held.tally.accepted)
+      assertEquals(r.tally.rejected, held.tally.rejected)
+      assertEquals(r.tally.total, held.tally.total)
+      assertEquals(r.lateAmbient, Nil)
+  }
+
+  test("streaming a rejection is still a rejection") {
+    Check.stream("x", bytesOf(bad, 13), KernelProfile.v4_35, abortOnReject = false, silent).map { out =>
+      val r = out.getOrElse(fail("the stream produced no result"))
+      assertEquals(r.tally.rejected, 1)
+      assert(!r.tally.ok)
+    }
+  }
+
+  test("streaming names each declaration exactly once") {
+    val seen = IO.ref(Vector.empty[String])
+    seen.flatMap { ref =>
+      Check
+        .stream("x", bytesOf(good, 5), KernelProfile.v4_35, abortOnReject = false,
+                (n, _, _) => ref.update(_ :+ n.toString))
+        .flatMap(_ => ref.get)
+        .map(names => assertEquals(names, Vector("P", "Q")))
+    }
+  }
+
+  test("an unparseable stream is a read failure, not an exhaustion") {
+    val junk = fs2.Stream.emits("this is not an export".getBytes("UTF-8").toSeq)
+    Check.stream("x", junk, KernelProfile.v4_35, abortOnReject = false, silent).map {
+      case Left(f: Check.Failure.Unreadable) => assert(f.message.startsWith("x:"), clue(f.message))
+      case other                             => fail(s"expected Unreadable, got $other")
+    }
+  }
+
+  test("progress is reported as declarations go by") {
+    // `progressEvery` is far above a two-declaration file, so the note must
+    // not fire; this pins the threshold rather than the plumbing.
+    val notes = IO.ref(Vector.empty[Check.Progress])
+    notes.flatMap { ref =>
+      Check
+        .stream("x", bytesOf(good, 9), KernelProfile.v4_35, abortOnReject = false, silent,
+                Some((p: Check.Progress) => ref.update(_ :+ p)))
+        .flatMap(_ => ref.get)
+        .map(ns => assertEquals(ns, Vector.empty[Check.Progress]))
+    }
+  }

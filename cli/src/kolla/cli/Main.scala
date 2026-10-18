@@ -35,38 +35,40 @@ object Main extends IOApp:
       }
 
   private def checkOne(o: Options, only: Set[String], file: String): IO[ExitCode] =
-    read(file).attempt.flatMap {
-      case Left(e) => Console[IO].error(s"$file: ${e.getMessage}").as(ExitCode(2))
-      case Right(contents) =>
-        def emit(n: Name, outcome: ReplayOutcome, nanos: Long): IO[Unit] =
-          if only.nonEmpty && !only.contains(n.toString) then IO.unit
-          else if o.json then Console[IO].println(Render.json(n, outcome, nanos))
-          else if o.verbose then Console[IO].println(s"  ${Render.label(outcome)} $n")
-          else IO.unit
+    def emit(n: Name, outcome: ReplayOutcome, nanos: Long): IO[Unit] =
+      if only.nonEmpty && !only.contains(n.toString) then IO.unit
+      else if o.json then Console[IO].println(Render.json(n, outcome, nanos))
+      else if o.verbose then Console[IO].println(s"  ${Render.label(outcome)} $n")
+      else IO.unit
 
-        Check.file(file, contents, o.profile, o.abortOnReject, emit).flatMap {
-          case Left(message) => Console[IO].error(message).as(ExitCode(2))
-          case Right(r) =>
-            val report =
-              if o.json then Console[IO].println(Render.summaryJson(file, o.profile.label, platform, r.tally, r.wallNanos))
-              else if o.quiet then Console[IO].println(r.tally.counts)
-              else Console[IO].print(Render.summary(file, o.profile.label, r.tally, r.wallNanos))
-            report.as(if r.tally.ok then ExitCode.Success else ExitCode(1))
-        }
+    val progress =
+      if !o.progress then None
+      else
+        Some((p: Check.Progress) =>
+          Console[IO].error(f"  ${p.declarations}%,d declarations, ${p.bytesRead / 1048576.0}%.0f MB read")
+        )
+
+    Check.stream(file, read(file), o.profile, o.abortOnReject, emit, progress).flatMap {
+      case Left(f: Check.Failure.Exhausted)  => Console[IO].error(f.message).as(ExitCode(3))
+      case Left(f: Check.Failure.Unreadable) => Console[IO].error(f.message).as(ExitCode(2))
+      case Right(r) =>
+        val late =
+          if r.lateAmbient.isEmpty then IO.unit
+          else
+            Console[IO].error(
+              s"  warning: ${r.lateAmbient.map(_.toString).sorted.mkString(", ")} declared after the hoisting window"
+            )
+        val report =
+          if o.json then Console[IO].println(Render.summaryJson(file, o.profile.label, platform, r.tally, r.wallNanos))
+          else if o.quiet then Console[IO].println(r.tally.counts)
+          else Console[IO].print(Render.summary(file, o.profile.label, r.tally, r.wallNanos))
+        late *> report.as(if r.tally.ok then ExitCode.Success else ExitCode(1))
     }
 
   /** `-` is standard input, so the CLI composes with a pipeline. */
-  private def read(file: String): IO[String] =
-    if file == "-" then
-      fs2.io
-        .stdinUtf8[IO](1024 * 1024)
-        .compile
-        .foldMonoid
-    else
-      Files[IO]
-        .readUtf8(Path(file))
-        .compile
-        .foldMonoid
+  private def read(file: String): fs2.Stream[IO, Byte] =
+    if file == "-" then fs2.io.stdin[IO](1024 * 1024)
+    else Files[IO].readAll(Path(file))
 
   /** Which build produced this binary, for a report that names it. */
   def platform: String = Platform.name

@@ -16,6 +16,8 @@ final case class Options(
     quiet: Boolean = false,
     /** Restrict the report to these declarations; empty means all. */
     only: List[String] = Nil,
+    /** Note progress on stderr while a long file is being read. */
+    progress: Boolean = false,
     help: Boolean = false,
     version: Boolean = false,
     listProfiles: Boolean = false
@@ -30,7 +32,8 @@ object Options:
       |
       |An export file is lean4export output: NDJSON 3.x, or either text format.
       |'-' reads standard input. Exit code 0 means every declaration was
-      |accepted, 1 that one was rejected, 2 that the file could not be read.
+      |accepted, 1 that one was rejected, 2 that the file could not be read,
+      |3 that kolla ran out of memory before reaching a verdict.
       |
       |  --profile <v>   the Lean release to check as (default the newest)
       |  --json          one JSON object per declaration on stdout
@@ -38,6 +41,7 @@ object Options:
       |  --only <name>   report only this declaration, repeatable
       |  -v, --verbose   name each declaration as it is checked
       |  -q, --quiet     only the counts and the verdict
+      |  --progress      note declarations and bytes read on stderr
       |  --profiles      list the profiles and exit
       |  -h, --help      this message
       |  --version       the version and the default profile
@@ -53,6 +57,7 @@ object Options:
       case "--abort" :: t       => go(t, o.copy(abortOnReject = true))
       case ("-v" | "--verbose") :: t => go(t, o.copy(verbose = true))
       case ("-q" | "--quiet") :: t   => go(t, o.copy(quiet = true))
+      case "--progress" :: t         => go(t, o.copy(progress = true))
       case ("-h" | "--help") :: _    => Right(o.copy(help = true))
       case "--version" :: _          => Right(o.copy(version = true))
       case "--profiles" :: _         => Right(o.copy(listProfiles = true))
