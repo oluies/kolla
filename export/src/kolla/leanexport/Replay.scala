@@ -59,7 +59,12 @@ final class Replay(
       * declared or this many items are held, whichever comes first, so a
       * stream never retains more than a window. See docs/semantics.md P13.
       */
-    hoistWindow: Int = Replay.defaultHoistWindow
+    hoistWindow: Int = Replay.defaultHoistWindow,
+    /** Which declarations to check. One that answers false is admitted into
+      * the environment unchecked, exactly as a rejected one is (P6), and
+      * reported as carried over. See docs/semantics.md P14.
+      */
+    check: Name => Boolean = _ => true
 ):
 
   /** Feeds a whole file at once, which is what a frontend with the items
@@ -68,7 +73,7 @@ final class Replay(
   def this(items: Vector[ExportItem], profile: KernelProfile, hoist: Boolean) =
     // An unbounded window: the items are already in memory, so holding them
     // costs nothing and the order is exactly what the whole-file pass gives.
-    this(profile, hoist, Int.MaxValue)
+    this(profile, hoist, Int.MaxValue, _ => true)
     items.foreach(feed)
     finish()
 
@@ -91,6 +96,7 @@ final class Replay(
   private var block: Option[Set[Name]] = None
 
   private val late                 = mutable.ArrayBuffer.empty[Name]
+  private var admitted: Int        = 0
   private var consumed: Int        = 0
   private var fed: Int             = 0
   private var finished: Boolean    = false
@@ -110,6 +116,11 @@ final class Replay(
     * disagreement. See docs/semantics.md P13.
     */
   def lateAmbientConstants: List[Name] = late.toList
+
+  /** How many declarations were admitted unchecked because `check` declined
+    * them, as opposed to carried over because the format gave only a type.
+    */
+  def admittedUnchecked: Int = admitted
 
   def hasNext: Boolean = stepLength().isDefined
 
@@ -197,20 +208,28 @@ final class Replay(
     while k < n.get do { ready.removeHead(); k += 1 }
     consumed += n.get
     val (names, step, recover) = pending(slice)
-    val (outcome, nextEnv) =
-      try
-        val (e, out) = step()
-        val o = out match
-          case CheckOutcome.Checked  => ReplayOutcome.Checked
-          case CheckOutcome.TypeOnly => ReplayOutcome.CarriedOver("carried over from the export file")
-        (o, Some(e))
-      catch
-        case e: KernelException =>
-          (ReplayOutcome.Rejected(e.reason, e.trace), scala.util.Try(recover(env)).toOption)
-        case e: ExportException =>
-          (ReplayOutcome.Failed(e.getMessage), scala.util.Try(recover(env)).toOption)
-    nextEnv.foreach(e => env = e)
-    ReplayStep(names, outcome)
+    if !names.exists(check) then
+      // Not selected: admit it unchecked so that what depends on it still
+      // resolves, and say so. Never `Checked`, so it cannot be read as
+      // agreement. See docs/semantics.md P14.
+      admitted += names.length
+      scala.util.Try(recover(env)).toOption.foreach(e => env = e)
+      ReplayStep(names, ReplayOutcome.CarriedOver("admitted unchecked: not selected"))
+    else
+      val (outcome, nextEnv) =
+        try
+          val (e, out) = step()
+          val o = out match
+            case CheckOutcome.Checked  => ReplayOutcome.Checked
+            case CheckOutcome.TypeOnly => ReplayOutcome.CarriedOver("carried over from the export file")
+          (o, Some(e))
+        catch
+          case e: KernelException =>
+            (ReplayOutcome.Rejected(e.reason, e.trace), scala.util.Try(recover(env)).toOption)
+          case e: ExportException =>
+            (ReplayOutcome.Failed(e.getMessage), scala.util.Try(recover(env)).toOption)
+      nextEnv.foreach(e => env = e)
+      ReplayStep(names, outcome)
 
   /** The step the slice amounts to: one declaration, or one inductive block. */
   private def pending(slice: Vector[ExportItem]): (List[Name], () => (Environment, CheckOutcome), Environment => Environment) =

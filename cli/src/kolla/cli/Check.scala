@@ -16,7 +16,12 @@ object Check:
   /** Declarations per `IO.cede`. */
   val cedeEvery: Int = 32
 
-  final case class Result(tally: ReplayTally, wallNanos: Long, lateAmbient: List[Name] = Nil)
+  final case class Result(
+      tally: ReplayTally,
+      wallNanos: Long,
+      lateAmbient: List[Name] = Nil,
+      admittedUnchecked: Int = 0
+  )
 
   /** Why a file produced no verdict.
     *
@@ -47,10 +52,13 @@ object Check:
       items: Vector[ExportItem],
       profile: KernelProfile,
       abortOnReject: Boolean,
-      emit: (Name, ReplayOutcome, Long) => IO[Unit]
+      emit: (Name, ReplayOutcome, Long) => IO[Unit],
+      check: Name => Boolean = _ => true
   ): IO[Result] =
     IO.monotonic.flatMap { start =>
-      val replay = new Replay(items, profile)
+      val replay = new Replay(profile, true, Int.MaxValue, check)
+      items.foreach(replay.feed)
+      replay.finish()
       var tally  = ReplayTally()
 
       def loop(n: Int): IO[Unit] =
@@ -70,7 +78,7 @@ object Check:
             step.names.traverse_(d => emit(d, step.outcome, took)) *> loop(n + 1)
           }
 
-      loop(0) *> IO.monotonic.map(end => Result(tally, (end - start).toNanos))
+      loop(0) *> IO.monotonic.map(end => Result(tally, (end - start).toNanos, Nil, replay.admittedUnchecked))
     }
 
   extension [A](xs: List[A])
@@ -89,10 +97,11 @@ object Check:
       profile: KernelProfile,
       abortOnReject: Boolean,
       emit: (Name, ReplayOutcome, Long) => IO[Unit],
-      progress: Option[Progress => IO[Unit]] = None
+      progress: Option[Progress => IO[Unit]] = None,
+      check: Name => Boolean = _ => true
   ): IO[Either[Failure, Result]] =
     IO.monotonic.flatMap { start =>
-      val replay  = new Replay(profile)
+      val replay  = new Replay(profile, true, Replay.defaultHoistWindow, check)
       var tally   = ReplayTally()
       var read    = 0L
       var seen    = 0L
@@ -146,7 +155,9 @@ object Check:
         .attempt
         .flatMap {
           case Right(_) =>
-            IO.monotonic.map(end => Right(Result(tally, (end - start).toNanos, replay.lateAmbientConstants)))
+            IO.monotonic.map(end =>
+              Right(Result(tally, (end - start).toNanos, replay.lateAmbientConstants, replay.admittedUnchecked))
+            )
           case Left(e: OutOfMemoryError) =>
             IO.pure(Left(Failure.Exhausted(s"$name: ran out of memory after $seen declarations")))
           case Left(e) =>
@@ -164,5 +175,5 @@ object Check:
   ): IO[Either[String, Result]] =
     IO(ExportReader.fromString(contents)).attempt.flatMap {
       case Left(e)    => IO.pure(Left(s"$name: ${e.getMessage}"))
-      case Right(env) => run(env.items, profile, abortOnReject, emit).map(Right(_))
+      case Right(env) => run(env.items, profile, abortOnReject, emit, _ => true).map(Right(_))
     }

@@ -17,7 +17,7 @@ object Main extends IOApp:
 
   def run(args: List[String]): IO[ExitCode] =
     Options.parse(args) match
-      case Left(message) => Console[IO].error(message).as(ExitCode(2))
+      case Left(message) => Console[IO].errorln(message).as(ExitCode(2))
       case Right(o) if o.help    => Console[IO].println(Options.usage).as(ExitCode.Success)
       case Right(o) if o.version =>
         Console[IO].println(s"kolla $version, default profile ${o.profile.label}").as(ExitCode.Success)
@@ -45,24 +45,27 @@ object Main extends IOApp:
       if !o.progress then None
       else
         Some((p: Check.Progress) =>
-          Console[IO].error(f"  ${p.declarations}%,d declarations, ${p.bytesRead / 1048576.0}%.0f MB read")
+          Console[IO].errorln(f"  ${p.declarations}%,d declarations, ${p.bytesRead / 1048576.0}%.0f MB read")
         )
 
-    Check.stream(file, read(file), o.profile, o.abortOnReject, emit, progress).flatMap {
-      case Left(f: Check.Failure.Exhausted)  => Console[IO].error(f.message).as(ExitCode(3))
-      case Left(f: Check.Failure.Unreadable) => Console[IO].error(f.message).as(ExitCode(2))
+    Check.stream(file, read(file), o.profile, o.abortOnReject, emit, progress, Options.selects(o)).flatMap {
+      case Left(f: Check.Failure.Exhausted)  => Console[IO].errorln(f.message).as(ExitCode(3))
+      case Left(f: Check.Failure.Unreadable) => Console[IO].errorln(f.message).as(ExitCode(2))
       case Right(r) =>
+        val admitted =
+          if r.admittedUnchecked == 0 then IO.unit
+          else Console[IO].errorln(f"  ${r.admittedUnchecked}%,d admitted unchecked")
         val late =
           if r.lateAmbient.isEmpty then IO.unit
           else
-            Console[IO].error(
+            Console[IO].errorln(
               s"  warning: ${r.lateAmbient.map(_.toString).sorted.mkString(", ")} declared after the hoisting window"
             )
         val report =
           if o.json then Console[IO].println(Render.summaryJson(file, o.profile.label, platform, r.tally, r.wallNanos))
           else if o.quiet then Console[IO].println(r.tally.counts)
           else Console[IO].print(Render.summary(file, o.profile.label, r.tally, r.wallNanos))
-        late *> report.as(if r.tally.ok then ExitCode.Success else ExitCode(1))
+        admitted *> late *> report.as(if r.tally.ok then ExitCode.Success else ExitCode(1))
     }
 
   /** `-` is standard input, so the CLI composes with a pipeline. */

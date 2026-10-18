@@ -18,6 +18,10 @@ final case class Options(
     only: List[String] = Nil,
     /** Note progress on stderr while a long file is being read. */
     progress: Boolean = false,
+    /** Check only declarations under these name prefixes; empty means all.
+      * Everything else is admitted into the environment unchecked.
+      */
+    checkOnly: List[String] = Nil,
     help: Boolean = false,
     version: Boolean = false,
     listProfiles: Boolean = false
@@ -39,6 +43,8 @@ object Options:
       |  --json          one JSON object per declaration on stdout
       |  --abort         stop at the first rejection
       |  --only <name>   report only this declaration, repeatable
+      |  --check <pre>   check only declarations under this name prefix,
+      |                  admitting the rest unchecked; repeatable
       |  -v, --verbose   name each declaration as it is checked
       |  -q, --quiet     only the counts and the verdict
       |  --progress      note declarations and bytes read on stderr
@@ -49,6 +55,17 @@ object Options:
 
   val profiles: String =
     KernelProfile.all.map(p => s"  ${p.label}").mkString("profiles\n", "\n", "")
+
+  /** The predicate `--check` amounts to: a name matches a prefix exactly or is
+    * under it. No prefixes means everything is checked.
+    */
+  def selects(o: Options): kolla.kernel.Name => Boolean =
+    if o.checkOnly.isEmpty then _ => true
+    else
+      val prefixes = o.checkOnly
+      n =>
+        val s = n.toString
+        prefixes.exists(p => s == p || s.startsWith(p + "."))
 
   def parse(args: List[String]): Either[String, Options] =
     def go(rest: List[String], o: Options): Either[String, Options] = rest match
@@ -62,6 +79,7 @@ object Options:
       case "--version" :: _          => Right(o.copy(version = true))
       case "--profiles" :: _         => Right(o.copy(listProfiles = true))
       case "--only" :: v :: t        => go(t, o.copy(only = o.only :+ v))
+      case "--check" :: v :: t       => go(t, o.copy(checkOnly = o.checkOnly :+ v))
       case "--profile" :: v :: t =>
         KernelProfile.all.find(p => p.label == v || p.label == s"v$v") match
           case Some(p) => go(t, o.copy(profile = p))

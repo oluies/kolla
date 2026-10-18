@@ -176,3 +176,44 @@ class CheckSuite extends CatsEffectSuite:
         .map(ns => assertEquals(ns, Vector.empty[Check.Progress]))
     }
   }
+
+  test("--check admits what it does not select, unchecked") {
+    // `P` is selected and checked; `Q` is admitted so that anything depending
+    // on it still resolves, and is never reported as accepted.
+    Check
+      .run(good, KernelProfile.v4_35, abortOnReject = false, silent, n => n.toString == "P")
+      .map { r =>
+        assertEquals(r.tally.accepted, 1)
+        assertEquals(r.tally.carriedOver, 1)
+        assertEquals(r.admittedUnchecked, 1)
+        assert(r.tally.ok)
+      }
+  }
+
+  test("--check can hide a rejection by not selecting it") {
+    // The broken declaration is admitted rather than checked, so the run is
+    // clean. That is the point of the flag and the reason the count is
+    // reported: the verdict covers the selection, not the file.
+    Check
+      .run(bad, KernelProfile.v4_35, abortOnReject = false, silent, n => n.toString == "P")
+      .map { r =>
+        assertEquals(r.tally.rejected, 0)
+        assertEquals(r.admittedUnchecked, 2)
+        assert(r.tally.ok)
+      }
+  }
+
+  test("selecting nothing checks everything") {
+    Check.run(good, KernelProfile.v4_35, abortOnReject = false, silent).map { r =>
+      assertEquals(r.admittedUnchecked, 0)
+      assertEquals(r.tally.accepted, 2)
+    }
+  }
+
+  test("a check prefix matches a name and its children, not a word prefix") {
+    val sel = Options.selects(Options(checkOnly = List("Propulsion")))
+    assert(sel(Name.parse("Propulsion")))
+    assert(sel(Name.parse("Propulsion.Basic.thrust")))
+    assert(!sel(Name.parse("PropulsionOther")))
+    assert(!sel(Name.parse("Mathlib.Data.Nat")))
+  }

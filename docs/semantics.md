@@ -963,6 +963,81 @@ library comparison stops at `init`. `lean4checker`'s own verdict on `Std` at
 v4.28.0 is recorded here rather than in `difftest/history`, since no kolla run
 completed to compare it against.
 
+### P13 — the hoisting pass holds a window, not the file
+
+`Replay` is fed with `feed` and `finish` rather than constructed from a
+`Vector`, so a driver can supply items from a stream and never materialise the
+export. What stops that being free is P10: hoisting the kernel's ambient
+constants to the front needs to know where they are, and the whole-file pass
+reads every item before emitting any.
+
+The pass is salvageable because `require` only follows dependencies to groups
+declared *earlier*. The `needed` set computed from a prefix that contains every
+ambient constant is therefore identical to the one computed from the whole
+file: a dependency outside the prefix is one the full pass would have filtered
+out anyway. So the prefix is held back only until the ambient constants have
+all been declared and their group has closed, and released there.
+
+A file that never declares one of them — `quot-sound` declares none of the nine
+— would hold everything, so `hoistWindow` bounds it. The prefix is cut at the
+first group boundary once the window is full, whichever comes first. The
+default is 65536 items, against a widest measured need of 1416: in the v4.25.0
+`case-strlit` export `appendLit` is item 406 and `String.mk` item 1822. The
+`Vector` constructor passes `Int.MaxValue`, so a frontend that already holds
+the items keeps exactly the whole-file order.
+
+Cutting the window early is not silent. An ambient constant declared after the
+cut is recorded in `lateAmbientConstants`, because a rejection downstream of it
+may be P10 rather than a disagreement, and a frontend reports it. The streamed
+`case-strlit` shape is tested both ways: within the window the verdicts match
+the whole-file run, and with `hoistWindow = 1` the demoted `Nat` block is
+rejected exactly as it is unhoisted.
+
+What streaming does not bound is the reader's interning tables. The export
+format refers to expressions by index, so every expression stays reachable for
+as long as a later line might name it, and `ExportReader.pipe` drops items but
+not the tables. Measured on the v4.35.0 `init` export, 330 MB and 59,349
+declarations: 1.19 GB peak resident, against 2.74 GB of heap for the same
+corpus read into a `Vector`.
+
+### P14 — an unselected declaration is admitted, never accepted
+
+`Replay`'s `check` predicate decides what is checked. A declaration it declines
+takes the same path a rejected one takes (P6): it is added to the environment
+unchecked, so that what depends on it still resolves rather than failing with
+an unknown constant. Its outcome is `CarriedOver`, which `ReplayTally` counts
+apart from `accepted` and which K8 already defines as never agreement.
+
+Reusing `CarriedOver` rather than adding an outcome is deliberate. The two
+cases mean the same thing to a caller — the export file supplied this constant
+and the kernel did not re-derive it — and differ only in why, which the reason
+string carries. `Replay.admittedUnchecked` counts the requested ones so a
+frontend can report them separately, which the command line does on stderr.
+
+The flag is `--check <prefix>`, not `--trust <prefix>`. The behaviour asked for
+was to admit non-matching declarations and check the rest, so the prefix names
+what is checked; calling that "trust" names the complement of what it takes.
+`--only` stays what it was, a filter on the report, so the two are not confused:
+one changes the work, the other changes the output.
+
+A verdict under `--check` covers the selection, not the file. A rejection
+outside the prefix is not reached, which is why the count is reported rather
+than left implicit; a caller that treats exit 0 as "this file is sound" would
+be wrong about every declaration it declined to check.
+
+### F8 — resource exhaustion is its own exit code
+
+Exit 2 means the file could not be read and 1 that a declaration was rejected.
+Running out of room is neither: the file is well formed and kolla reached no
+verdict, so a script that retries with a larger heap needs to tell it from a
+parse failure. `Check.Failure` separates `Exhausted` from `Unreadable` and the
+command line exits 3 for it.
+
+`--progress` notes declarations and bytes read on stderr every 25000
+declarations. It is on request rather than by default so that a pipeline's
+stderr stays empty, and it is on stderr so that `--json` stdout stays
+machine-readable.
+
 ## Frontends
 
 ### F1 — the checking is one implementation, the driver loop is three
