@@ -139,3 +139,40 @@ class DigestSuite extends munit.FunSuite:
     assertEquals(runWith(xs, KernelProfile.v4_35, None).map(_.outcome),
                  runWith(xs, KernelProfile.v4_35, None).map(_.outcome))
   }
+
+  test("a cache survives turning --defeq-cache on") {
+    // The claim the digest keys on `release` for: the flag changes no verdict,
+    // so a digest accepted without it has to be reused with it. Keying on
+    // `label` instead would make every one of these miss, which is the
+    // exhaust-then-rerun regression K18 and P15 describe.
+    val xs    = items("nat-add-3.1.0.ndjson")
+    val cache = new Recording
+    val plain = runWith(xs, KernelProfile.v4_27, Some(cache))
+    assert(plain.forall(_.outcome == ReplayOutcome.Checked), clue(plain.map(_.outcome).toString))
+
+    val amended = runWith(xs, KernelProfile.v4_27.withDefEqSuccessCache, Some(cache))
+    assertEquals(amended.length, plain.length)
+    assert(
+      amended.forall(_.outcome.isInstanceOf[ReplayOutcome.Cached]),
+      clue(amended.map(s => s.names.toString -> s.outcome).toString)
+    )
+  }
+
+  test("and survives turning it back off") {
+    // The other direction, which P15 notes is the less conservative one.
+    val xs    = items("nat-add-3.1.0.ndjson")
+    val cache = new Recording
+    runWith(xs, KernelProfile.v4_27.withDefEqSuccessCache, Some(cache))
+    val back = runWith(xs, KernelProfile.v4_27, Some(cache))
+    assert(back.forall(_.outcome.isInstanceOf[ReplayOutcome.Cached]), clue(back.map(_.outcome).toString))
+  }
+
+  test("a different release is still not reused") {
+    // The guard the above must not weaken: `release` differs between releases,
+    // so a v4_35 digest cannot be reused on v4_27.
+    val xs    = items("nat-add-3.1.0.ndjson")
+    val cache = new Recording
+    runWith(xs, KernelProfile.v4_35, Some(cache))
+    val other = runWith(xs, KernelProfile.v4_27, Some(cache))
+    assertEquals(other.count(_.outcome.isInstanceOf[ReplayOutcome.Cached]), 0)
+  }

@@ -56,6 +56,24 @@ class DefEqCacheEquivalenceSuite extends munit.FunSuite:
     * for; derived so a new profile joins the test by existing. */
   private val uncached = KernelProfile.all.filterNot(_.cacheDefEqSuccess)
 
+  /** The items with the group declaring `Nat` moved to the end, or `None` if
+    * there is no such group.
+    *
+    * One copy, because two tests depend on replaying the same shape: the
+    * equivalence and the guard that the shape still rejects. Two copies would
+    * drift and the guard would vouch for something else.
+    */
+  private def demoteAmbientGroup(xs: Vector[ExportItem]): Option[Vector[ExportItem]] =
+    val starts = Replay.groupStarts(xs)
+    val ends   = starts.drop(1) :+ xs.length
+    starts.indices
+      .find(k => (starts(k) until ends(k)).exists(i => xs(i).names.exists(_.toString == "Nat")))
+      .map { k =>
+        val span = (starts(k) until ends(k)).toSet
+        xs.zipWithIndex.filter((_, i) => !span.contains(i)).map(_._1) ++
+          xs.zipWithIndex.filter((_, i) => span.contains(i)).map(_._1)
+      }
+
   test("the fixtures and the uncached profiles are both non-empty") {
     // Without this the two tests below would pass by iterating nothing.
     assert(fixtures.nonEmpty, clue(fixtures))
@@ -78,42 +96,28 @@ class DefEqCacheEquivalenceSuite extends munit.FunSuite:
     // hoisting on the pass would move the group straight back to the front and
     // this would be the previous test over again.
     for f <- fixtures; p <- uncached do
-      val xs     = items(f)
-      val starts = Replay.groupStarts(xs)
-      val ends   = starts.drop(1) :+ xs.length
-      val g      = starts.indices.find(k => (starts(k) until ends(k)).exists(i => xs(i).names.exists(_.toString == "Nat")))
-      if g.isDefined then
-        val span = (starts(g.get) until ends(g.get)).toSet
-        val bad =
-          xs.zipWithIndex.filter((_, i) => !span.contains(i)).map(_._1) ++
-            xs.zipWithIndex.filter((_, i) => span.contains(i)).map(_._1)
+      demoteAmbientGroup(items(f)).foreach { bad =>
         assertEquals(
           outcomes(bad, p.withDefEqSuccessCache, hoist = false),
           outcomes(bad, p, hoist = false),
           clue((f, p.label))
         )
+      }
   }
 
   test("at least one fixture has an ambient block to demote") {
     // Guards the test above: `Nat` missing from every fixture would make its
     // body a no-op and the equivalence it asserts vacuous.
-    val withNat = fixtures.count(f => items(f).exists(_.names.exists(_.toString == "Nat")))
+    val withNat = fixtures.count(f => demoteAmbientGroup(items(f)).isDefined)
     assert(withNat > 0, clue(fixtures))
   }
 
   test("the demoted unhoisted shape really does reject") {
     // Without this the equivalence above could hold because both sides accept
-    // everything, which would not exercise the cache on a failing run.
-    val f  = fixtures.find(x => items(x).exists(_.names.exists(_.toString == "Nat")))
-    assert(f.isDefined, clue(fixtures))
-    val xs     = items(f.get)
-    val starts = Replay.groupStarts(xs)
-    val ends   = starts.drop(1) :+ xs.length
-    val g      = starts.indices.find(k => (starts(k) until ends(k)).exists(i => xs(i).names.exists(_.toString == "Nat"))).get
-    val span   = (starts(g) until ends(g)).toSet
-    val bad =
-      xs.zipWithIndex.filter((_, i) => !span.contains(i)).map(_._1) ++
-        xs.zipWithIndex.filter((_, i) => span.contains(i)).map(_._1)
-    val got = outcomes(bad, KernelProfile.v4_27, hoist = false)
+    // everything, which would not exercise the cache on a failing run. Same
+    // construction and same profile source as the equivalence test.
+    val bad = fixtures.flatMap(f => demoteAmbientGroup(items(f))).headOption
+    assert(bad.isDefined, clue(fixtures))
+    val got = outcomes(bad.get, uncached.head, hoist = false)
     assert(got.exists(_._2 == "rejected"), clue(got.map(_._2).distinct))
   }
