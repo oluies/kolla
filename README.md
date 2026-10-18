@@ -36,14 +36,25 @@ kolla [options] <export-file>...
   --json          one JSON object per declaration on stdout
   --abort         stop at the first rejection
   --only <name>   report only this declaration, repeatable
+  --check <pre>   check only declarations under this name prefix,
+                  admitting the rest unchecked; repeatable
   -v, --verbose   name each declaration as it is checked
   -q, --quiet     only the counts and the verdict
+  --progress      note declarations and bytes read on stderr
   --profiles      list the profiles and exit
 ```
 
 `-` reads standard input. Exit code 0 means every declaration was accepted, 1
-that one was rejected, and 2 that the file could not be read — an unreadable
-file is not a proof of anything.
+that one was rejected, 2 that the file could not be read — an unreadable file
+is not a proof of anything — and 3 that kolla ran out of memory before
+reaching a verdict, which a script can retry with more room.
+
+The file is checked as it is read, so a large export is never materialised;
+`docs/semantics.md` P13 covers what that costs the hoisting pass. `--check`
+suits a project with a few declarations of its own on top of a large library:
+it admits everything outside the prefix into the environment unchecked and
+reports how many, so the verdict covers the selection rather than the file
+(P14). `--only` filters the report instead, and changes no checking.
 
 `mill cli.native.nativeLink` builds a native binary. It is the faster of the two
 on small inputs and much the slower on large ones; see docs/semantics.md F7.
@@ -120,6 +131,11 @@ Mill, pinned by `.mill-version`; `./mill` bootstraps it.
 
 Scala Native needs clang and the usual native toolchain; the browser smoke test
 needs Playwright.
+
+## What it costs
+
+`docs/scale.md` has measured wall times and peak memory per corpus, what a
+Mathlib-scale export costs, and why a pre-v4.35 profile costs more.
 
 ## Licence
 
