@@ -186,6 +186,16 @@ object Main extends IOApp:
   private type Part =
     (Vector[CheckerRun], Vector[OverallAgreement], Vector[MutationOutcome], Vector[Comparison])
 
+  private def referenceRun(
+      tools: Provision.Tools,
+      c: Corpus,
+      reference: Boolean,
+      workers: Option[Int]
+  ): IO[Option[CheckerRun]] =
+    // lean4checker replays oleans, which a prebuilt export does not have.
+    if reference && c.prebuilt.isEmpty then Lean4Checker.run(tools, c, numWorkers = workers).map(Some(_))
+    else IO.pure(None)
+
   private def mutantsOf(
       items: Vector[kolla.leanexport.ExportItem],
       t: Toolchain,
@@ -237,8 +247,10 @@ object Main extends IOApp:
                  stopOnFirstRejection = reference || useNanoda,
                  expectRejection = c.expectRejection
                )
-      // lean4checker replays oleans, which a prebuilt export does not have.
-      ref <- if reference && c.prebuilt.isEmpty then Lean4Checker.run(tools, c).map(Some(_)) else IO.pure(None)
+      // A library corpus is replayed with fewer workers than lean4checker's
+      // default, since each loads a near-complete environment.
+      workers = if c.source.isDefined || c.prebuilt.isDefined then None else Some(Lean4Checker.libraryWorkers)
+      ref <- referenceRun(tools, c, reference, workers)
       nd  <- if useNanoda then Nanoda.run(nanoda, t, c, env.format, path).map(Some(_)) else IO.pure(None)
       // Mutating a corpus that is already invalid proves nothing.
       muts  <- mutantsOf(items, t, c, o)

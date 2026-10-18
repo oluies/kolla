@@ -22,17 +22,27 @@ object Lean4Checker:
 
   private def bin(dir: Path): Path = dir.resolve(".lake/build/bin/lean4checker")
 
+  /** Workers for a corpus the size of a library.
+    *
+    * `lean4checker` defaults to 8, and its own source says that is already
+    * chosen to avoid exhausting a 32 GB machine on a large project. Each worker
+    * loads a near-complete environment, so a library corpus is run with fewer:
+    * the wall time matters less than finishing.
+    */
+  val libraryWorkers: Int = 2
+
   def run(
       tools: Provision.Tools,
       corpus: Corpus,
-      timeout: FiniteDuration = 30.minutes
+      timeout: FiniteDuration = 30.minutes,
+      numWorkers: Option[Int] = None
   ): IO[CheckerRun] =
     tools.lean4checker match
       case None =>
         IO.pure(
           empty(tools, corpus).copy(failure = Some(s"lean4checker is not available for ${tools.toolchain.spec}"))
         )
-      case Some(dir) => runWith(tools, dir, corpus, timeout)
+      case Some(dir) => runWith(tools, dir, corpus, timeout, numWorkers)
 
   private def empty(tools: Provision.Tools, corpus: Corpus): CheckerRun =
     CheckerRun(
@@ -51,12 +61,14 @@ object Lean4Checker:
       tools: Provision.Tools,
       dir: Path,
       corpus: Corpus,
-      timeout: FiniteDuration
+      timeout: FiniteDuration,
+      numWorkers: Option[Int]
   ): IO[CheckerRun] =
     // A single handwritten module is checked with `--fresh`, which replays its
     // imports too, so the declaration set matches the export file kolla reads.
     val fresh    = corpus.source.isDefined && corpus.modules.length == 1
-    val flags    = if fresh then Seq("--fresh") else Seq.empty
+    val flags    = (if fresh then Seq("--fresh") else Seq.empty) ++
+      numWorkers.map(n => s"--num-workers=$n").toSeq
     val checker  = bin(dir).toString
     val baseCmd  = Seq("elan", "run", tools.toolchain.spec)
     val cmd =
