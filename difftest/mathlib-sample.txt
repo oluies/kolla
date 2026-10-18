@@ -1,24 +1,57 @@
-# Declarations exported from a mathlib checkout for the nightly run, with their
-# transitive dependencies. Chosen to cover the kernel paths that the standard
-# library alone does not reach: deep instance chains, large universe
-# expressions, `Classical.choice`, well-founded recursion and quotient types.
-Mathlib.Algebra.Group.Defs
-Nat.gcd_comm
+# Declarations exported from a mathlib checkout for the nightly run, together
+# with their transitive dependencies. They are chosen to reach kernel paths the
+# standard library alone does not: deep instance chains, large universe
+# expressions, well-founded recursion, quotients and classical choice.
+#
+# Every name here is a mathlib declaration, not a Lean core one. A core name
+# such as `Classical.em` or `Quotient.mk` is present after `import Mathlib` and
+# would export cleanly, but its closure is already covered by the `init` and
+# `std` corpora, so it would add nothing.
+#
+# The list is checked, not assumed: `difftest/lean/CheckNames.lean` reports a
+# verdict per name against the real environment, and the nightly job runs it
+# before exporting. A name that is not a declaration would be skipped by
+# lean4export or abort it, and either way the corpus would quietly not be what
+# this file says it is. An earlier version of this file began with
+# `Mathlib.Algebra.Group.Defs`, which is a module path rather than a
+# declaration.
+#
+# Blank lines and lines starting with '#' are ignored.
+
+# number theory
 Nat.Prime
+Nat.prime_def_lt
+Nat.ModEq
+ZMod.natCast_self
+
+# big operators
 Finset.sum_comm
-List.Perm
-Quotient.mk
-Setoid.r
-Classical.em
-Function.Bijective
-Equiv.refl
-Multiset.card
-Polynomial.degree
+Finset.prod_pow_eq_pow_sum
+
+# algebra and linear algebra
+Polynomial.degree_mul
+Matrix.det_mul
 Matrix.mul_assoc
-Set.image
-Filter.Tendsto
-Cardinal.mk
-Ordinal.type
+Equiv.Perm.sign
+Module.Free
 EuclideanDomain.gcd
 IsUnit
-Module.Free
+
+# data
+Multiset.card
+List.Perm
+Set.image
+
+# order and filters
+Filter.Tendsto
+Filter.tendsto_atTop
+
+# analysis
+Real.sqrt
+Complex.exp
+MeasureTheory.Measure
+
+# set theory and topology
+Cardinal.mk_le_aleph0
+Ordinal.type
+IsOpen

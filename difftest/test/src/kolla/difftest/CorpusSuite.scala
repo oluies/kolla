@@ -110,6 +110,13 @@ class CorpusSuite extends munit.FunSuite:
     assertEquals(c.modules, List("Mathlib"))
     assert(c.decls.nonEmpty)
     assert(c.decls.forall(d => !d.startsWith("#") && d.trim == d), clue(c.decls))
+    // Every entry is a declaration, not a module path. The real gate is
+    // difftest/lean/CheckNames.lean against the environment, but a dotted name
+    // beginning with an upper-case `Mathlib` component is the mistake this
+    // file actually had, and it is cheap to rule out here.
+    assert(c.decls.forall(d => !d.startsWith("Mathlib.")), clue(c.decls.filter(_.startsWith("Mathlib."))))
+    assert(c.decls.length >= 20, clue(c.decls.length))
+    assertEquals(c.decls.distinct.length, c.decls.length, clue(c.decls.diff(c.decls.distinct)))
     assertEquals(c.project.map(_.toString), Some("/tmp/mathlib4"))
   }
 
