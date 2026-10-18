@@ -1182,6 +1182,38 @@ than hit; `Digest.epoch` is left alone because a stale entry can only fail to
 match, not match something it should not. And a run without `--cache` no longer
 maintains the name-to-digest map at all, so it carries nothing per declaration.
 
+### K19 — one Mathlib declaration does not finish checking
+
+Reading a Mathlib export is cheap and checking it is not. On the v4.35.0 export
+of module `Mathlib` — 6.26 GB, 729,263 declarations — reading and admitting
+everything takes 83 seconds (P16, docs/scale.md). A full check reaches 325,090
+declarations and 3,008 MB in about 58 minutes and then stops advancing:
+
+    CategoryTheory.Localization.Monoidal.braidingNatIso
+
+the step immediately after its own `_proof_1`, which was accepted. Thirty
+further minutes produced no progress, with the runtime spinning across roughly
+seven cores and a live set under 4 GB against a 24 GB ceiling. So it is not
+exhaustion, and `--defeq-cache` is not the answer either: this is the v4_35
+profile, where the positive `is_def_eq` cache is already on.
+
+That makes three declarations of this shape now on record, all single terms
+that swallow unbounded time rather than memory:
+
+| declaration | profile | what it was |
+|---|---|---|
+| `Std.…blastUdiv.blastDivSubtractShift` | v4_27 | P12, the missing positive cache |
+| `Real.log` | v4.35.0 | one core, 30 min, no safepoint |
+| `CategoryTheory.…braidingNatIso` | v4.35.0 | 325,090 declarations in |
+
+The first is explained by the cache P12 describes. The other two are not
+explained; they are on the profile that caches and they are not short of heap.
+What they have in common is that none of them could be profiled from outside:
+`jstack`, `jcmd` and `SIGQUIT` were all refused, because the thread does not
+reach a safepoint. Finding out what the kernel is doing in them needs
+instrumentation inside the checking loop rather than a thread dump, and that
+has not been done.
+
 ### F8 — resource exhaustion is its own exit code
 
 Exit 2 means the file could not be read and 1 that a declaration was rejected.

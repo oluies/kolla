@@ -13,6 +13,9 @@ not heap, so it includes the JVM itself.
 | `init` v4.35.0 | 330 MB | 59,349 | 47.7s | 1.19 GB |
 | `std` v4.35.0 | 536 MB | 99,619 | 304.5s | — |
 | `lean` v4.35.0 | 707 MB | 171,705 | 260.9s | 3.09 GB |
+| `Mathlib` v4.35.0, read and admitted | 6.26 GB | 729,263 | 83.0s | 9.40 GB |
+| `Mathlib` v4.35.0, same with `--cache` | 6.26 GB | 729,263 | 80.5s | 14.36 GB |
+| `Mathlib` v4.35.0, fully checked | 6.26 GB | 729,263 | no verdict | — |
 
 The rows without a resident figure were run through `difftest`, which reports
 peak heap instead: 0.69 GB for `mathlib-sample`, 2.74 GB for `init`, 3.77 GB
@@ -55,14 +58,34 @@ refers to expressions by index, so every expression stays reachable while a
 later line might name it. The interning tables are therefore the floor, and
 they scale with distinct expressions rather than with declarations.
 
-A Mathlib-based project is bigger than anything in the table. One trivial
-module importing Mathlib exported 6.26 GB, 110,906,882 lines, 712,261
-declarations and 105.9M expression interning entries. That is 8.8x `lean` by
-bytes and 4.1x by declarations, so expect something in the region of 13-27 GB
-depending on which of the two the tables follow — this has not been measured
-and the range is an extrapolation, not a result.
+## Mathlib
 
-Before streaming it could not be read at all: `cli` folded the file into one
+This was an extrapolation of 13-27 GB until it was measured, and the
+extrapolation was wrong: reading the whole of Mathlib costs 9.40 GB, below the
+bottom of that range. The numbers below replace it.
+
+Exporting module `Mathlib` at v4.35.0 gives 6,258,342,501 bytes — 6.26 GB —
+over 110,895,826 lines and 729,263 declarations. `lean4export` itself takes
+26.3 minutes and peaks at 12.51 GB, which a user pays before kolla sees
+anything.
+
+Reading and admitting all 729,263 of them takes 83.0s and 9.40 GB. That is the
+floor for any run over this file: the export names expressions by index, so the
+reader's interning tables have to stay reachable, and no amount of streaming
+avoids them. `--cache` adds 4.96 GB and no measurable time.
+
+Checking them is another matter. A full check reached 325,090 declarations and
+3,008 MB of 6,258 in about 58 minutes, and then made no progress for a further
+thirty while the runtime spun across roughly seven cores with a live set under
+4 GB — nowhere near the 24 GB ceiling. It is one declaration, the first step
+after `CategoryTheory.Localization.Monoidal.braidingNatIso._proof_1`:
+
+    CategoryTheory.Localization.Monoidal.braidingNatIso
+
+So kolla reads a Mathlib export comfortably and does not finish checking one.
+See docs/semantics.md K19.
+
+Before streaming none of this was reachable: `cli` folded the file into one
 `String`, and a 6.26 GB file exceeds both the maximum byte array and twice that
 again once decoded to UTF-16. The run timed out with no output.
 
