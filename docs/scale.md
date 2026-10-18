@@ -20,6 +20,34 @@ for `std`, 5.09 GB for `lean`. Those runs read the whole file into a `Vector`;
 the two `cli` rows stream it. `init` is the pair to compare, 2.74 GB of heap
 against 1.19 GB resident, and `lean` 5.09 GB against 3.09 GB.
 
+## Per frontend
+
+The figures above are `cli.jvm`. The four frontends do not cost the same, and
+only the JVM one has been measured at library scale.
+
+| frontend | measured on | cost |
+|---|---|---|
+| `cli.jvm` | `init`, `lean` | 1.19 GB / 47.7s and 3.09 GB / 260.9s |
+| `difftest` (JVM) | `init`, `std`, `lean`, `mathlib-sample` | 2.74-5.09 GB of heap, materialised |
+| `cli.native` | `init`, `std` | 51.6 GB / ~13min on `init`; `std` exhausted a 48 GB machine |
+| `web` (Node, browser) | handwritten fixtures only | not measured at library scale |
+
+Two of those rows need qualifying rather than quoting.
+
+The `cli.native` figures are from docs/semantics.md F7 and were taken before
+the driver streamed, so they describe the materialising path. Streaming removes
+the item vector but not the reader's index tables, and F7's diagnosis was the
+collector rather than the items, so the number is expected to improve without
+the gap closing. It has not been re-measured, because re-running it needs more
+memory than the host has and has already cost this machine several kills.
+
+`web` is not run on a library corpus at all. The browser takes its input
+through a textarea, which is already slow at the 2.2 MB fixture, and a 330 MB
+export is not something a page is handed. Node could take one, and has not been
+tried. Neither is a gap in the kernel: all four frontends agree declaration by
+declaration on the committed fixtures, which is what the platform checks them
+for.
+
 ## What scales with what
 
 Streaming bounds what the driver holds, not what the reader holds. An export
