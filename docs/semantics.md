@@ -933,6 +933,36 @@ The subtraction is also why a negative corpus is never mutated. Its baseline
 rejects by construction, so a mutation of the declaration already rejected
 produces no new rejection and would be reported as a bad mutant.
 
+### P12 — `std` cannot be checked on a pre-v4.35 profile
+
+`KernelProfile.forToolchain` maps v4.28.0 to `v4_27`, where `cacheDefEqSuccess`
+is false: Lean added the positive `is_def_eq` cache in v4.35 and keeps only the
+negative one before that. kolla follows the release, and on a library corpus the
+difference is not a constant factor.
+
+Measured at commit 870368f on a 48 GB machine:
+
+| corpus | profile | wall | peak heap |
+|---|---|---|---|
+| `init` | v4_35 | 48.2s | 2.74 GB |
+| `init` | v4_27 | 77.3s | 2.86 GB |
+| `std` | v4_35 | 304.5s | 3.77 GB |
+| `std` | v4_27 | `OutOfMemoryError` after 55min | >24 GB |
+
+`lean4checker` at v4.28.0 checks the same 394 `Std` modules in 74s with a peak
+resident set of 1.1 GB, and Lean's kernel has no positive cache there either.
+The cost is therefore kolla's, not the profile's: successful `is_def_eq` results
+are being re-derived that Lean does not re-derive. Where is not established.
+`TypeChecker` is one instance per declaration with unshared caches and `Expr`
+has no global intern table, so this is not accumulation across declarations; a
+blowup inside a single declaration fits the evidence but has not been localised.
+
+The consequence for the platform is that `std` and `lean` are compared against a
+reference only at v4.35.0, where nanoda is the reference (P9). At v4.28.0 the
+library comparison stops at `init`. `lean4checker`'s own verdict on `Std` at
+v4.28.0 is recorded here rather than in `difftest/history`, since no kolla run
+completed to compare it against.
+
 ## Frontends
 
 ### F1 — the checking is one implementation, the driver loop is three
