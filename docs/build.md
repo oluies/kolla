@@ -82,3 +82,31 @@ releases are immutable. Revoke and reissue in the Portal if one is exposed.
 Locally, `./mill __.jvm.publishArtifacts` builds exactly what would be uploaded
 and signs and sends nothing, and `./mill kernel.jvm.publishM2Local` is enough to
 test a consumer against a real artifact.
+
+### Releasing from a laptop
+
+Store the Portal token in the keychain once. `-w` is what makes `security`
+prompt; without it the item is created with an empty password and the failure
+only shows up later as a rejected upload:
+
+```bash
+security add-generic-password -a "$USER" -s kolla-sonatype-user -w
+security add-generic-password -a "$USER" -s kolla-sonatype-pass -w
+```
+
+Then read them into the environment for one command, and let `gpg` hold the
+signing key so no passphrase is handled here at all:
+
+```bash
+MILL_SONATYPE_USERNAME="$(security find-generic-password -a "$USER" -s kolla-sonatype-user -w)" \
+MILL_SONATYPE_PASSWORD="$(security find-generic-password -a "$USER" -s kolla-sonatype-pass -w)" \
+./mill mill.javalib.SonatypeCentralPublishModule/publishAll \
+  --publishArtifacts __.jvm.publishArtifacts \
+  --useGpgCli true \
+  --shouldRelease true
+```
+
+`publishAll` also takes `--username` and `--password`, and they should not be
+used: an argument is visible in `ps` to every process on the machine for as long
+as the publish runs, while an environment variable assigned as a prefix like
+this is confined to the one command and never reaches the shell's history.
