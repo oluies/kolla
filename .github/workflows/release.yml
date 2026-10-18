@@ -1,12 +1,22 @@
 name: release
 
 # A tag is the trigger, so the version published is the version tagged and
-# nothing else decides it. `workflow_dispatch` runs everything up to the
-# upload, which is what a dry run needs.
+# nothing else decides it. A Central release is immutable, so a tag stages the
+# bundle and the Portal's Publish button is the irreversible step; `release:
+# true` is there for when that is wanted in one go.
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      upload:
+        description: 'Upload a bundle to the Portal and stage it'
+        type: boolean
+        default: false
+      release:
+        description: 'Release it rather than leaving it staged'
+        type: boolean
+        default: false
 
 jobs:
   publish:
@@ -39,16 +49,21 @@ jobs:
       - run: ./mill __.jvm.compile
       - run: ./mill kernel.jvm.test + export.jvm.test + dsl.jvm.test
 
-      # Signing and upload. Mill reads all four from the environment; none of
-      # them is echoed. A dispatch run stops short of releasing.
+      # Builds and signs exactly what would be uploaded, and uploads nothing.
+      # This is the whole of a dispatch run unless `upload` was asked for.
+      - name: Build the artifacts
+        run: ./mill __.jvm.publishArtifacts
+
+      # Signing and upload. Mill reads all four from the environment and none
+      # is echoed. A tag stages; releasing is a choice.
       - name: Publish to Maven Central
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.upload
         env:
           MILL_SONATYPE_USERNAME: ${{ secrets.MILL_SONATYPE_USERNAME }}
           MILL_SONATYPE_PASSWORD: ${{ secrets.MILL_SONATYPE_PASSWORD }}
           MILL_PGP_SECRET_BASE64: ${{ secrets.MILL_PGP_SECRET_BASE64 }}
           MILL_PGP_PASSPHRASE: ${{ secrets.MILL_PGP_PASSPHRASE }}
         run: |
-          release=${{ startsWith(github.ref, 'refs/tags/v') }}
           ./mill mill.javalib.SonatypeCentralPublishModule/publishAll \
             --publishArtifacts __.jvm.publishArtifacts \
-            --shouldRelease "$release"
+            --shouldRelease ${{ inputs.release == true }}

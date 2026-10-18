@@ -74,7 +74,21 @@ Four repository secrets, named for the environment variables Mill reads:
 | `MILL_PGP_PASSPHRASE` | that key's passphrase |
 
 Set them with `gh secret set <name> --repo oluies/kolla`, which prompts rather
-than taking the value on the command line. None of the four is ever echoed by
+than taking the value on the command line. The four names are the ones Mill
+reads from the environment, confirmed against `mill-libs-javalib` rather than
+taken from a guide.
+
+The workflow has three modes, because a Central release cannot be undone:
+
+| trigger | what happens |
+|---|---|
+| `workflow_dispatch` | builds, tests and signs the artifacts; uploads nothing |
+| `workflow_dispatch` with `upload` | uploads a bundle and leaves it staged |
+| a `v*` tag | uploads a bundle and leaves it staged |
+
+Staged means the Portal holds it until Publish is pressed, and a staged bundle
+can be dropped. Releasing straight from CI needs `release: true` on a dispatch
+run; a tag on its own never does it. None of the four is ever echoed by
 the workflow, and none belongs in the repository or in a conversation: a leaked
 Portal token can publish under the namespace permanently, because Central
 releases are immutable. Revoke and reissue in the Portal if one is exposed.
