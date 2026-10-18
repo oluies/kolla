@@ -120,3 +120,7 @@ Mill, pinned by `.mill-version`; `./mill` bootstraps it.
 
 Scala Native needs clang and the usual native toolchain; the browser smoke test
 needs Playwright.
+
+## Licence
+
+Apache-2.0, the licence Lean 4 and nanoda_lib use. See `LICENSE`.
