@@ -1102,6 +1102,28 @@ verdict, so a script that retries with a larger heap needs to tell it from a
 parse failure. `Check.Failure` separates `Exhausted` from `Unreadable` and the
 command line exits 3 for it.
 
+Getting there takes more than an `attempt`. cats-effect classes
+`OutOfMemoryError` as fatal and does not route it through `IO.attempt`: it goes
+to the runtime, which prints the trace and exits 1 — the code for a rejected
+declaration, so the one outcome a script must not confuse with a bad proof.
+Matching `Left(_: OutOfMemoryError)` after `attempt` therefore never fires, and
+with only that in place a 192 MB heap on the v4.35.0 `init` export exited 1
+with a raw `OutOfMemoryError: Java heap space`.
+
+So it is caught where it is thrown and rethrown as an ordinary
+`RuntimeException`, which is `NonFatal` and visible to `attempt`. That forces
+one more thing: the export's index tables are the largest allocation a run
+makes, so exhaustion happens inside the reader, and inside `ExportReader.pipe`
+the throw is in fs2's frame rather than one the command line owns. `Check` drives
+the reader itself for that reason — the duplicated wiring buys a frame to catch
+in. The same heap now reports `ran out of memory after 43441 declarations` and
+exits 3.
+
+An OOM thrown inside fs2's own decoding, rather than in the reader or the
+kernel, is still fatal and still exits 1. The path is verified end to end
+rather than by a unit test, since an `OutOfMemoryError` cannot be faked through
+a cats-effect stream without becoming the fatal case again.
+
 `--progress` notes declarations and bytes read on stderr every 25000
 declarations. It is on request rather than by default so that a pipeline's
 stderr stays empty, and it is on stderr so that `--json` stdout stays

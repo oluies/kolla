@@ -44,6 +44,18 @@ object Check:
   /** Declarations between progress notes. */
   val progressEvery: Long = 25000L
 
+  /** Carries an `OutOfMemoryError` out as an ordinary failure.
+    *
+    * `IO.attempt` does not catch an `OutOfMemoryError`: cats-effect treats it
+    * as fatal and takes it straight to the runtime, which prints it and exits
+    * 1 — the code for a rejected declaration. So it is caught in the frame
+    * that throws it and rethrown as this, which is `NonFatal` and therefore
+    * visible to `attempt`. No stack trace is captured, since the heap is
+    * already full. See docs/semantics.md F8.
+    */
+  private final class OutOfRoom(val declarations: Long)
+      extends RuntimeException("exhausted", null, false, false)
+
   /** Checks one already-read export.
     *
     * `emit` receives each declaration's line, so the caller decides whether
@@ -134,9 +146,11 @@ object Check:
           batches += 1
           val yieldNow = if batches % cedeEvery == 0 then IO.cede else IO.unit
           yieldNow *> IO {
-            val t0 = System.nanoTime()
-            val st = replay.next()
-            (st, System.nanoTime() - t0)
+            try
+              val t0 = System.nanoTime()
+              val st = replay.next()
+              (st, System.nanoTime() - t0)
+            catch case _: OutOfMemoryError => throw new OutOfRoom(seen)
           }.flatMap { (st, took) =>
             tally = tally.add(st)
             seen += st.names.length
@@ -144,19 +158,40 @@ object Check:
           }
       }
 
-      val items =
+      // The reader is driven here rather than through `ExportReader.pipe` for
+      // one reason: the export's index tables are the largest thing a run
+      // allocates, so that is where it runs out of memory, and inside `pipe`
+      // the throw happens in fs2's frame where it cannot be caught. The three
+      // lines of wiring are the price of being able to report exhaustion.
+      val reader = new ExportReader(None, retainItems = false)
+
+      val lines =
         bytes.chunks
           .evalTap(c => IO { read += c.size })
           .unchunks
           .through(fs2.text.utf8.decode)
           .through(fs2.text.lines)
-          .through(ExportReader.pipe[IO]())
 
-      items.chunks
-        .evalMap(chunk => IO(chunk.foreach(replay.feed)) *> drain() *> note)
+      lines.chunks
+        .evalMap { chunk =>
+          IO {
+            try
+              chunk.foreach(reader.feed)
+              reader.drain().foreach(replay.feed)
+            catch case _: OutOfMemoryError => throw new OutOfRoom(seen)
+          } *> drain() *> note
+        }
         .compile
         .drain
-        .flatMap(_ => IO(replay.finish()) *> drain())
+        .flatMap(_ =>
+          IO {
+            try
+              reader.finish()
+              reader.drain().foreach(replay.feed)
+              replay.finish()
+            catch case _: OutOfMemoryError => throw new OutOfRoom(seen)
+          } *> drain()
+        )
         // The checkpoint runs whether or not the body succeeded, so an
         // exhausted run still keeps what it accepted.
         .guarantee(checkpoint.getOrElse(IO.unit))
@@ -171,7 +206,9 @@ object Check:
                 )
               )
             )
-          case Left(e: OutOfMemoryError) =>
+          case Left(e: OutOfRoom) =>
+            IO.pure(Left(Failure.Exhausted(s"$name: ran out of memory after ${e.declarations} declarations")))
+          case Left(_: OutOfMemoryError) =>
             IO.pure(Left(Failure.Exhausted(s"$name: ran out of memory after $seen declarations")))
           case Left(e) =>
             IO.pure(Left(Failure.Unreadable(s"$name: ${e.getMessage}")))
