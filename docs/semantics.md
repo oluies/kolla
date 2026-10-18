@@ -1058,7 +1058,19 @@ instead, which is the most that can be said about a forward reference.
 Three things join the declaration in the key.
 
 The profile, because the same declaration is accepted on one and rejected on
-another — that is what the matrix exists to show.
+another — that is what the matrix exists to show. `KernelProfile.release` and
+not `label`, though: the two differ only for `withDefEqSuccessCache` (K18),
+which changes no verdict, and keying on the label would make `--defeq-cache`
+discard every digest accepted without it. That is precisely the run the flag
+exists for — exhaust the heap, then re-run with the cache — so the cache would
+be empty exactly when it was most wanted.
+
+Sharing digests across that flag is one step less conservative than keying on
+the label, for the reason K18 gives: caching cuts the step count, so a
+declaration accepted with the cache might have hit `maxSteps` without it, and a
+run without the flag will reuse that entry rather than discover it. The limit
+is kolla's own guard rather than Lean's and is `1 << 32`, so the trade is a
+theoretical loss against a cache that works in the case it was built for.
 
 The ambient constants, in a fixed order, because the kernel reaches for them
 when it expands a literal without the declaration naming them (P10). A digest
@@ -1126,6 +1138,16 @@ The label carries the change — `v4.27.0+defeq-cache` — because every summary
 line names the profile, and a run with the flag is not a faithful reproduction
 of that release's performance even though it is of its verdicts. `difftest`
 never sets it, for the same reason it never passes a cache (P15).
+
+`release` is what the label strips that suffix back to, and it is what a cache
+digest keys on, so turning the flag on does not invalidate a cache file built
+without it. P15 has the reasoning and the one way it is less conservative.
+
+The command line also says this before a run rather than after one. An export
+over `Options.libraryScaleBytes` on a profile without the cache prints the
+advice and names the flag: the largest committed fixture is 17 MB and `init` is
+292 MB, so the threshold separates a fixture from a library and anything above
+it is the scale at which the missing cache stops being a slowdown.
 
 ### F8 — resource exhaustion is its own exit code
 

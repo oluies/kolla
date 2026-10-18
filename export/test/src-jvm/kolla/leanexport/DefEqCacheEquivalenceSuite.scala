@@ -40,8 +40,12 @@ class DefEqCacheEquivalenceSuite extends munit.FunSuite:
     assert(found.contains(anchor), s"listing $dir did not find $anchor: $found")
     found
 
-  private def outcomes(xs: Vector[ExportItem], p: KernelProfile): Vector[(List[String], String)] =
-    val r   = new Replay(xs, p, true)
+  private def outcomes(
+      xs: Vector[ExportItem],
+      p: KernelProfile,
+      hoist: Boolean = true
+  ): Vector[(List[String], String)] =
+    val r   = new Replay(xs, p, hoist)
     val out = Vector.newBuilder[(List[String], String)]
     while r.hasNext do
       val s = r.next()
@@ -68,20 +72,48 @@ class DefEqCacheEquivalenceSuite extends munit.FunSuite:
       )
   }
 
-  test("it changes no verdict on a file whose ambient block is demoted") {
-    // The P10 shape, where the hoisting pass and the kernel's literal
-    // extensions both come into play, so the cache is exercised on a run that
-    // reduces literals rather than one that only checks types.
+  test("it changes no verdict on an unhoisted file with a demoted ambient block") {
+    // The P10 shape: `Nat` is moved to the end and hoisting is off, so the
+    // literal expansion has no constructor in scope and the run rejects. With
+    // hoisting on the pass would move the group straight back to the front and
+    // this would be the previous test over again.
     for f <- fixtures; p <- uncached do
       val xs     = items(f)
       val starts = Replay.groupStarts(xs)
       val ends   = starts.drop(1) :+ xs.length
       val g      = starts.indices.find(k => (starts(k) until ends(k)).exists(i => xs(i).names.exists(_.toString == "Nat")))
-      g.foreach { k =>
-        val span = (starts(k) until ends(k)).toSet
+      if g.isDefined then
+        val span = (starts(g.get) until ends(g.get)).toSet
         val bad =
           xs.zipWithIndex.filter((_, i) => !span.contains(i)).map(_._1) ++
             xs.zipWithIndex.filter((_, i) => span.contains(i)).map(_._1)
-        assertEquals(outcomes(bad, p.withDefEqSuccessCache), outcomes(bad, p), clue((f, p.label)))
-      }
+        assertEquals(
+          outcomes(bad, p.withDefEqSuccessCache, hoist = false),
+          outcomes(bad, p, hoist = false),
+          clue((f, p.label))
+        )
+  }
+
+  test("at least one fixture has an ambient block to demote") {
+    // Guards the test above: `Nat` missing from every fixture would make its
+    // body a no-op and the equivalence it asserts vacuous.
+    val withNat = fixtures.count(f => items(f).exists(_.names.exists(_.toString == "Nat")))
+    assert(withNat > 0, clue(fixtures))
+  }
+
+  test("the demoted unhoisted shape really does reject") {
+    // Without this the equivalence above could hold because both sides accept
+    // everything, which would not exercise the cache on a failing run.
+    val f  = fixtures.find(x => items(x).exists(_.names.exists(_.toString == "Nat")))
+    assert(f.isDefined, clue(fixtures))
+    val xs     = items(f.get)
+    val starts = Replay.groupStarts(xs)
+    val ends   = starts.drop(1) :+ xs.length
+    val g      = starts.indices.find(k => (starts(k) until ends(k)).exists(i => xs(i).names.exists(_.toString == "Nat"))).get
+    val span   = (starts(g) until ends(g)).toSet
+    val bad =
+      xs.zipWithIndex.filter((_, i) => !span.contains(i)).map(_._1) ++
+        xs.zipWithIndex.filter((_, i) => span.contains(i)).map(_._1)
+    val got = outcomes(bad, KernelProfile.v4_27, hoist = false)
+    assert(got.exists(_._2 == "rejected"), clue(got.map(_._2).distinct))
   }

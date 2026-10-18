@@ -165,7 +165,9 @@ final class Replay(
   private def baseDigest(): Digest =
     if ambientStale then
       var a = Digest.mixString(Digest.seed, Digest.epoch)
-      a = Digest.mixString(a, profile.label)
+      // The release rather than the label: `--defeq-cache` changes no verdict,
+      // so it must not invalidate digests accepted without it. See P15.
+      a = Digest.mixString(a, profile.release)
       ambientNames.foreach { n =>
         digests.get(n) match
           case Some(x) => a = Digest.mixAll(a, 1L, x.hi, x.lo)

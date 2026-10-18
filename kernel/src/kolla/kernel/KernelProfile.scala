@@ -40,6 +40,16 @@ final case class KernelProfile(
 ):
   def natMaxSize: Long = natMaxSizeBytes.getOrElse(Long.MaxValue)
 
+  /** The release this profile is of, with any optimisation suffix removed.
+    *
+    * `label` names the kernel that ran and `release` names the behaviour it
+    * implements. They differ only for `withDefEqSuccessCache`, which changes
+    * no verdict, so this is what a cache key identifies a profile by: adding
+    * `--defeq-cache` must not invalidate digests accepted without it. See
+    * docs/semantics.md P15 and K18.
+    */
+  def release: String = label.stripSuffix(KernelProfile.defeqCacheSuffix)
+
   /** The same profile, keeping the positive `is_def_eq` cache that only v4.35
     * has.
     *
@@ -60,9 +70,12 @@ final case class KernelProfile(
     */
   def withDefEqSuccessCache: KernelProfile =
     if cacheDefEqSuccess then this
-    else copy(label = s"$label+defeq-cache", cacheDefEqSuccess = true)
+    else copy(label = label + KernelProfile.defeqCacheSuffix, cacheDefEqSuccess = true)
 
 object KernelProfile:
+
+  /** Marks a profile whose kernel keeps an optimisation the release did not. */
+  val defeqCacheSuffix: String = "+defeq-cache"
 
   val stringMk: Name     = Name.parse("String.mk")
   val stringOfList: Name = Name.parse("String.ofList")

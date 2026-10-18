@@ -111,3 +111,23 @@ class OptionsSuite extends munit.FunSuite:
     assert(Options.libraryScaleBytes > 17L * 1024 * 1024, clue(Options.libraryScaleBytes))
     assert(Options.libraryScaleBytes < 292L * 1024 * 1024, clue(Options.libraryScaleBytes))
   }
+
+  test("--defeq-cache parses and reaches the profile") {
+    assert(!ok("a").defeqCache)
+    assert(ok("--defeq-cache", "a").defeqCache)
+    assertEquals(Options.profileOf(ok("a")).label, KernelProfile.default.label)
+    assertEquals(
+      Options.profileOf(ok("--profile", "4.27.0", "--defeq-cache", "a")).label,
+      "v4.27.0+defeq-cache"
+    )
+    assert(Options.profileOf(ok("--profile", "4.27.0", "--defeq-cache", "a")).cacheDefEqSuccess)
+    assert(!Options.profileOf(ok("--profile", "4.27.0", "a")).cacheDefEqSuccess)
+  }
+
+  test("the amended profile keeps the release it is of") {
+    // What a `--cache` digest is keyed on, so the flag must not change it.
+    val plain   = Options.profileOf(ok("--profile", "4.27.0", "a"))
+    val amended = Options.profileOf(ok("--profile", "4.27.0", "--defeq-cache", "a"))
+    assertNotEquals(amended.label, plain.label)
+    assertEquals(amended.release, plain.release)
+  }
