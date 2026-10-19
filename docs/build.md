@@ -125,6 +125,24 @@ used: an argument is visible in `ps` to every process on the machine for as long
 as the publish runs, while an environment variable assigned as a prefix like
 this is confined to the one command and never reaches the shell's history.
 
+
+## Dependency updates
+
+Renovate watches the workflows out of the box. It does not read `build.mill`,
+which keeps its versions in `object v`, so `renovate.json` carries one custom
+manager per library — cats, cats-effect, fs2, munit, munit-scalacheck,
+munit-cats-effect and scalacheck — each matching its `val` by name against the
+Maven datasource.
+
+The toolchain versions are deliberately not managed. `scala` is pinned to
+3.9.0 for the Scala.js linker failure above, and `scalaJs` and `scalaNative`
+move with it, so a `packageRules` entry disables `org.scala-lang`,
+`org.scala-js` and `org.scala-native` outright rather than leaving a bot free
+to raise the one pin the build depends on.
+
+A custom manager that matches nothing fails silently, so the regexes were
+checked against `build.mill` rather than assumed: all seven extract the version
+the file actually holds.
 ---
 
 kolla — Örjan Lundberg and

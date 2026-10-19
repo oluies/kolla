@@ -2,5 +2,95 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:recommended"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^build\\.mill$/"
+      ],
+      "matchStrings": [
+        "val cats\\s*=\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "org.typelevel:cats-core_3",
+      "datasourceTemplate": "maven"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^build\\.mill$/"
+      ],
+      "matchStrings": [
+        "val catsEffect\\s*=\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "org.typelevel:cats-effect_3",
+      "datasourceTemplate": "maven"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^build\\.mill$/"
+      ],
+      "matchStrings": [
+        "val fs2\\s*=\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "co.fs2:fs2-core_3",
+      "datasourceTemplate": "maven"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^build\\.mill$/"
+      ],
+      "matchStrings": [
+        "val munit\\s*=\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "org.scalameta:munit_3",
+      "datasourceTemplate": "maven"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^build\\.mill$/"
+      ],
+      "matchStrings": [
+        "val munitScalacheck\\s*=\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "org.scalameta:munit-scalacheck_3",
+      "datasourceTemplate": "maven"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^build\\.mill$/"
+      ],
+      "matchStrings": [
+        "val munitCatsEffect\\s*=\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "org.typelevel:munit-cats-effect_3",
+      "datasourceTemplate": "maven"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^build\\.mill$/"
+      ],
+      "matchStrings": [
+        "val scalacheck\\s*=\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "org.scalacheck:scalacheck_3",
+      "datasourceTemplate": "maven"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "build.mill holds its versions in `object v`, which no Renovate manager reads, so each library is matched there by name. The toolchain versions are deliberately absent: scala is pinned to 3.9.0 for the Scala.js linker failure docs/build.md records, and scalaJs and scalaNative move with it, so a bot must not raise them.",
+      "matchPackageNames": [
+        "org.scala-lang:**",
+        "org.scala-js:**",
+        "org.scala-native:**"
+      ],
+      "enabled": false
+    }
   ]
 }
