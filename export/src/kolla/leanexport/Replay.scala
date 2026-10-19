@@ -376,7 +376,7 @@ final class Replay(
         (
           List(info.name),
           () => dc.addInfo(env, info),
-          e => if e.contains(info.name) then e else e.addCore(info)
+          e => Replay.admitInfo(e, info)
         )
       case ExportItem.Decl(d) =>
         (d.declNames, () => (dc.add(env, d), CheckOutcome.Checked), e => Replay.admit(e, d, profile))
@@ -401,6 +401,22 @@ object Replay:
     * a stream retains.
     */
   val defaultHoistWindow: Int = 1 << 16
+
+  /** Adds an exported constant to the environment without checking it.
+    *
+    * `addCore` is right for everything but the quotient package. That is a
+    * kernel extension rather than four ordinary constants: `quotReduceRec` is
+    * gated on `Environment.quotInitialized`, and only `Quot.add` sets it.
+    * Adding the exported `QuotInfo` with `addCore` therefore puts `Quot`,
+    * `Quot.mk`, `Quot.lift` and `Quot.ind` in scope with quotient reduction
+    * switched off, and anything whose type needs a quotient to compute is then
+    * rejected. See docs/semantics.md P21.
+    */
+  def admitInfo(env: Environment, info: ConstantInfo): Environment = info match
+    case ConstantInfo.QuotInfo(_) =>
+      if env.quotInitialized then env else Quot.add(env)
+    case _ =>
+      if env.contains(info.name) then env else env.addCore(info)
 
   /** Adds a text-format declaration to the environment without checking it.
     *

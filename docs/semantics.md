@@ -1455,6 +1455,51 @@ What this does not do is make the pre-v4.35 profile cheap. `std` still needs
 the cache to finish at all, and the declaration K19 stops on is on the profile
 that caches anyway, so neither P12 nor this entry explains that one.
 
+### P21 — the quotient package cannot be admitted with `addCore`
+
+`--check` and `--eval` build an environment by admitting declarations instead
+of checking them (P14, D13). For every kind of constant but one, admitting is
+`addCore` and the result is indistinguishable from the checked path. The
+exception is the quotient package.
+
+`Quot`, `Quot.mk`, `Quot.lift` and `Quot.ind` are a kernel extension, not four
+ordinary constants. Quotient reduction is gated on a flag:
+
+    if env.quotInitialized then Eval.defer(quotReduceRec(e)) else Eval.now(None)
+
+and only `Quot.add` sets it. `addCore` carries the current value forward, so an
+admitted `QuotInfo` put all four constants in scope with quotient reduction
+switched off. Anything whose type needed a quotient to compute was then
+rejected, while the same declaration checked against a checked environment was
+accepted.
+
+What it cost in practice: on the closure of two `Nat.Prime` declarations
+exported from Mathlib, `--check Nat.Prime` reported 2 rejections, and widening
+the selection to `Finset`, `Multiset` and `List` reported 79 — all of them
+false. Mathlib reaches quotients almost immediately, because `Multiset` is
+`Quotient (List.Perm)` and `Finset` wraps it, so `List.toFinset [] =?= ∅` is a
+quotient computation. With everything checked the same file accepts all 7,245
+declarations.
+
+`Replay.admitInfo` installs the package with `Quot.add` for a `QuotInfo` and
+uses `addCore` for everything else. The `Decl` form already did this (P18),
+which is why text v1 was unaffected and only the `Info` path was wrong.
+
+Finding it took longer than it should have because the two environments compare
+equal almost everywhere. They hold the same constants in the same number, with
+types and values equal under `is_equal` and every field iota and projection
+reduction consults identical; 96 derived declarations differ only in binder
+names, which nothing in the kernel reads. `Environment.quotInitialized` is a
+third field that no per-constant comparison can see. The lesson is that
+comparing the contents of two environments is not the same as comparing the
+environments.
+
+The regression test is `AdmitVerdictSuite`: for every committed fixture, each
+accepted declaration is re-checked alone against an admitted environment and
+must reach the same verdict. It fails on `Quot.mk` in `quot-sound-3.1.0.ndjson`
+without the fix, so a committed fixture is enough and the Mathlib closure is
+not needed to keep it honest.
+
 ## Frontends
 
 ### F1 — the checking is one implementation, the driver loop is three
