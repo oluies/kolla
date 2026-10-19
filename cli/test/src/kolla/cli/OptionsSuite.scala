@@ -131,3 +131,25 @@ class OptionsSuite extends munit.FunSuite:
     assertNotEquals(amended.label, plain.label)
     assertEquals(amended.release, plain.release)
   }
+
+  test("--eval takes a term and exactly one file") {
+    assertEquals(ok("--eval", "Nat.add 2 3", "a").evalTerm, Some("Nat.add 2 3"))
+    assertEquals(ok("a").evalTerm, None)
+    // With no file at all the earlier, more specific check fires first.
+    assert(err("--eval", "t").contains("no export file given"))
+    assert(err("--eval", "t", "a", "b").contains("exactly one export file"))
+  }
+
+  test("--eval rejects the flags it would otherwise ignore") {
+    // Silently ignoring them is what this guards against: --eval checks
+    // nothing, so neither a cache nor a selector has anything to do.
+    assert(err("--eval", "t", "--cache", "c.txt", "a").contains("mutually exclusive"))
+    assert(err("--eval", "t", "--check", "Nat", "a").contains("mutually exclusive"))
+    // but it composes with the ones that do apply
+    assert(ok("--eval", "t", "--progress", "a").progress)
+    assert(ok("--eval", "t", "--json", "a").json)
+    assertEquals(
+      Options.profileOf(ok("--eval", "t", "--profile", "4.27.0", "--defeq-cache", "a")).label,
+      "v4.27.0+defeq-cache"
+    )
+  }

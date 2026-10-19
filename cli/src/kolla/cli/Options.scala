@@ -133,5 +133,11 @@ object Options:
       else if o.quiet && o.verbose then Left("--quiet and --verbose are mutually exclusive")
       else if o.evalTerm.isDefined && o.files.length != 1 then
         Left("--eval takes exactly one export file to reduce against")
+      // Rejected rather than ignored: `--eval` checks nothing, so a cache has
+      // nothing to record and a selector has nothing to select.
+      else if o.evalTerm.isDefined && o.cache.isDefined then
+        Left("--eval and --cache are mutually exclusive: --eval checks nothing")
+      else if o.evalTerm.isDefined && o.checkOnly.nonEmpty then
+        Left("--eval and --check are mutually exclusive: --eval checks nothing")
       else Right(o)
     }

@@ -3,7 +3,7 @@ package kolla.cli
 import cats.effect.{ExitCode, IO, IOApp}
 import cats.effect.std.Console
 import fs2.io.file.{Files, Path}
-import kolla.kernel.Name
+import kolla.kernel.{Name, Pretty}
 import kolla.leanexport.{ReplayJson, ReplayOutcome}
 
 /** `kolla`, the command line.
@@ -37,27 +37,41 @@ object Main extends IOApp:
   private def evalOne(o: Options, src: String): IO[ExitCode] =
     val file    = o.files.head
     val profile = Options.profileOf(o)
-    Check
-      .stream(file, read(file), profile, abortOnReject = false,
-              (_, _, _) => IO.unit, None, _ => false)
-      .flatMap {
-        case Left(f)  => Console[IO].errorln(f.message).as(ExitCode(if f.isInstanceOf[Check.Failure.Exhausted] then 3 else 2))
-        case Right(r) =>
-          kolla.dsl.LeanParser.parse(src) match
-            case Left(err) => Console[IO].errorln(s"--eval: ${err.message} at offset ${err.offset}").as(ExitCode(2))
-            case Right(term) =>
+    // Parsed before the replay, not after: a typo in the term should not cost
+    // the minutes it takes to read a library export.
+    kolla.dsl.LeanParser.parse(src) match
+      case Left(err) =>
+        Console[IO].errorln(s"--eval: ${err.message} at offset ${err.offset}").as(ExitCode(2))
+      case Right(term) =>
+        Check
+          .stream(file, read(file), profile, abortOnReject = false,
+                  (_, _, _) => IO.unit, progressOf(o), _ => false)
+          .flatMap {
+            case Left(f: Check.Failure.Exhausted)  => Console[IO].errorln(f.message).as(ExitCode(3))
+            case Left(f)                           => Console[IO].errorln(f.message).as(ExitCode(2))
+            case Right(r) =>
               Console[IO].errorln(
                 f"  ${r.tally.carriedOver}%,d declarations admitted unchecked as ${profile.label}"
               ) *> IO(kolla.dsl.Evaluate(r.environment, profile, term)).flatMap {
                 case Left(why) => Console[IO].errorln(s"--eval: $why").as(ExitCode(1))
                 case Right(res) =>
+                  // Printed unbounded: here the term is the answer, and
+                  // `Expr.toString` truncates at `Pretty.defaultMaxChars`.
+                  val value = Pretty.expr(res.value, Int.MaxValue)
+                  val tpe   = Pretty.expr(res.tpe, Int.MaxValue)
+                  val warn =
+                    if !res.partial then IO.unit
+                    else
+                      Console[IO].errorln(
+                        s"  warning: reduction stopped at depth ${kolla.dsl.Evaluate.maxDepth};" +
+                          " the term below is only partly reduced"
+                      )
                   val out =
-                    if o.json then
-                      ReplayJson.evaluation(src, res.value.toString, res.tpe.toString, profile.label)
-                    else s"${res.value} : ${res.tpe}"
-                  Console[IO].println(out).as(ExitCode.Success)
+                    if o.json then ReplayJson.evaluation(src, value, tpe, profile.label)
+                    else s"$value : $tpe"
+                  warn *> Console[IO].println(out).as(ExitCode.Success)
               }
-      }
+          }
 
   private def checkAll(o: Options): IO[ExitCode] =
     val only = o.only.toSet
@@ -68,6 +82,14 @@ object Main extends IOApp:
         }
       }
 
+  /** The periodic note on stderr, shared by checking and `--eval`. */
+  private def progressOf(o: Options): Option[Check.Progress => IO[Unit]] =
+    if !o.progress then None
+    else
+      Some((p: Check.Progress) =>
+        Console[IO].errorln(f"  ${p.declarations}%,d declarations, ${p.bytesRead / 1048576.0}%.0f MB read")
+      )
+
   private def checkOne(o: Options, only: Set[String], file: String): IO[ExitCode] =
     def emit(n: Name, outcome: ReplayOutcome, nanos: Long): IO[Unit] =
       if only.nonEmpty && !only.contains(n.toString) then IO.unit
@@ -75,12 +97,7 @@ object Main extends IOApp:
       else if o.verbose then Console[IO].println(s"  ${Render.label(outcome)} $n")
       else IO.unit
 
-    val progress =
-      if !o.progress then None
-      else
-        Some((p: Check.Progress) =>
-          Console[IO].errorln(f"  ${p.declarations}%,d declarations, ${p.bytesRead / 1048576.0}%.0f MB read")
-        )
+    val progress = progressOf(o)
 
     val profile = Options.profileOf(o)
 

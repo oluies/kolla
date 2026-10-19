@@ -368,7 +368,7 @@ final class Replay(
           e => if e.contains(info.name) then e else e.addCore(info)
         )
       case ExportItem.Decl(d) =>
-        (d.declNames, () => (dc.add(env, d), CheckOutcome.Checked), identity)
+        (d.declNames, () => (dc.add(env, d), CheckOutcome.Checked), e => Replay.admit(e, d, profile))
       case ExportItem.DefnWithoutHints(n, lp, t, v) =>
         // Text v1 carries no reducibility hint; the kernel supplies one.
         val defn = DefinitionVal(ConstantVal(n, lp, t), v, ReducibilityHints.Regular(0), DefinitionSafety.Safe, List(n))
@@ -390,6 +390,39 @@ object Replay:
     * a stream retains.
     */
   val defaultHoistWindow: Int = 1 << 16
+
+  /** Adds a text-format declaration to the environment without checking it.
+    *
+    * The `Info` items an NDJSON or text v2 export carries are added with
+    * `addCore`, so a declaration that was rejected (P6) or not selected (P14)
+    * still resolves for everything after it. A `Decl` item had `identity`
+    * here, which added nothing: on a text v1 export, where inductives arrive
+    * as `Declaration.InductDecl` and the quotient package as `QuotDecl`,
+    * neither case put anything in the environment and every later reference to
+    * a type became an unknown constant.
+    *
+    * An inductive block cannot be admitted by writing down its constructors,
+    * because its recursors are derived rather than exported; `AddInductive.add`
+    * derives them. That makes admitting an inductive almost as much work as
+    * checking one, which is the price of the text formats carrying blocks
+    * rather than infos. A throw is tolerated: the callers wrap this in `Try`,
+    * and the alternative to an incomplete environment is no environment.
+    * See docs/semantics.md P18.
+    */
+  def admit(env: Environment, d: Declaration, profile: KernelProfile): Environment =
+    def put(e: Environment, info: ConstantInfo): Environment =
+      if e.contains(info.name) then e else e.addCore(info)
+    d match
+      case Declaration.AxiomDecl(v)  => put(env, ConstantInfo.AxiomInfo(v))
+      case Declaration.DefnDecl(v)   => put(env, ConstantInfo.DefnInfo(v))
+      case Declaration.ThmDecl(v)    => put(env, ConstantInfo.ThmInfo(v))
+      case Declaration.OpaqueDecl(v) => put(env, ConstantInfo.OpaqueInfo(v))
+      case Declaration.MutualDefnDecl(ds) =>
+        ds.foldLeft(env)((acc, v) => put(acc, ConstantInfo.DefnInfo(v)))
+      case Declaration.QuotDecl =>
+        if env.quotInitialized then env else Quot.add(env)
+      case i: Declaration.InductDecl =>
+        AddInductive.add(env, i, profile).env
 
   /** Whether `item` belongs to the inductive block whose `all` list is `block`.
     *

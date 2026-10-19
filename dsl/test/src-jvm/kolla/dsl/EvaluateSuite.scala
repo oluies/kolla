@@ -79,3 +79,62 @@ class EvaluateSuite extends munit.FunSuite:
       case l: Expr.Lam => assertNotEquals(l.body, Expr.natLit(5))
       case other       => fail(s"expected a lambda, got $other")
   }
+
+  /** An inductive presented the way text v1 presents one: as a
+    * `Declaration.InductDecl` inside an `ExportItem.Decl`, not as an `Info`.
+    * Built directly because `ExportWriter` refuses to write an inductive as
+    * text v1 at all — the format carries it as a declaration.
+    */
+  private val boolDecl: ExportItem =
+    val prop = Expr.Sort(Level.Succ(Level.zero))
+    ExportItem.Decl(
+      Declaration.InductDecl(
+        levelParams = Nil,
+        numParams = 0,
+        types = List(
+          InductiveType(
+            Name.parse("Flag"),
+            prop,
+            List(
+              Constructor(Name.parse("Flag.up"), Expr.Const(Name.parse("Flag"), Nil)),
+              Constructor(Name.parse("Flag.down"), Expr.Const(Name.parse("Flag"), Nil))
+            )
+          )
+        ),
+        isUnsafe = false
+      )
+    )
+
+  private def admitOnly(items: Vector[ExportItem]): Environment =
+    val r = new Replay(profile, true, Int.MaxValue, _ => false)
+    items.foreach(r.feed)
+    r.finish()
+    while r.hasNext do r.next()
+    r.environment
+
+  test("admitting a Decl inductive puts its type, constructors and recursor in scope") {
+    // The `Decl` recover was `identity`, so nothing was added and every later
+    // reference to the type was an unknown constant. See docs/semantics.md P18.
+    val env = admitOnly(Vector(boolDecl))
+    assert(env.contains(Name.parse("Flag")), clue(env.size))
+    assert(env.contains(Name.parse("Flag.up")))
+    assert(env.contains(Name.parse("Flag.down")))
+    assert(env.contains(Name.parse("Flag.rec")), "the recursor is derived, not exported")
+  }
+
+  test("a term reduces against an admitted Decl inductive") {
+    val env  = admitOnly(Vector(boolDecl))
+    val term = LeanParser.parseOrThrow("Flag.up")
+    Evaluate(env, profile, term) match
+      case Right(r)  => assertEquals(r.value, Expr.Const(Name.parse("Flag.up"), Nil))
+      case Left(msg) => fail(s"admitted Decl inductive: $msg")
+  }
+
+  test("admitting a Decl axiom and definition also puts them in scope") {
+    val prop = Expr.Sort(Level.zero)
+    val ax   = ExportItem.Decl(
+      Declaration.AxiomDecl(AxiomVal(ConstantVal(Name.parse("P"), Nil, prop), isUnsafe = false))
+    )
+    val env = admitOnly(Vector(ax))
+    assert(env.contains(Name.parse("P")), clue(env.size))
+  }

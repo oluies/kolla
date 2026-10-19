@@ -14,8 +14,13 @@ import kolla.kernel.*
   */
 object Evaluate:
 
-  /** What a term reduced to, and the type it was checked at. */
-  final case class Result(tpe: Expr, value: Expr, reducedArgs: Int)
+  /** What a term reduced to, and the type it was checked at.
+    *
+    * `partial` means `maxDepth` stopped the reduction, so `value` may still
+    * contain redexes. A caller that prints `value` as the answer has to say
+    * so, or it presents an unfinished term as a result.
+    */
+  final case class Result(tpe: Expr, value: Expr, partial: Boolean)
 
   /** How deep into an application spine to keep reducing.
     *
@@ -33,11 +38,10 @@ object Evaluate:
   def apply(env: Environment, profile: KernelProfile, term: Expr): Either[String, Result] =
     val tc = new TypeChecker(env, profile)
     try
-      val tpe = tc.check(term)
-      var n    = 0
-      def count(): Unit = n += 1
-      val value = normalise(tc, term, maxDepth, count)
-      Right(Result(tpe, value, n))
+      val tpe       = tc.check(term)
+      var truncated = false
+      val value     = normalise(tc, term, maxDepth, () => truncated = true)
+      Right(Result(tpe, value, truncated))
     catch
       case e: KernelException => Left(e.reason)
 
@@ -48,15 +52,13 @@ object Evaluate:
     * stands rather than with its body reduced. That is a real limit and the
     * reason `Result.value` can still contain redexes under a `fun`.
     */
-  def normalise(tc: TypeChecker, e: Expr, depth: Int, onArg: () => Unit): Expr =
+  def normalise(tc: TypeChecker, e: Expr, depth: Int, onTruncate: () => Unit): Expr =
     val head = tc.whnf(e)
-    if depth <= 0 then head
-    else
-      val (fn, args) = Expr.getAppFnArgs(head)
-      if args.isEmpty then head
-      else
-        val reduced = args.map { a =>
-          onArg()
-          normalise(tc, a, depth - 1, onArg)
-        }
-        Expr.mkAppN(fn, reduced)
+    val (fn, args) = Expr.getAppFnArgs(head)
+    if args.isEmpty then head
+    else if depth <= 0 then
+      // The spine nests deeper than the bound, so what is returned still has
+      // redexes in it and the caller is told.
+      onTruncate()
+      head
+    else Expr.mkAppN(fn, args.map(a => normalise(tc, a, depth - 1, onTruncate)))

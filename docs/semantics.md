@@ -796,6 +796,15 @@ nothing folds back into `"abcd"`. It did not finish within a minute when tried,
 and no time is quoted here because it was not run to completion. That is Lean's
 kernel too, not a gap in kolla.
 
+Reduction is bounded. `Evaluate.maxDepth` caps how far into an application
+spine arguments are reduced, so a deeply nested constructor chain can come back
+with redexes still in it; `Result.partial` says when that happened and the
+command line prints a warning, because otherwise an unfinished term is
+presented as the answer. The printing is unbounded on this path for the same
+reason: `Expr.toString` truncates at `Pretty.defaultMaxChars`, which is right
+for a rejection diagnostic and wrong when the term *is* the result, so
+`--eval` uses `Pretty.expr(e, Int.MaxValue)`.
+
 Reduction does not go under a binder. A lambda's body has loose bound variables
 and the kernel reduces closed terms, so `fun (x : Nat) => Nat.add 2 3` comes
 back with its body intact. `EvaluateSuite` asserts that, so the limit is pinned
@@ -1341,6 +1350,36 @@ One thing this does not do is make the comparison stronger. A run whose
 reference timed out is a kolla-only run, and the report now says so instead of
 implying a reference confirmed or contradicted it. Reading `agrees` as "a
 reference checked this too" is wrong whenever `comparable` is false.
+
+### P18 — a text-format declaration has to be admittable too
+
+`Replay.pending` gives every step a `recover`, the function that puts a
+declaration into the environment without checking it. P6 uses it for a
+rejection and P14 for a declaration that was not selected. For an
+`ExportItem.Decl` it was `identity`, which added nothing.
+
+That had no effect for as long as nothing admitted a `Decl`, because the
+checked path builds the environment itself. `--eval` admits everything (D13),
+and the NDJSON and text v2 formats carry `Info` items, so the gap only shows on
+text v1, where an inductive arrives as `Declaration.InductDecl` and the
+quotient package as `QuotDecl`. On such a file the environment came back with
+no inductive types at all and every later reference to one was an unknown
+constant — reported as `unknown constant 'Nat'`, which blames the file for
+something the replay did.
+
+`Replay.admit` fills it in: the value-carrying declarations go in with
+`addCore`, `QuotDecl` through `Quot.add`, and an inductive block through
+`AddInductive.add`, because its recursors are derived rather than exported and
+there is nothing else to write down. Admitting an inductive is therefore nearly
+as expensive as checking one, which is a property of the text formats carrying
+blocks instead of infos rather than a choice made here.
+
+The test builds a `Declaration.InductDecl` directly, because `ExportWriter`
+refuses to write an inductive as text v1 at all — `requireNotV1` — so the shape
+cannot be produced by round-tripping an NDJSON fixture through the writer. With
+`identity` restored the environment has no entries and the term fails with
+`UnknownConstant: Flag.up`, which is what makes the test a guard rather than a
+description.
 
 ## Frontends
 
