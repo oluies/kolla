@@ -28,7 +28,7 @@ jobs:
           distribution: temurin
           java-version: '21'
       - name: Cache coursier and mill
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cache/coursier

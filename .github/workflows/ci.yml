@@ -23,7 +23,7 @@ jobs:
         with:
           node-version: '22'
       - name: Cache coursier and mill
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cache/coursier
@@ -49,7 +49,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cache/coursier
@@ -58,7 +58,7 @@ jobs:
           restore-keys: mill-${{ runner.os }}-
       - name: Install the Scala Native toolchain
         run: sudo apt-get update && sudo apt-get install -y clang libunwind-dev libgc-dev libre2-dev
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('web/smoke.js') }}
@@ -96,7 +96,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cache/coursier
@@ -107,7 +107,7 @@ jobs:
       # .difftest/<slug>/ and are keyed on the inputs that can change them: the
       # toolchain list, the cases and the lean helper that picks their
       # declarations.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: .difftest/leanprover-lean4-${{ matrix.toolchain }}
           key: >-
@@ -117,7 +117,7 @@ jobs:
           restore-keys: difftest-${{ matrix.toolchain }}-
       # nanoda is a Rust release build, keyed on the revision Nanoda.rev pins.
       # Only the v4.35.0 job provisions it, and only that job can use it.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: .difftest/nanoda
           key: nanoda-${{ runner.os }}-${{ hashFiles('difftest/src/kolla/difftest/Nanoda.scala') }}
