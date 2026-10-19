@@ -246,10 +246,11 @@ checker accepting each of the same four export files:
 A full Mathlib export is a different matter, and the honest answer is split.
 Reading one is routine: module `Mathlib` at v4.35.0 is 6.26 GB and 729,263
 declarations, and kolla reads and admits all of them in 83 seconds and 9.40 GB.
-Checking them is not: a full check stops making progress 325,090 declarations
-in, on `CategoryTheory.Localization.Monoidal.braidingNatIso`, with memory to
-spare. docs/scale.md has the figures and docs/semantics.md K19 the two
-declarations of that shape on record, one of them explained.
+Checking them is not. The cost is concentrated in a thin tail: 105 of the first
+225,053 declarations take over a second each and account for about half the
+elapsed time, the slowest finishing one at 133 seconds, and the run stops making
+progress on `IntermediateField.restrictScalars_top` with memory to spare.
+docs/scale.md has the figures and docs/semantics.md K19 the distribution.
 
 `init` at v4.28.0 adds 51,759 more against `lean4checker`. Read that precisely:
 both references report one verdict for a whole file, so the agreement is at file

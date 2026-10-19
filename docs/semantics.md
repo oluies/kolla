@@ -1242,44 +1242,54 @@ than hit; `Digest.epoch` is left alone because a stale entry can only fail to
 match, not match something it should not. And a run without `--cache` no longer
 maintains the name-to-digest map at all, so it carries nothing per declaration.
 
-### K19 — one Mathlib declaration does not finish checking
+### K19 — Mathlib checking has a heavy tail
 
 Reading a Mathlib export is cheap and checking it is not. On the v4.35.0 export
 of module `Mathlib` — 6.26 GB, 729,263 declarations — reading and admitting
-everything takes 83 seconds (P16, docs/scale.md). A full check reaches 325,090
-declarations and 3,008 MB in about 58 minutes and then stops advancing:
+everything takes 83 seconds (P16, docs/scale.md). Checking does not complete.
 
-    CategoryTheory.Localization.Monoidal.braidingNatIso
+The cost is concentrated. With `--trace`, over the first 225,053 declarations,
+105 steps took more than a second each and accounted for 973 seconds, about
+half the elapsed time. The slowest that finished:
 
-the step immediately after its own `_proof_1`, which was accepted. Thirty
-further minutes produced no progress, with the runtime spinning across roughly
-seven cores and a live set under 4 GB against a 24 GB ceiling. So it is not
-exhaustion, and `--defeq-cache` is not the answer either: this is the v4_35
-profile, where the positive `is_def_eq` cache is already on.
+| declaration | time |
+|---|---|
+| `CategoryTheory.Bimon.instIsMonHomComonHomEquivMonComonCounitIsoAppX` | 133.0s |
+| `AlgebraicGeometry.Spec.sheafedSpaceMap_comp` | 93.5s |
+| `not_dvd_differentIdeal_of_isCoprime_of_isSeparable` | 92.0s |
+| `SSet.prodStdSimplex.weakRankFunction._proof_18` | 49.9s |
 
-That makes two declarations of this shape on record, single terms that swallow
-unbounded time rather than memory:
+So one declaration in two thousand costs seconds to minutes, and the run stops
+making progress on
 
-| declaration | profile | what it is |
-|---|---|---|
-| `Std.…blastUdiv.blastDivSubtractShift` | v4_27 | P12, the missing positive cache |
-| `CategoryTheory.…braidingNatIso` | v4.35.0 | 325,090 declarations in, unexplained |
+    IntermediateField.restrictScalars_top
 
-A third was nearly recorded here and should not be. An earlier run with
-`--check Real.log` over the same export also stopped dead, and it was tempting
-to read that as a third expensive declaration. It was not: a run over the same
-file that checked nothing at all stalled at the identical point — 150,036
-declarations, 1,235 MB — which is the unmemoised digest of P16, and the fix
-removed it. Attributing it to the kernel would have sent someone chasing a bug
-that is already closed.
+which is the extreme of that distribution rather than a different kind of
+thing. It is on the v4.35 profile, where the positive `is_def_eq` cache is
+already on, so neither P12 nor P20 explains it, and it is not short of heap:
+resident sat near 4 GB of a 20 GB ceiling while the process kept about one and
+a half cores busy.
 
-What remains unexplained is `braidingNatIso`. It is on the profile that caches,
-it is not short of heap, and the full check that reaches it passes no cache, so
-P16's digest is not computed at all. It also cannot be profiled from outside:
-`jstack`, `jcmd` and `SIGQUIT` are all refused, because the thread does not
-reach a safepoint. Finding out what the kernel is doing there needs
-instrumentation inside the checking loop rather than a thread dump, and that has
-not been done.
+This entry previously named
+`CategoryTheory.Localization.Monoidal.braidingNatIso`, which was wrong, and the
+way it was wrong is worth keeping. The identification came from a stalled run's
+last `--progress` line, `325 090 declarations`, treated as an exact position.
+`--progress` reports every 25000 declarations, so that line bounded the
+position between 325,090 and 349,999 and never pinpointed it; an ordering pass
+then gave whatever declaration sat at 325,091. `braidingNatIso` was simply the
+first one after the last marker that happened to be printed. Traced, it checks
+in under a second and the run continues through its naturality lemmas.
+
+`--trace` exists for this. It announces a step's names before taking it, so the
+declaration a run is inside is the last `start` line with no completion after
+it — which a counter printed every 25000 declarations cannot tell you, and
+which a thread dump cannot either, because these steps do not reach a safepoint
+and `jstack`, `jcmd` and `SIGQUIT` are all refused.
+
+What the kernel is doing inside `restrictScalars_top` is still unknown.
+Narrowing it further needs counters inside the reduction itself — which
+`is_def_eq` pair, how deep, how many unfoldings — rather than per-declaration
+timing.
 
 ### F8 — resource exhaustion is its own exit code
 
@@ -1439,8 +1449,8 @@ threading it into three subprocesses would widen what a report has to explain
 for no gain.
 
 What this does not do is make the pre-v4.35 profile cheap. `std` still needs
-the cache to finish at all, and K19's `braidingNatIso` is on the profile that
-caches anyway, so neither P12 nor this entry explains that one.
+the cache to finish at all, and the declaration K19 stops on is on the profile
+that caches anyway, so neither P12 nor this entry explains that one.
 
 ## Frontends
 

@@ -86,16 +86,19 @@ floor for any run over this file: the export names expressions by index, so the
 reader's interning tables have to stay reachable, and no amount of streaming
 avoids them. `--cache` adds 4.96 GB and no measurable time.
 
-Checking them is another matter. A full check reached 325,090 declarations and
-3,008 MB of 6,258 in about 58 minutes, and then made no progress for a further
-thirty while the runtime spun across roughly seven cores with a live set under
-4 GB — nowhere near the 24 GB ceiling. It is one declaration, the first step
-after `CategoryTheory.Localization.Monoidal.braidingNatIso._proof_1`:
+Checking them is another matter, and the cost is concentrated rather than
+spread. Traced, 105 of the first 225,053 declarations took over a second each
+and accounted for 973 seconds — about half the elapsed time — the slowest
+finishing one being 133 seconds. The run then stops making progress on
 
-    CategoryTheory.Localization.Monoidal.braidingNatIso
+    IntermediateField.restrictScalars_top
+
+with resident near 4 GB of a 20 GB ceiling, so it is time rather than memory.
 
 So kolla reads a Mathlib export comfortably and does not finish checking one.
-See docs/semantics.md K19.
+An earlier draft of this named a different declaration, identified from a
+progress counter that only reports every 25000 declarations; see
+docs/semantics.md K19 for why that was not an identification at all.
 
 Before streaming none of this was reachable: `cli` folded the file into one
 `String`, and a 6.26 GB file exceeds both the maximum byte array and twice that
