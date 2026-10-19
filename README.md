@@ -171,10 +171,12 @@ difference between slow and unfinishable:
 | `init` | v4.27.0 | 51,759 accepted, 127s, 1.10 GB |
 | `init` | v4.27.0 `--defeq-cache` | 51,759 accepted, 95s, 1.65 GB |
 | `std` | v4.27.0 | no verdict; exceeds a 24 GB heap after 55 minutes |
+| `std` | v4.27.0 `--defeq-cache` | 87,309 accepted, 322s, 5.63 GB |
 | `std` | v4.35.0 | 99,619 accepted, 305s, 3.8 GB |
 
-`--defeq-cache` keeps the cache on a profile that predates it. It is an
-optimisation and not a change of profile: an entry is written only where
+`--defeq-cache` keeps the cache on a profile that predates it, and on `std` it
+is the difference between a verdict and none. It is an optimisation and not a
+change of profile: an entry is written only where
 `is_def_eq` already answered true. On the `init` export above, the two runs
 agree name by name and verdict by verdict across all 51,759 declarations, and
 `DefEqCacheEquivalenceSuite` requires the same of every fixture on both uncached

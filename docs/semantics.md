@@ -1439,7 +1439,10 @@ A comparison against `lean4checker` is a comparison of verdicts, so the cache
 does not weaken it.
 
 So `difftest` takes `--defeq-cache`, off by default, and the nightly workflow
-passes it for any toolchain below v4.35. The safeguard is the label: the
+passes it for any toolchain below v4.35. Measured rather than hoped for: `std`
+on the v4_27 profile accepts all 87,309 of its declarations in 322 seconds and
+5.63 GB with the flag, against no verdict at all and more than a 24 GB heap
+without it. The safeguard is the label: the
 profile reports itself as `v4.28.0+defeq-cache`, so a report cannot claim to be
 a plain run of that release.
 

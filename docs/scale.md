@@ -20,6 +20,7 @@ that last one a Mathlib run stalled at 150,036 declarations whatever the flags
 | `init` v4.35.0 | 330 MB | 59,349 | 47.7s | 1.19 GB |
 | `std` v4.35.0 | 536 MB | 99,619 | 304.5s | — |
 | `lean` v4.35.0 | 707 MB | 171,705 | 260.9s | 3.09 GB |
+| `std` v4.28.0 on v4_27, `--defeq-cache` | 492 MB | 87,309 | 322.4s | 5.63 GB |
 | `Mathlib` v4.35.0, read and admitted | 6.26 GB | 729,263 | 83.0s | 9.40 GB |
 | `Mathlib` v4.35.0, same with `--cache` | 6.26 GB | 729,263 | 80.5s | 14.36 GB |
 | `Mathlib` v4.35.0, fully checked | 6.26 GB | 729,263 in the file | stopped at 325,090 | — |
