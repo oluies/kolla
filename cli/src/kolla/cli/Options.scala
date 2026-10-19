@@ -26,6 +26,8 @@ final case class Options(
     cache: Option[String] = None,
     /** Keep the positive `is_def_eq` cache on a profile that predates it. */
     defeqCache: Boolean = false,
+    /** Reduce this term against the export's environment instead of checking. */
+    evalTerm: Option[String] = None,
     help: Boolean = false,
     version: Boolean = false,
     listProfiles: Boolean = false
@@ -55,6 +57,8 @@ object Options:
       |  --cache <file>  reuse and extend a file of accepted digests
       |  --defeq-cache   keep the positive is_def_eq cache on a profile that
       |                  predates it; needed for a library corpus before v4.35
+      |  --eval <term>   reduce a term against the export's environment and
+      |                  print it, instead of checking the file
       |  --profiles      list the profiles and exit
       |  -h, --help      this message
       |  --version       the version and the default profile
@@ -116,6 +120,7 @@ object Options:
       case "--check" :: v :: t       => go(t, o.copy(checkOnly = o.checkOnly :+ v))
       case "--cache" :: v :: t       => go(t, o.copy(cache = Some(v)))
       case "--defeq-cache" :: t      => go(t, o.copy(defeqCache = true))
+      case "--eval" :: v :: t        => go(t, o.copy(evalTerm = Some(v)))
       case "--profile" :: v :: t =>
         KernelProfile.all.find(p => p.label == v || p.label == s"v$v") match
           case Some(p) => go(t, o.copy(profile = p))
@@ -126,5 +131,7 @@ object Options:
       if o.help || o.version || o.listProfiles then Right(o)
       else if o.files.isEmpty then Left(s"no export file given\n\n$usage")
       else if o.quiet && o.verbose then Left("--quiet and --verbose are mutually exclusive")
+      else if o.evalTerm.isDefined && o.files.length != 1 then
+        Left("--eval takes exactly one export file to reduce against")
       else Right(o)
     }

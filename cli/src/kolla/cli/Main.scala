@@ -4,7 +4,7 @@ import cats.effect.{ExitCode, IO, IOApp}
 import cats.effect.std.Console
 import fs2.io.file.{Files, Path}
 import kolla.kernel.Name
-import kolla.leanexport.ReplayOutcome
+import kolla.leanexport.{ReplayJson, ReplayOutcome}
 
 /** `kolla`, the command line.
   *
@@ -23,7 +23,41 @@ object Main extends IOApp:
         Console[IO].println(s"kolla $version, default profile ${o.profile.label}").as(ExitCode.Success)
       // A listing is an answer, not a misuse: stdout and exit 0, so it pipes.
       case Right(o) if o.listProfiles => Console[IO].println(Options.profiles).as(ExitCode.Success)
+      case Right(o) if o.evalTerm.isDefined => evalOne(o, o.evalTerm.get)
       case Right(o) => checkAll(o)
+
+  /** Reduces a term against the export's environment.
+    *
+    * The environment is built by admitting the file's declarations, not by
+    * checking them: the point is to compute, and re-deriving a library to
+    * evaluate `Nat.add 2 2` would be absurd. That makes the answer depend on
+    * the file being honest, which is why it is said out loud on stderr. Check
+    * the file separately if that matters. See docs/semantics.md D13.
+    */
+  private def evalOne(o: Options, src: String): IO[ExitCode] =
+    val file    = o.files.head
+    val profile = Options.profileOf(o)
+    Check
+      .stream(file, read(file), profile, abortOnReject = false,
+              (_, _, _) => IO.unit, None, _ => false)
+      .flatMap {
+        case Left(f)  => Console[IO].errorln(f.message).as(ExitCode(if f.isInstanceOf[Check.Failure.Exhausted] then 3 else 2))
+        case Right(r) =>
+          kolla.dsl.LeanParser.parse(src) match
+            case Left(err) => Console[IO].errorln(s"--eval: ${err.message} at offset ${err.offset}").as(ExitCode(2))
+            case Right(term) =>
+              Console[IO].errorln(
+                f"  ${r.tally.carriedOver}%,d declarations admitted unchecked as ${profile.label}"
+              ) *> IO(kolla.dsl.Evaluate(r.environment, profile, term)).flatMap {
+                case Left(why) => Console[IO].errorln(s"--eval: $why").as(ExitCode(1))
+                case Right(res) =>
+                  val out =
+                    if o.json then
+                      ReplayJson.evaluation(src, res.value.toString, res.tpe.toString, profile.label)
+                    else s"${res.value} : ${res.tpe}"
+                  Console[IO].println(out).as(ExitCode.Success)
+              }
+      }
 
   private def checkAll(o: Options): IO[ExitCode] =
     val only = o.only.toSet

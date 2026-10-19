@@ -66,7 +66,11 @@ kolla [options] <export-file>...
   --cache <file>  reuse and extend a file of accepted digests
   --defeq-cache   keep the positive is_def_eq cache on a profile that
                   predates it; needed for a library corpus before v4.35
+  --eval <term>   reduce a term against the export's environment and print
+                  it, instead of checking the file
   --profiles      list the profiles and exit
+  -h, --help      this message
+  --version       the version and the default profile
 ```
 
 `-` reads standard input. Exit code 0 means every declaration was accepted, 1
@@ -116,6 +120,25 @@ docs/semantics.md P15.
 
 `mill cli.native.nativeLink` builds a native binary. It is the faster of the two
 on small inputs and much the slower on large ones; see docs/semantics.md F7.
+
+## Reducing a term
+
+`--eval` type-checks a term against an export's environment and reduces it,
+which is `#eval` for the part of it the kernel can do:
+
+```
+$ kolla --profile v4.35.0 --eval 'Nat.add 2 3' init.export
+5 : Nat
+$ kolla --profile v4.35.0 --eval 'Nat.decEq 2 2' init.export
+Decidable.intro (Eq.{1} Nat 2 2) Bool.true (Eq.refl.{1} Nat 2) : Decidable (Eq.{1} Nat 2 2)
+```
+
+It is reduction and not execution. Arithmetic is native and fast; strings
+reduce only by unfolding and are impractical; nothing reduces under a binder;
+and the environment is admitted rather than checked, which the command says on
+stderr. A Lean program in the sense of `main : IO Unit` cannot be run this way,
+because `IO` bottoms out in `@[extern]` primitives the kernel sees as constants
+with no definition. docs/semantics.md D13 has the detail.
 
 ## The browser
 

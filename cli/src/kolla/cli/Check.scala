@@ -21,7 +21,9 @@ object Check:
       wallNanos: Long,
       lateAmbient: List[Name] = Nil,
       admittedUnchecked: Int = 0,
-      reusedFromCache: Int = 0
+      reusedFromCache: Int = 0,
+      /** The environment the replay ended with, which `--eval` reduces against. */
+      environment: kolla.kernel.Environment = kolla.kernel.Environment.empty
   )
 
   /** Why a file produced no verdict.
@@ -91,7 +93,9 @@ object Check:
             step.names.traverse_(d => emit(d, step.outcome, took)) *> loop(n + 1)
           }
 
-      loop(0) *> IO.monotonic.map(end => Result(tally, (end - start).toNanos, Nil, replay.admittedUnchecked))
+      loop(0) *> IO.monotonic.map(end =>
+        Result(tally, (end - start).toNanos, Nil, replay.admittedUnchecked, 0, replay.environment)
+      )
     }
 
   extension [A](xs: List[A])
@@ -202,7 +206,7 @@ object Check:
               Right(
                 Result(
                   tally, (end - start).toNanos, replay.lateAmbientConstants,
-                  replay.admittedUnchecked, replay.reusedFromCache
+                  replay.admittedUnchecked, replay.reusedFromCache, replay.environment
                 )
               )
             )

@@ -767,6 +767,57 @@ digit merges the two, so `lean"f ${a}1 ${b}"` built the source `f $01 $1` and
 read the first marker as index 1, silently expanding to `f b b` with the literal
 `1` gone.
 
+### D13 — reduction is not execution
+
+`Evaluate` type-checks a closed term against an environment and reduces it,
+which is `#eval` for the part of `#eval` the kernel can do. `--eval` is the
+command line for it. What comes back is a normal form and the type the term was
+checked at:
+
+    Nat.add 2 3     ->  5 : Nat
+    Nat.pow 2 16    ->  65536 : Nat
+    Nat.ble 2 3     ->  Bool.true : Bool
+    Nat.decEq 2 2   ->  Decidable.intro (Eq.{1} Nat 2 2) Bool.true
+                        (Eq.refl.{1} Nat 2) : Decidable (Eq.{1} Nat 2 2)
+
+The last one is the point: a decidability proof is computed, not just
+arithmetic.
+
+Three limits, all consequences of being the kernel rather than an interpreter.
+
+Arithmetic is fast because the kernel reduces it natively: `reduceNat` answers
+`succ`, `add`, `sub`, `mul`, `pow`, `gcd`, `mod`, `div`, `beq`, `ble`, `land`,
+`lor`, `xor` and both shifts straight on literals. Strings have no such thing.
+The only string extension is the literal-to-constructor expansion through
+`profile.stringLiteralCtor`, so `String.append "ab" "cd"` can only unfold the
+definition: both literals expand to `List Char`, the recursive `List.append`
+runs over them, and the result is a `String.mk (List.cons ...)` term that
+nothing folds back into `"abcd"`. It did not finish within a minute when tried,
+and no time is quoted here because it was not run to completion. That is Lean's
+kernel too, not a gap in kolla.
+
+Reduction does not go under a binder. A lambda's body has loose bound variables
+and the kernel reduces closed terms, so `fun (x : Nat) => Nat.add 2 3` comes
+back with its body intact. `EvaluateSuite` asserts that, so the limit is pinned
+rather than incidental.
+
+The environment is admitted, not checked. `--eval` replays the export with
+nothing selected for checking (P14), because re-deriving a library in order to
+compute `Nat.add 2 2` would be absurd, and it says how many declarations it
+admitted on stderr. The answer is therefore only as good as the file; check the
+file separately if that matters.
+
+A Lean *program* is out of reach, and not by a small margin. `main : IO Unit`
+is `EStateM IO.Error IO.RealWorld Unit`, and while that shape maps onto
+`cats.effect.IO` cleanly enough, the primitives do not: `IO.println` descends
+through `IO.print` and `IO.FS.Stream.putStr` to `@[extern]` declarations that
+the kernel sees as constants with no definition to unfold, and `main` is run by
+a binary the Lean compiler produced. Running one would mean supplying a Scala
+implementation for each primitive and owning the `RealWorld` discipline — a
+Lean runtime, which is a different project with a different risk profile, since
+nothing would check those implementations against Lean's C. It would also have
+to live outside `kernel`, where `cats.effect` is not allowed.
+
 ## Differential platform
 
 ### P1 — a tool revision must pin exactly the target toolchain

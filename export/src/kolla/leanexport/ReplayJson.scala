@@ -25,6 +25,20 @@ object ReplayJson:
       "trace"   -> JsonWriter.arr(ReplayTally.trace(outcome).map(JsonWriter.str))
     )
 
+  /** One reduction, for `--eval --json`.
+    *
+    * Here rather than in `cli` for the reason the rest of this file is: the
+    * wire format is one implementation, so a reader does not have to know
+    * which frontend produced it. See docs/semantics.md F1.
+    */
+  def evaluation(term: String, value: String, tpe: String, profile: String): String =
+    JsonWriter.obj(
+      "eval"    -> JsonWriter.str(term),
+      "value"   -> JsonWriter.str(value),
+      "type"    -> JsonWriter.str(tpe),
+      "profile" -> JsonWriter.str(profile)
+    )
+
   /** The run as a whole, which a reader uses to check it saw everything. */
   def summary(source: String, profile: String, platform: String, t: ReplayTally, wallNanos: Long): String =
     JsonWriter.obj(
