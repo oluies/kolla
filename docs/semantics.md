@@ -1381,6 +1381,38 @@ cannot be produced by round-tripping an NDJSON fixture through the writer. With
 `UnknownConstant: Flag.up`, which is what makes the test a guard rather than a
 description.
 
+### P19 — a reference that could not run has not rejected anything
+
+P17 stopped a reference with no verdict from being read as a disagreement.
+This is the other half: deciding which non-zero exits are verdicts at all.
+
+`Lean4Checker` mapped every non-zero exit to `Verdict.Rejected`. Most non-zero
+exits are not rejections. `elan run` fails when a toolchain will not download,
+`lake env` fails when a build is missing, the binary can be absent — and none
+of those has looked at the corpus. A v4.28.0 CI job failed with
+
+    v4.28.0 / case-eta / jvm: DISAGREES (lean4checker rejected vs kolla accepted)
+
+and the reason underneath it was
+
+    error: could not download file from
+    https://releases.lean-lang.org/lean4/v4.28.0/lean-4.28.0-linux.tar.zst
+
+The reference had not rejected `case-eta`; it had never started. Read at face
+value that output says kolla accepts something Lean's own kernel refuses, which
+is the most serious thing the platform can report, and it was infrastructure.
+
+`Lean4Checker.rejected` is the discriminator: `main` prints
+`lean4checker found a problem` before rethrowing (P4), so that marker in the
+output is what separates a verdict from a failure to produce one. Without it
+the run is an `Error`, which P17 then reports as no reference verdict. With it,
+a genuine rejection still fails the comparison exactly as before.
+
+This is narrower than it looks. It only decides how a non-zero exit is
+labelled; it does not make a missing reference into a passing one, and a
+reference that rejects while kolla accepts still fails the run. What it stops
+is a transport failure wearing the costume of a disagreement.
+
 ## Frontends
 
 ### F1 — the checking is one implementation, the driver loop is three

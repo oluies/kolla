@@ -93,7 +93,8 @@ object Lean4Checker:
       val verdict =
         if r.timedOut then Verdict.Error(s"timed out after ${timeout.toSeconds}s")
         else if r.ok then Verdict.Accepted
-        else Verdict.Rejected(reason(r))
+        else if rejected(r) then Verdict.Rejected(reason(r))
+        else Verdict.Error(reason(r))
       empty(tools, corpus).copy(
         results = Vector(DeclResult(corpusDecl(corpus.name), verdict, r.nanos)),
         wallNanos = r.nanos
@@ -103,6 +104,29 @@ object Lean4Checker:
   private def casesPath(tools: Provision.Tools): IO[Option[Path]] =
     val p = Layout.toolchainCache(tools.toolchain).resolve("cases")
     IO.blocking(if Files.isDirectory(p) then Some(p) else None)
+
+  /** What `lean4checker` prints when the kernel refuses a module.
+    *
+    * `main` catches the exception, prints this and rethrows (P4), so it is the
+    * marker that separates a verdict from a failure to produce one.
+    */
+  val problemMarker: String = "lean4checker found a problem"
+
+  /** Whether a non-zero exit was the reference rejecting something.
+    *
+    * It usually is not. `elan run` fails when a toolchain cannot be
+    * downloaded, `lake env` fails when a build is missing, the binary can be
+    * absent — and all of those exit non-zero while saying nothing about the
+    * corpus. Reporting them as `Rejected` made the reference appear to
+    * contradict kolla: a v4.28.0 CI job failed with
+    * `DISAGREES (lean4checker rejected vs kolla accepted)` on `case-eta` when
+    * what had actually happened was
+    * `error: could not download file from releases.lean-lang.org`. Without
+    * the marker it is an `Error`, which P17 then treats as no verdict rather
+    * than as a disagreement. See docs/semantics.md P19.
+    */
+  def rejected(r: ProcResult): Boolean =
+    (r.stderr + r.stdout).contains(problemMarker)
 
   /** The failure text, preferring stderr, which is where the problem is named. */
   private def reason(r: ProcResult): String =
