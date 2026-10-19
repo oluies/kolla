@@ -153,3 +153,9 @@ class OptionsSuite extends munit.FunSuite:
       "v4.27.0+defeq-cache"
     )
   }
+
+  test("--trace parses and composes") {
+    assert(!ok("a").trace)
+    assert(ok("--trace", "a").trace)
+    assert(ok("--trace", "--progress", "a").trace)
+  }

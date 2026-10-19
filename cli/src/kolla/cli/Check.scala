@@ -120,7 +120,12 @@ object Check:
       /** Run periodically and once at the end, so that a run which dies
         * partway leaves behind the digests it did accept.
         */
-      checkpoint: Option[IO[Unit]] = None
+      checkpoint: Option[IO[Unit]] = None,
+      /** Called with a step's names before it is taken, and again with the
+        * time it took once it returns. A step that never returns is reported
+        * only by the first call, which is the point. See docs/semantics.md K20.
+        */
+      trace: Option[(List[Name], Option[Long]) => IO[Unit]] = None
   ): IO[Either[Failure, Result]] =
     IO.monotonic.flatMap { start =>
       val replay  = new Replay(profile, true, Replay.defaultHoistWindow, check, cache)
@@ -149,16 +154,18 @@ object Check:
         else
           batches += 1
           val yieldNow = if batches % cedeEvery == 0 then IO.cede else IO.unit
-          yieldNow *> IO {
+          val announce = trace.fold(IO.unit)(f => IO(replay.peekNames).flatMap(ns => f(ns, None)))
+          yieldNow *> announce *> IO {
             try
               val t0 = System.nanoTime()
               val st = replay.next()
               (st, System.nanoTime() - t0)
             catch case _: OutOfMemoryError => throw new OutOfRoom(seen)
           }.flatMap { (st, took) =>
+            val done = trace.fold(IO.unit)(f => f(st.names, Some(took)))
             tally = tally.add(st)
             seen += st.names.length
-            st.names.traverse_(d => emit(d, st.outcome, took)) *> drain()
+            done *> st.names.traverse_(d => emit(d, st.outcome, took)) *> drain()
           }
       }
 

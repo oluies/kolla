@@ -271,3 +271,39 @@ class CheckSuite extends CatsEffectSuite:
         .map(n => assertEquals(n, 1, "an unreadable file must still checkpoint"))
     }
   }
+
+  test("a step is announced before it is taken") {
+    // The point of the hook: a declaration that never returns is reported by
+    // the start line alone, so every step must announce before it runs.
+    val log = IO.ref(Vector.empty[(String, Boolean)])
+    log.flatMap { ref =>
+      Check
+        .stream("x", bytesOf(good, 9), KernelProfile.v4_35, abortOnReject = false,
+                silent, None, _ => true, None, None,
+                Some((names, took) =>
+                  ref.update(_ :+ (names.map(_.toString).mkString(","), took.isDefined))
+                ))
+        .flatMap(_ => ref.get)
+        .map { entries =>
+          // Two declarations, each announced then completed, starts first.
+          assertEquals(entries.count(!_._2), 2, clue(entries))
+          assertEquals(entries.count(_._2), 2, clue(entries))
+          assertEquals(entries.head, ("P", false), clue(entries))
+          assertEquals(entries(1), ("P", true), clue(entries))
+        }
+    }
+  }
+
+  test("the names announced match the names stepped") {
+    val log = IO.ref(Vector.empty[String])
+    log.flatMap { ref =>
+      Check
+        .stream("x", bytesOf(good, 5), KernelProfile.v4_35, abortOnReject = false,
+                silent, None, _ => true, None, None,
+                Some((names, took) =>
+                  if took.isEmpty then ref.update(_ :+ names.map(_.toString).mkString(",")) else IO.unit
+                ))
+        .flatMap(_ => ref.get)
+        .map(ns => assertEquals(ns, Vector("P", "Q")))
+    }
+  }

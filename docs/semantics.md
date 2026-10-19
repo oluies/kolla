@@ -1413,6 +1413,35 @@ labelled; it does not make a missing reference into a passing one, and a
 reference that rejects while kolla accepts still fails the run. What it stops
 is a transport failure wearing the costume of a disagreement.
 
+### P20 — the platform may keep the defeq cache, on request
+
+K18 added `--defeq-cache` to the command line and said `difftest` would never
+set it, on the grounds that a reference comparison should be a faithful run of
+the release. That was the wrong trade, and the nightly matrix showed why: `std`
+and `lean` at v4.28.0 were excluded outright, because without the cache they do
+not finish (P12), so the comparison that would have been unfaithful was
+replaced by no comparison at all.
+
+What the flag changes is the cost, not the verdicts. That is verified rather
+than assumed: every fixture on both uncached profiles each way, and the v4.28.0
+`init` export name by name and verdict by verdict across 51,759 declarations.
+A comparison against `lean4checker` is a comparison of verdicts, so the cache
+does not weaken it.
+
+So `difftest` takes `--defeq-cache`, off by default, and the nightly workflow
+passes it for any toolchain below v4.35. The safeguard is the label: the
+profile reports itself as `v4.28.0+defeq-cache`, so a report cannot claim to be
+a plain run of that release.
+
+It is applied at one site, where kolla checks the corpus. The mutation and
+platform paths run on handwritten fixtures that finish without it, and
+threading it into three subprocesses would widen what a report has to explain
+for no gain.
+
+What this does not do is make the pre-v4.35 profile cheap. `std` still needs
+the cache to finish at all, and K19's `braidingNatIso` is on the profile that
+caches anyway, so neither P12 nor this entry explains that one.
+
 ## Frontends
 
 ### F1 — the checking is one implementation, the driver loop is three

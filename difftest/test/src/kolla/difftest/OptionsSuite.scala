@@ -53,3 +53,10 @@ class OptionsSuite extends munit.FunSuite:
   test("a mathlib checkout is a path") {
     assertEquals(ok("--mathlib", "/tmp/mathlib4").mathlib.map(_.toString), Some("/tmp/mathlib4"))
   }
+
+  test("--defeq-cache is off by default and amends the profile when given") {
+    // Off by default because a comparison should be a faithful run of the
+    // release; on, it is what lets std and lean finish below v4.35.
+    assert(!Options.parse(List("run")).toOption.get.defeqCache)
+    assert(Options.parse(List("run", "--defeq-cache")).toOption.get.defeqCache)
+  }

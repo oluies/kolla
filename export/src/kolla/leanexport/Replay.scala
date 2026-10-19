@@ -205,6 +205,17 @@ final class Replay(
 
   def hasNext: Boolean = stepLength().isDefined
 
+  /** The names the next step will declare, without taking it.
+    *
+    * A driver that only reports a step after it returns can say nothing about
+    * a step that never returns, which is how a declaration that does not
+    * terminate stays anonymous. See docs/semantics.md K20.
+    */
+  def peekNames: List[Name] =
+    stepLength() match
+      case None    => Nil
+      case Some(n) => pending(Vector.tabulate(n)(ready(_)))._1
+
   /** Accepts one more item. */
   def feed(item: ExportItem): Unit =
     require(!finished, "Replay.feed after finish()")

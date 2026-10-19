@@ -31,17 +31,12 @@ jobs:
           - init
           - std
           - lean
-        # `std` and `lean` on a pre-v4.35 profile do not finish: that release
-        # has no positive `is_def_eq` cache and kolla follows it, which costs
-        # more than a 24 GB heap on `std` (docs/semantics.md P12). `init` does
-        # finish there, so it stays. `difftest` does not pass `--defeq-cache`,
-        # because a reference comparison has to be a faithful run of the
-        # release (K18) — so these two are excluded rather than worked around.
-        exclude:
-          - toolchain: v4.28.0
-            corpus: std
-          - toolchain: v4.28.0
-            corpus: lean
+        # Every combination runs. `std` and `lean` on a pre-v4.35 profile need
+        # `--defeq-cache` to finish at all (docs/semantics.md P12), which the
+        # step below passes for those toolchains. It changes no verdict — that
+        # is verified over 51,759 declarations — and the profile reports itself
+        # as `+defeq-cache`, so a report never claims to be a plain run of the
+        # release (P20).
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v4
@@ -70,9 +65,16 @@ jobs:
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
       - run: ./mill difftest.run provision --toolchain ${{ matrix.toolchain }}
       # The mutants are skipped: a corpus this size takes long enough once.
-      - run: >-
-          ./mill difftest.run run --toolchain ${{ matrix.toolchain }}
-          --corpus ${{ matrix.corpus }} --no-mutants --history
+      # Below v4.35 the positive is_def_eq cache has to be kept or a library
+      # corpus does not finish; see docs/semantics.md P12 and P20.
+      - run: |
+          extra=""
+          case "${{ matrix.toolchain }}" in
+            v4.35.*) ;;
+            *) extra="--defeq-cache" ;;
+          esac
+          ./mill difftest.run run --toolchain "${{ matrix.toolchain }}" \
+            --corpus "${{ matrix.corpus }}" --no-mutants --history $extra
       - if: always()
         uses: actions/upload-artifact@v4
         with:

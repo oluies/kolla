@@ -66,6 +66,8 @@ kolla [options] <export-file>...
   --cache <file>  reuse and extend a file of accepted digests
   --defeq-cache   keep the positive is_def_eq cache on a profile that
                   predates it; needed for a library corpus before v4.35
+  --trace         name each declaration before checking it, so one that
+                  never finishes can be identified
   --eval <term>   reduce a term against the export's environment and print
                   it, instead of checking the file
   --profiles      list the profiles and exit
@@ -219,8 +221,10 @@ mill difftest.run mutants                   # the negative corpus
 `.github/workflows/ci.yml` runs the unit suites and the platform comparison on
 every push, and a job per toolchain. `nightly.yml` runs the libraries and the
 mathlib sample, on request rather than on a schedule: it costs hours of runner
-time whether or not anything changed. It omits `std` and `lean` at v4.28.0,
-which do not finish on a profile without the positive `is_def_eq` cache.
+time whether or not anything changed. Below v4.35 it passes `--defeq-cache`,
+without which `std` and `lean` do not finish; that changes no verdict and the
+profile reports itself as `+defeq-cache` so a report cannot be mistaken for a
+plain run of the release (docs/semantics.md P20).
 
 A reference that reaches no verdict — one that timed out, or that has no
 release for the toolchain — is reported as such and does not fail the run. It

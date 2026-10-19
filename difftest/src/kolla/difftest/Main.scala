@@ -1,6 +1,7 @@
 package kolla.difftest
 
 import cats.effect.{ExitCode, IO, IOApp}
+import kolla.kernel.KernelProfile
 import scala.concurrent.duration.*
 import java.nio.file.{Files, Path, Paths as JPaths}
 
@@ -11,6 +12,16 @@ final case class Options(
     corpora: List[String] = Nil,
     seeds: List[Long] = List(1L),
     mathlib: Option[Path] = None,
+    /** Keep the positive `is_def_eq` cache on a profile that predates it.
+      *
+      * Off by default, because a reference comparison should be a faithful run
+      * of the release (K18). Verdicts are unaffected — that is verified over
+      * 51,759 declarations and every fixture — so what it buys is the ability
+      * to compare `std` and `lean` below v4.35 at all, which otherwise cannot
+      * finish (P12). The profile reports itself as `+defeq-cache`, so a report
+      * never claims to be a plain run of the release. See docs/semantics.md P20.
+      */
+    defeqCache: Boolean = false,
     withChecker: Boolean = true,
     withNanoda: Boolean = true,
     withMutants: Boolean = true,
@@ -37,6 +48,8 @@ object Options:
       |  --corpus <name>        restrict to one corpus, repeatable
       |  --seed <n>             mutation seed, repeatable (default 1)
       |  --mathlib <dir>        a mathlib checkout, enabling the mathlib-sample corpus
+      |  --defeq-cache          keep the positive is_def_eq cache on a profile that
+      |                         predates it; needed for std and lean before v4.35
       |  --no-checker           skip lean4checker
       |  --no-nanoda            skip nanoda
       |  --no-mutants           skip the negative corpus
@@ -54,6 +67,7 @@ object Options:
           case Some(n) => go(t, o.copy(seeds = o.seeds :+ n))
           case None    => Left(s"--seed expects a number, got $v")
       case "--mathlib" :: v :: t                   => go(t, o.copy(mathlib = Some(JPaths.get(v))))
+      case "--defeq-cache" :: t                    => go(t, o.copy(defeqCache = true))
       case "--no-checker" :: t                     => go(t, o.copy(withChecker = false))
       case "--no-nanoda" :: t                      => go(t, o.copy(withNanoda = false))
       case "--no-mutants" :: t                     => go(t, o.copy(withMutants = false))
@@ -187,6 +201,17 @@ object Main extends IOApp:
   private type Part =
     (Vector[CheckerRun], Vector[OverallAgreement], Vector[MutationOutcome], Vector[Comparison])
 
+  /** The profile kolla checks with, which `--defeq-cache` may amend.
+    *
+    * Applied here and nowhere else: the flag exists for a library corpus on a
+    * pre-v4.35 profile, which is checked through this path. The mutation and
+    * platform paths run on handwritten fixtures that finish without it, and
+    * threading it into three subprocesses to no purpose would only widen what
+    * a report has to explain. See docs/semantics.md P20.
+    */
+  private def kollaProfile(o: Options, t: Toolchain): KernelProfile =
+    if o.defeqCache then t.profile.withDefEqSuccessCache else t.profile
+
   private def referenceRun(
       tools: Provision.Tools,
       c: Corpus,
@@ -248,7 +273,7 @@ object Main extends IOApp:
       // corpus-level verdicts to be comparable.
       useNanoda = o.withNanoda && nanoda.isDefined && Nanoda.applies(t, env.format)
       kolla <- KollaChecker.check(
-                 items, t.profile, t.spec, c.name, "jvm",
+                 items, kollaProfile(o, t), t.spec, c.name, "jvm",
                  stopOnFirstRejection = reference || useNanoda,
                  expectRejection = c.expectRejection
                )

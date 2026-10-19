@@ -82,6 +82,31 @@ object Main extends IOApp:
         }
       }
 
+  /** How long a step has to take before it is worth a line of its own. */
+  private val slowStepMillis: Long = 1000L
+
+  /** Names a declaration before it is checked, and again if it was slow.
+    *
+    * The "start" line is the one that matters: a declaration that does not
+    * terminate produces only that, so the last unpaired name is the culprit.
+    * Without it a stuck run is anonymous, which is how
+    * `CategoryTheory.Localization.Monoidal.braidingNatIso` took a thread dump
+    * and a second run to identify. See docs/semantics.md K20.
+    */
+  private def traceOf(o: Options): Option[(List[Name], Option[Long]) => IO[Unit]] =
+    if !o.trace then None
+    else
+      Some { (names, took) =>
+        val what = names.headOption.fold("<nothing>")(_.toString)
+        val more = if names.length > 1 then s" (+${names.length - 1} more)" else ""
+        took match
+          case None => Console[IO].errorln(s"  start $what$more")
+          case Some(ns) =>
+            val ms = ns / 1000000L
+            if ms < slowStepMillis then IO.unit
+            else Console[IO].errorln(f"  slow  $what$more ${ms}%,d ms")
+      }
+
   /** The periodic note on stderr, shared by checking and `--eval`. */
   private def progressOf(o: Options): Option[Check.Progress => IO[Unit]] =
     if !o.progress then None
@@ -120,7 +145,7 @@ object Main extends IOApp:
       Check
         .stream(
           file, read(file), profile, o.abortOnReject, emit, progress,
-          Options.selects(o), store, store.map(_.flush)
+          Options.selects(o), store, store.map(_.flush), traceOf(o)
         )
         .flatMap(reportOne(o, profile, file, _))
     }

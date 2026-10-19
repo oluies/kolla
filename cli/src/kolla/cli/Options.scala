@@ -28,6 +28,8 @@ final case class Options(
     defeqCache: Boolean = false,
     /** Reduce this term against the export's environment instead of checking. */
     evalTerm: Option[String] = None,
+    /** Name each declaration before checking it, and time the slow ones. */
+    trace: Boolean = false,
     help: Boolean = false,
     version: Boolean = false,
     listProfiles: Boolean = false
@@ -57,6 +59,8 @@ object Options:
       |  --cache <file>  reuse and extend a file of accepted digests
       |  --defeq-cache   keep the positive is_def_eq cache on a profile that
       |                  predates it; needed for a library corpus before v4.35
+      |  --trace         name each declaration before checking it, so one
+      |                  that never finishes can be identified
       |  --eval <term>   reduce a term against the export's environment and
       |                  print it, instead of checking the file
       |  --profiles      list the profiles and exit
@@ -121,6 +125,7 @@ object Options:
       case "--cache" :: v :: t       => go(t, o.copy(cache = Some(v)))
       case "--defeq-cache" :: t      => go(t, o.copy(defeqCache = true))
       case "--eval" :: v :: t        => go(t, o.copy(evalTerm = Some(v)))
+      case "--trace" :: t            => go(t, o.copy(trace = true))
       case "--profile" :: v :: t =>
         KernelProfile.all.find(p => p.label == v || p.label == s"v$v") match
           case Some(p) => go(t, o.copy(profile = p))
