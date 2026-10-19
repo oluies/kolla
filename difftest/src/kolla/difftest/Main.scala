@@ -1,6 +1,7 @@
 package kolla.difftest
 
 import cats.effect.{ExitCode, IO, IOApp}
+import scala.concurrent.duration.*
 import java.nio.file.{Files, Path, Paths as JPaths}
 
 /** How a run was configured. */
@@ -193,7 +194,11 @@ object Main extends IOApp:
       workers: Option[Int]
   ): IO[Option[CheckerRun]] =
     // lean4checker replays oleans, which a prebuilt export does not have.
-    if reference && c.prebuilt.isEmpty then Lean4Checker.run(tools, c, numWorkers = workers).map(Some(_))
+    if reference && c.prebuilt.isEmpty then
+      // A library corpus gets the longer budget for the same reason it gets
+      // fewer workers: finishing matters more than the wall clock.
+      val timeout = if workers.isDefined then Lean4Checker.libraryTimeout else 30.minutes
+      Lean4Checker.run(tools, c, timeout = timeout, numWorkers = workers).map(Some(_))
     else IO.pure(None)
 
   private def mutantsOf(

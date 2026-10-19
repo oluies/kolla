@@ -106,9 +106,16 @@ class ReportSuite extends munit.FunSuite:
     val rejecting = run("kolla", "c", "A" -> Verdict.Rejected("bad"))
     assert(!Compare.overall(ref, rejecting).agrees)
 
+    // An unavailable reference does not agree, because it judged nothing. It
+    // is no longer rendered as a disagreement: it said nothing about the
+    // corpus, and calling that a difference of opinion is what P17 corrects.
     val unknown = run(Lean4Checker.name, "c").copy(failure = Some("unavailable"))
-    assert(!Compare.overall(unknown, subj).agrees)
-    assert(clue(Compare.overall(unknown, subj).render).contains("DISAGREES"))
+    val o       = Compare.overall(unknown, subj)
+    assert(!o.agrees)
+    assert(!o.comparable)
+    assert(o.referenceUnavailable)
+    assert(clue(o.render).contains("NO REFERENCE VERDICT"))
+    assert(!clue(o.render).contains("DISAGREES"))
   }
 
   test("history rows round-trip through the tsv") {
@@ -124,4 +131,67 @@ class ReportSuite extends munit.FunSuite:
 
   test("history skips a malformed line rather than failing") {
     assertEquals(History.parse(History.header + "\nnot\ta\trow\n"), Nil)
+  }
+
+  /** A corpus-level reference run, as `lean4checker` and nanoda produce. */
+  def overallRun(checker: String, corpus: String, v: Verdict): CheckerRun =
+    CheckerRun(
+      checker, "leanprover/lean4:v4.28.0", corpus, "jvm",
+      Vector(DeclResult(n(s"<corpus:$corpus>"), v, 1000L)), 10_000L, 0L,
+      perDeclaration = false
+    )
+
+  def reportWithOverall(runs: Vector[CheckerRun], os: Vector[OverallAgreement]): Report =
+    Report("abc123", "2026-01-01T00:00:00Z", runs, Vector.empty, os)
+
+  test("a reference that reached no verdict is not a disagreement") {
+    // The v4.28.0 mathlib-sample case: kolla accepted all 17,240 declarations
+    // and lean4checker timed out. Silence from the reference says nothing
+    // about the corpus, so it must not fail the run.
+    val kolla = overallRun("kolla", "mathlib-sample", Verdict.Accepted)
+    val ref   = overallRun("lean4checker", "mathlib-sample", Verdict.Error("timed out after 1800s"))
+    val o     = Compare.overall(ref, kolla)
+    assert(!o.agrees)
+    assert(!o.comparable)
+    assert(o.referenceUnavailable)
+    assert(reportWithOverall(Vector(kolla, ref), Vector(o)).agrees)
+    assert(clue(o.render).contains("NO REFERENCE VERDICT"))
+  }
+
+  test("a real disagreement still fails") {
+    val kolla = overallRun("kolla", "std", Verdict.Accepted)
+    val ref   = overallRun("lean4checker", "std", Verdict.Rejected("Nat.add: bad"))
+    val o     = Compare.overall(ref, kolla)
+    assert(!o.agrees)
+    assert(o.comparable, "both sides judged, so it is comparable")
+    assert(!o.referenceUnavailable)
+    assert(!reportWithOverall(Vector(kolla, ref), Vector(o)).agrees)
+    assert(clue(o.render).contains("DISAGREES"))
+  }
+
+  test("a subject that reached no verdict still fails") {
+    // The asymmetry is the point: silence from kolla is not excused.
+    val kolla = overallRun("kolla", "std", Verdict.Error("ran out of memory"))
+    val ref   = overallRun("lean4checker", "std", Verdict.Accepted)
+    val o     = Compare.overall(ref, kolla)
+    assert(!o.agrees)
+    assert(!o.comparable)
+    assert(!o.referenceUnavailable, "the reference judged; it is the subject that did not")
+    assert(!reportWithOverall(Vector(kolla, ref), Vector(o)).agrees)
+  }
+
+  test("neither side judging still fails") {
+    val kolla = overallRun("kolla", "std", Verdict.NotChecked("nothing"))
+    val ref   = overallRun("lean4checker", "std", Verdict.Error("timed out"))
+    val o     = Compare.overall(ref, kolla)
+    assert(!o.referenceUnavailable)
+    assert(!reportWithOverall(Vector(kolla, ref), Vector(o)).agrees)
+  }
+
+  test("agreement still agrees") {
+    val kolla = overallRun("kolla", "init", Verdict.Accepted)
+    val ref   = overallRun("lean4checker", "init", Verdict.Accepted)
+    val o     = Compare.overall(ref, kolla)
+    assert(o.agrees && o.comparable && !o.referenceUnavailable)
+    assert(reportWithOverall(Vector(kolla, ref), Vector(o)).agrees)
   }

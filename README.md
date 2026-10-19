@@ -194,8 +194,15 @@ mill difftest.run mutants                   # the negative corpus
   rejecting different declarations and reaching the same total.
 
 `.github/workflows/ci.yml` runs the unit suites and the platform comparison on
-every push, and a job per toolchain; `nightly.yml` runs the libraries and the
-mathlib sample.
+every push, and a job per toolchain. `nightly.yml` runs the libraries and the
+mathlib sample, on request rather than on a schedule: it costs hours of runner
+time whether or not anything changed. It omits `std` and `lean` at v4.28.0,
+which do not finish on a profile without the positive `is_def_eq` cache.
+
+A reference that reaches no verdict — one that timed out, or that has no
+release for the toolchain — is reported as such and does not fail the run. It
+also does not confirm anything, so a comparison is only evidence when it says
+`agrees`; see docs/semantics.md P17.
 
 ### What it has found
 

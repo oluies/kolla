@@ -1256,6 +1256,41 @@ declarations. It is on request rather than by default so that a pipeline's
 stderr stays empty, and it is on stderr so that `--json` stdout stays
 machine-readable.
 
+### P17 — a reference that did not answer is not a disagreement
+
+`OverallAgreement.agrees` requires both sides to have reached a judgement and
+to have reached the same one. What it did not distinguish was *why* a
+comparison failed, so a reference that said nothing was reported exactly like a
+reference that contradicted kolla.
+
+The case that surfaced it: the v4.28.0 `mathlib-sample` nightly job. kolla
+accepted all 17,240 declarations and `lean4checker` hit its 30-minute budget,
+and the run printed
+
+    DISAGREES (lean4checker error vs kolla accepted)
+
+and exited 1. Nothing disagreed. The reference had not finished reading the
+corpus, and the only honest reading of that is that there is no reference
+verdict to compare against — the same situation P2 already describes for a
+toolchain `lean4checker` has no release for.
+
+So `comparable` is both sides having judged, and `referenceUnavailable` is the
+reference not having judged while the subject did. `Report.agrees` excuses the
+second and nothing else. The asymmetry is deliberate: silence from kolla is
+still a failure, because kolla is the thing under test. Three of the four
+combinations therefore still fail — a genuine disagreement, a subject that
+reached no verdict, and neither side judging — and `ReportSuite` pins all four.
+
+The 30-minute budget was also wrong for the corpus rather than merely unlucky.
+`Lean4Checker.libraryTimeout` is six hours and is used wherever the worker cap
+is, for the same reason: on a library corpus, finishing matters more than the
+wall clock.
+
+One thing this does not do is make the comparison stronger. A run whose
+reference timed out is a kolla-only run, and the report now says so instead of
+implying a reference confirmed or contradicted it. Reading `agrees` as "a
+reference checked this too" is wrong whenever `comparable` is false.
+
 ## Frontends
 
 ### F1 — the checking is one implementation, the driver loop is three

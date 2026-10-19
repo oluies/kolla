@@ -126,8 +126,23 @@ final case class OverallAgreement(reference: CheckerRun, subject: CheckerRun):
 
   /** Both sides must have reached a judgement, and it must be the same one. */
   def agrees: Boolean =
-    referenceVerdict.isJudgement && subjectVerdict.isJudgement &&
-      referenceVerdict.label == subjectVerdict.label
+    comparable && referenceVerdict.label == subjectVerdict.label
+
+  /** Whether there was anything to compare: both sides reached a judgement. */
+  def comparable: Boolean =
+    referenceVerdict.isJudgement && subjectVerdict.isJudgement
+
+  /** The reference reached no verdict while the subject did.
+    *
+    * This is not a disagreement. A reference that timed out, was not built, or
+    * does not cover the toolchain has said nothing about the corpus, and
+    * holding kolla's verdict against silence would report a difference of
+    * opinion where there is only a missing opinion. A subject that reaches no
+    * verdict is a different matter and stays a failure.
+    * See docs/semantics.md P17.
+    */
+  def referenceUnavailable: Boolean =
+    !referenceVerdict.isJudgement && subjectVerdict.isJudgement
 
   def json: String =
     Json.obj(
@@ -136,7 +151,8 @@ final case class OverallAgreement(reference: CheckerRun, subject: CheckerRun):
       "platform"  -> Json.str(subject.platform),
       "reference" -> Json.str(reference.checker),
       "subject"   -> Json.str(subject.checker),
-      "agrees"    -> Json.bool(agrees),
+      "agrees"     -> Json.bool(agrees),
+      "comparable" -> Json.bool(comparable),
       "referenceVerdict" -> Json.str(referenceVerdict.label),
       "referenceDetail"  -> referenceVerdict.detail.fold("null")(Json.str),
       "subjectVerdict"   -> Json.str(subjectVerdict.label),
@@ -148,7 +164,11 @@ final case class OverallAgreement(reference: CheckerRun, subject: CheckerRun):
   def render: String =
     val sb = new StringBuilder
     sb ++= s"${subject.toolchain} / ${subject.corpus} / ${subject.platform}: "
-    sb ++= (if agrees then "agrees" else "DISAGREES")
+    sb ++= (
+      if agrees then "agrees"
+      else if referenceUnavailable then s"NO REFERENCE VERDICT from ${reference.checker}"
+      else "DISAGREES"
+    )
     sb ++= s" (${reference.checker} ${referenceVerdict.label} vs ${subject.checker} ${subjectVerdict.label})\n"
     if !agrees then
       referenceVerdict.detail.foreach(d => sb ++= s"  ${reference.checker}: $d\n")

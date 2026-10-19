@@ -32,8 +32,11 @@ final case class Report(
     runs.filter(r => r.expectRejection && r.rejected == 0)
 
   /** True when every comparison agreed and no run failed outright. */
+  /** A reference that reached no verdict is not a disagreement: it said
+    * nothing about the corpus. See docs/semantics.md P17.
+    */
   def agrees: Boolean =
-    comparisons.forall(_.agrees) && overall.forall(_.agrees) &&
+    comparisons.forall(_.agrees) && overall.forall(o => o.agrees || o.referenceUnavailable) &&
       mutations.forall(_.asExpected) && runs.forall(_.failure.isEmpty) &&
       falseRejections.isEmpty && missedRejections.isEmpty
 

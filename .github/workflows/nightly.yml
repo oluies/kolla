@@ -1,10 +1,11 @@
 name: nightly
 
 # The standard library and a mathlib sample are hours of work and gigabytes of
-# export, so they run on a schedule rather than on every push.
+# export. They are run on request rather than on a schedule: a nightly run of
+# this size costs hours of runner time whether or not anything changed, and the
+# last scheduled one lost two jobs to a cancellation that had nothing to do
+# with kolla. The name is kept so the history stays in one place.
 on:
-  schedule:
-    - cron: '0 3 * * *'
   workflow_dispatch:
     inputs:
       toolchain:
@@ -30,6 +31,17 @@ jobs:
           - init
           - std
           - lean
+        # `std` and `lean` on a pre-v4.35 profile do not finish: that release
+        # has no positive `is_def_eq` cache and kolla follows it, which costs
+        # more than a 24 GB heap on `std` (docs/semantics.md P12). `init` does
+        # finish there, so it stays. `difftest` does not pass `--defeq-cache`,
+        # because a reference comparison has to be a faithful run of the
+        # release (K18) — so these two are excluded rather than worked around.
+        exclude:
+          - toolchain: v4.28.0
+            corpus: std
+          - toolchain: v4.28.0
+            corpus: lean
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v4

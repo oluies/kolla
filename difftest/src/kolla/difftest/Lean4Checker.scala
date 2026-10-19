@@ -31,6 +31,16 @@ object Lean4Checker:
     */
   val libraryWorkers: Int = 2
 
+  /** How long to give the reference on a corpus the size of a library.
+    *
+    * The default 30 minutes is sized for a handwritten case. On the v4.28.0
+    * mathlib sample it expired while kolla accepted all 17,240 declarations,
+    * and the run was then reported as a disagreement rather than as a
+    * reference that had not answered (P17). Replaying mathlib's modules
+    * through Lean's own kernel is hours of work, so the budget says so.
+    */
+  val libraryTimeout: FiniteDuration = 6.hours
+
   def run(
       tools: Provision.Tools,
       corpus: Corpus,
