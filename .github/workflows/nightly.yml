@@ -36,14 +36,14 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cache/coursier
             ~/.cache/mill
           key: mill-${{ runner.os }}-${{ hashFiles('build.mill') }}
           restore-keys: mill-${{ runner.os }}-
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: .difftest/leanprover-lean4-${{ matrix.toolchain }}
           key: nightly-${{ matrix.toolchain }}-${{ matrix.corpus }}-${{ hashFiles('difftest/toolchains.txt') }}
@@ -81,7 +81,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cache/coursier
