@@ -123,6 +123,20 @@ docs/semantics.md P15.
 `mill cli.native.nativeLink` builds a native binary. It is the faster of the two
 on small inputs and much the slower on large ones; see docs/semantics.md F7.
 
+## Finding a slow declaration
+
+`--trace` names each declaration on stderr before checking it, and reports any
+step that took over a second. The first part is the one that matters: a
+declaration that does not terminate is reported only by its start line, so the
+last unpaired name is the one a run is inside. A progress counter cannot tell
+you that, and neither can a thread dump — these steps do not reach a safepoint,
+so `jstack`, `jcmd` and `SIGQUIT` are all refused.
+
+That is how the Mathlib tail was measured and how the declaration a full check
+stops on was identified; docs/semantics.md K19 records both, including an
+earlier wrong answer that came from reading an exact position off a counter
+that only reports every 25000 declarations.
+
 ## Reducing a term
 
 `--eval` type-checks a term against an export's environment and reduces it,
@@ -259,12 +273,23 @@ both references report one verdict for a whole file, so the agreement is at file
 granularity. Only the comparison of kolla's own four builds is declaration by
 declaration.
 
-Two kernel bugs came out of it, neither of which the unit suites reached:
-the kernel's literal extensions refer to constants that are not syntactic
-dependencies, so an export can declare them after their first use
+Four bugs came out of it, none of which the unit suites reached.
+
+Two in the kernel: the literal extensions refer to constants that are not
+syntactic dependencies, so an export can declare them after their first use
 (docs/semantics.md P10); and a nested inductive's recursor took its major
 premise from the block's head rather than from its own type, which falsely
 rejected 9 declarations (K17).
+
+Two in the frontends, both found by pointing the tools at something large. The
+content digest behind `--cache` walked a declaration's term graph structurally,
+which is exponential in the sharing an export produces, so a Mathlib run
+stopped dead and every run paid for a digest nothing had asked for (P16). And
+admitting the quotient package with `addCore` left `quotInitialized` unset, so
+`--check` and `--eval` built environments with quotient reduction switched off
+and rejected declarations Lean accepts — 79 of them on one Mathlib closure,
+all false (P21). Mathlib reaches quotients almost at once, because `Multiset`
+is `Quotient (List.Perm)` and `Finset` wraps it.
 
 ## docs/semantics.md
 

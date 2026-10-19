@@ -23,7 +23,9 @@ that last one a Mathlib run stalled at 150,036 declarations whatever the flags
 | `std` v4.28.0 on v4_27, `--defeq-cache` | 492 MB | 87,309 | 322.4s | 5.63 GB |
 | `Mathlib` v4.35.0, read and admitted | 6.26 GB | 729,263 | 83.0s | 9.40 GB |
 | `Mathlib` v4.35.0, same with `--cache` | 6.26 GB | 729,263 | 80.5s | 14.36 GB |
-| `Mathlib` v4.35.0, fully checked | 6.26 GB | 729,263 in the file | stopped at 325,090 | — |
+| `Mathlib` v4.35.0, fully checked | 6.26 GB | 729,263 in the file | no verdict | — |
+| `Mathlib` v4.35.0, `--check Nat.Prime` | 6.26 GB | 120 of 729,263 | 199.6s | 8.13 GB |
+| `Mathlib` v4.35.0, same with a warm `--cache` | 6.26 GB | 120 cached | 149.7s | 11.89 GB |
 
 `mathlib-sample` and `std` carry no resident figure because they were run
 through `difftest`, which reports peak heap instead: 0.69 GB and 3.77 GB, with
@@ -104,6 +106,28 @@ docs/semantics.md K19 for why that was not an identification at all.
 Before streaming none of this was reachable: `cli` folded the file into one
 `String`, and a 6.26 GB file exceeds both the maximum byte array and twice that
 again once decoded to UTF-16. The run timed out with no output.
+
+## A project with its own declarations
+
+`--check <prefix>` is the shape a downstream project needs: a handful of
+declarations of its own on top of a library it did not write. Measured on the
+Mathlib export with `Nat.Prime` standing in for such a module — 120 of 729,263
+declarations selected, the other 729,143 admitted:
+
+| run | result | wall | peak RSS |
+|---|---|---|---|
+| cold, writing a cache | 120 accepted | 199.6s | 8.13 GB |
+| warm, reusing it | 120 cached | 149.7s | 11.89 GB |
+
+A quarter off, not more, because reading and digesting 6.26 GB is most of the
+work and a warm run still has to do it. Both figures are post-P21: before that
+fix the same selection reported two rejections, and widening it reported 79,
+all false.
+
+Choosing the prefix matters. An earlier attempt used `Real.log`, which selects
+Mathlib's own definition rather than a leaf lemma, and did not finish at all —
+a reminder that "my declarations" and "a declaration I named" are not the same
+thing.
 
 ## Checking less
 

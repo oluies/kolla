@@ -414,7 +414,18 @@ object Replay:
     */
   def admitInfo(env: Environment, info: ConstantInfo): Environment = info match
     case ConstantInfo.QuotInfo(_) =>
-      if env.quotInitialized then env else Quot.add(env)
+      // `Quot.add` can refuse: `checkEqType` rejects a missing or misshapen
+      // `Eq`, and `checkName` rejects a name already taken. A `recover` runs
+      // inside `Try(...).toOption`, so letting that escape would put none of
+      // the four constants in scope and turn one disagreement into a cascade
+      // of unknown-constant failures — which is what P6 exists to prevent, and
+      // what the negative corpus produces by retyping `Eq`. So fall back to
+      // the constant on its own, which is all that could be said before.
+      if env.quotInitialized then env
+      else
+        scala.util.Try(Quot.add(env)).getOrElse {
+          if env.contains(info.name) then env else env.addCore(info)
+        }
     case _ =>
       if env.contains(info.name) then env else env.addCore(info)
 

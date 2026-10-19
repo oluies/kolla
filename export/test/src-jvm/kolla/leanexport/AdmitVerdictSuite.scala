@@ -12,29 +12,6 @@ import kolla.kernel.*
   */
 class AdmitVerdictSuite extends munit.FunSuite:
 
-  private val anchor = "nat-add-3.1.0.ndjson"
-
-  private def items(name: String): Vector[ExportItem] =
-    val in = getClass.getResourceAsStream("/" + name)
-    assert(in != null, s"missing test resource $name")
-    val src   = scala.io.Source.fromInputStream(in, "UTF-8")
-    val lines = try src.getLines().toVector finally src.close()
-    ExportReader.fromLines(lines).items
-
-  private val fixtures: List[String] =
-    val url = getClass.getResource("/" + anchor)
-    val dir = java.nio.file.Paths.get(url.toURI).getParent
-    val st  = java.nio.file.Files.list(dir)
-    try
-      scala.jdk.CollectionConverters
-        .IteratorHasAsScala(st.iterator())
-        .asScala
-        .map(_.getFileName.toString)
-        .filter(n => n.endsWith(".ndjson") || n.endsWith(".export"))
-        .toList
-        .sorted
-    finally st.close()
-
   private def verdicts(xs: Vector[ExportItem], p: KernelProfile, check: Name => Boolean) =
     val r = new Replay(p, true, Int.MaxValue, check)
     xs.foreach(r.feed)
@@ -48,11 +25,40 @@ class AdmitVerdictSuite extends munit.FunSuite:
   test("admitting the rest does not change a checked declaration's verdict") {
     // Each fixture, each declaration checked alone against an admitted
     // environment, compared with the all-checked verdict for that same name.
-    for f <- fixtures do
-      val p  = if f.contains("3.0.0") then KernelProfile.v4_27 else KernelProfile.v4_35
-      val xs = items(f)
+    val compared = scala.collection.mutable.LinkedHashMap.empty[String, Int]
+    for f <- FixtureFiles.names do
+      val p   = FixtureFiles.profileOf(f)
+      val xs  = FixtureFiles.items(f)
       val all = verdicts(xs, p, _ => true).toMap
       for (name, expected) <- all if expected == "accepted" do
         val one = verdicts(xs, p, _.toString == name).toMap
         assertEquals(one.get(name), Some(expected), clue((f, name)))
+        compared.update(f, compared.getOrElse(f, 0) + 1)
+    // Without this the loops could iterate nothing: if no declaration came
+    // back accepted, the assertion above would never run and the test would
+    // pass having compared nothing. Every fixture has to contribute, which is
+    // derived from the fixtures rather than a number chosen by hand.
+    val silent = FixtureFiles.names.filterNot(compared.contains)
+    assertEquals(silent, Nil, clue(compared))
+  }
+
+  test("an uninstallable quotient package still puts its name in scope") {
+    // `Quot.add` refuses when `Eq` is missing or misshapen, and a `recover`
+    // runs inside a `Try`, so letting that escape would leave none of the four
+    // constants in scope and turn one disagreement into a cascade of
+    // unknown-constant failures. P6 is what that would break.
+    val xs = FixtureFiles.items("quot-sound-3.1.0.ndjson")
+    // Drop `Eq` entirely, which is what makes the package uninstallable.
+    val without = xs.filterNot(_.names.exists(_.toString == "Eq"))
+    assertNotEquals(without.length, xs.length, "the fixture should declare Eq")
+
+    val r = new Replay(KernelProfile.v4_35, true, Int.MaxValue, _ => false)
+    without.foreach(r.feed)
+    r.finish()
+    while r.hasNext do r.next()
+    val env = r.environment
+    // The point: `Quot` is present even though the package could not be
+    // installed, so later declarations resolve rather than cascading.
+    assert(env.contains(Name.parse("Quot")), clue(env.size))
+    assert(!env.quotInitialized, "the package was not installed, and says so")
   }
