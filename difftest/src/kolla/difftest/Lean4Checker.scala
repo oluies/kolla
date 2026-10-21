@@ -105,28 +105,40 @@ object Lean4Checker:
     val p = Layout.toolchainCache(tools.toolchain).resolve("cases")
     IO.blocking(if Files.isDirectory(p) then Some(p) else None)
 
-  /** What `lean4checker` prints when the kernel refuses a module.
+  /** Output that means the reference never ran, rather than ran and refused.
     *
-    * `main` catches the exception, prints this and rethrows (P4), so it is the
-    * marker that separates a verdict from a failure to produce one.
+    * These are the ways `elan run` and `lake env` fail before `lean4checker`
+    * sees the corpus: a release that will not download, a toolchain that is
+    * not installed, a binary that is not there.
     */
-  val problemMarker: String = "lean4checker found a problem"
+  val notRunMarkers: List[String] = List(
+    "could not download",
+    "error during download",
+    "is not installed",
+    "unknown executable",
+    "no such file or directory",
+    "command not found"
+  )
 
   /** Whether a non-zero exit was the reference rejecting something.
     *
-    * It usually is not. `elan run` fails when a toolchain cannot be
-    * downloaded, `lake env` fails when a build is missing, the binary can be
-    * absent — and all of those exit non-zero while saying nothing about the
-    * corpus. Reporting them as `Rejected` made the reference appear to
-    * contradict kolla: a v4.28.0 CI job failed with
-    * `DISAGREES (lean4checker rejected vs kolla accepted)` on `case-eta` when
-    * what had actually happened was
-    * `error: could not download file from releases.lean-lang.org`. Without
-    * the marker it is an `Error`, which P17 then treats as no verdict rather
-    * than as a disagreement. See docs/semantics.md P19.
+    * The default is yes, which is what it was before P19, and the exceptions
+    * are named rather than inferred. The first attempt at this inverted the
+    * test — it asked for the string `lean4checker found a problem` and called
+    * anything else a failure to run — and that was wrong twice over. That text
+    * comes from the path that replays several modules; a handwritten case runs
+    * with `--fresh` on one module, where the exception is simply rethrown and
+    * the output reads `uncaught exception: (kernel) declaration type mismatch`.
+    * So every negative corpus at v4.25.0, v4.27.0 and v4.28.0 stopped being
+    * compared, which is a reference checker quietly switching itself off.
+    *
+    * Defaulting to a rejection fails loudly when this judgement is wrong. The
+    * other way round fails silently, and a silent loss of comparison is worse
+    * than a disagreement someone has to look at. See docs/semantics.md P19.
     */
   def rejected(r: ProcResult): Boolean =
-    (r.stderr + r.stdout).contains(problemMarker)
+    val out = r.stderr + r.stdout
+    !notRunMarkers.exists(out.contains)
 
   /** The failure text, preferring stderr, which is where the problem is named. */
   private def reason(r: ProcResult): String =

@@ -7,13 +7,20 @@ class Lean4CheckerSuite extends munit.FunSuite:
   private def failed(stderr: String, stdout: String = ""): ProcResult =
     ProcResult(exitCode = 1, stdout = stdout, stderr = stderr, nanos = 1000L)
 
-  test("a named problem is a rejection") {
-    val r = failed("lean4checker found a problem in Init.Core\nuncaught exception: ...")
-    assert(Lean4Checker.rejected(r))
-  }
-
-  test("the marker is accepted on stdout too") {
-    assert(Lean4Checker.rejected(failed("", "lean4checker found a problem in Std.Data")))
+  test("a kernel rejection is a rejection, whichever path printed it") {
+    // The multi-module path prints this marker...
+    assert(Lean4Checker.rejected(failed("lean4checker found a problem in Init.Core")))
+    // ...and a single module run with --fresh rethrows instead. This is the
+    // real output from the negative corpora, which P19's first attempt
+    // misread as a failure to run.
+    assert(
+      Lean4Checker.rejected(
+        failed(
+          "uncaught exception: (kernel) declaration type mismatch, 'kollaFalse' has type\n" +
+            "  Prop\nbut it is expected to have type\n  False"
+        )
+      )
+    )
   }
 
   test("a toolchain that would not download is not a rejection") {
@@ -27,8 +34,16 @@ class Lean4CheckerSuite extends munit.FunSuite:
     assert(!Lean4Checker.rejected(r))
   }
 
-  test("a missing binary or build is not a rejection") {
+  test("a missing toolchain, binary or file is not a rejection") {
+    assert(!Lean4Checker.rejected(failed("error: toolchain 'leanprover/lean4:v4.28.0' is not installed")))
     assert(!Lean4Checker.rejected(failed("error: unknown executable lean4checker")))
     assert(!Lean4Checker.rejected(failed("error: no such file or directory")))
-    assert(!Lean4Checker.rejected(failed("")))
+    assert(!Lean4Checker.rejected(failed("lake: command not found")))
+  }
+
+  test("an unrecognised failure defaults to a rejection") {
+    // Deliberate: a wrong "rejection" shows up as a disagreement someone
+    // investigates, where a wrong "no verdict" silently drops the comparison.
+    assert(Lean4Checker.rejected(failed("")))
+    assert(Lean4Checker.rejected(failed("something nobody has seen before")))
   }

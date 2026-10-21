@@ -1412,11 +1412,32 @@ The reference had not rejected `case-eta`; it had never started. Read at face
 value that output says kolla accepts something Lean's own kernel refuses, which
 is the most serious thing the platform can report, and it was infrastructure.
 
-`Lean4Checker.rejected` is the discriminator: `main` prints
-`lean4checker found a problem` before rethrowing (P4), so that marker in the
-output is what separates a verdict from a failure to produce one. Without it
-the run is an `Error`, which P17 then reports as no reference verdict. With it,
-a genuine rejection still fails the comparison exactly as before.
+`Lean4Checker.rejected` is the discriminator, and which way round it goes
+matters more than it looks. The first attempt asked for the string
+`lean4checker found a problem` and treated anything else as a failure to run.
+That text belongs to the path that replays several modules. A handwritten case
+runs with `--fresh` on one module, where the exception is rethrown and the
+output reads
+
+    uncaught exception: (kernel) declaration type mismatch, 'kollaFalse' has type
+      Prop
+    but it is expected to have type
+      False
+
+so every negative corpus at v4.25.0, v4.27.0 and v4.28.0 was reclassified from
+`agrees (lean4checker rejected vs kolla rejected)` to no reference verdict at
+all. Three toolchains stopped comparing their negative corpora and CI failed on
+main for it.
+
+So the default is that a non-zero exit is a rejection, as it was before this
+entry, and the exceptions are named: `notRunMarkers` lists the ways `elan run`
+and `lake env` fail before `lean4checker` sees anything — a release that will
+not download, a toolchain not installed, a binary or file absent. Anything
+unrecognised counts as a rejection.
+
+That asymmetry is deliberate. A wrong rejection surfaces as a disagreement
+someone has to look at; a wrong "no verdict" silently drops a comparison, and
+a reference checker that quietly switches itself off is the worse failure.
 
 This is narrower than it looks. It only decides how a non-zero exit is
 labelled; it does not make a missing reference into a passing one, and a
