@@ -21,7 +21,7 @@ jobs:
           java-version: '21'
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
       - name: Cache coursier and mill
         uses: actions/cache@v6
         with:
@@ -48,7 +48,7 @@ jobs:
           java-version: '21'
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
       - uses: actions/cache@v6
         with:
           path: |
