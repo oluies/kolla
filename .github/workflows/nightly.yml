@@ -76,7 +76,7 @@ jobs:
           ./mill difftest.run run --toolchain "${{ matrix.toolchain }}" \
             --corpus "${{ matrix.corpus }}" --no-mutants --history $extra
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: report-${{ matrix.toolchain }}-${{ matrix.corpus }}
           path: .difftest/reports/
@@ -131,7 +131,7 @@ jobs:
           ./mill difftest.run run --toolchain ${{ matrix.toolchain }}
           --corpus mathlib-sample --mathlib "$PWD/mathlib4" --no-mutants --history
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: report-mathlib-sample-${{ matrix.toolchain }}
           path: .difftest/reports/
