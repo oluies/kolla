@@ -30,6 +30,10 @@ final case class Options(
     evalTerm: Option[String] = None,
     /** Name each declaration before checking it, and time the slow ones. */
     trace: Boolean = false,
+    /** The reduction budget per declaration. Lowering it makes a check that
+      * does not finish report what it was doing instead (K21).
+      */
+    maxSteps: Long = kolla.kernel.TypeChecker.defaultMaxSteps,
     help: Boolean = false,
     version: Boolean = false,
     listProfiles: Boolean = false
@@ -59,6 +63,8 @@ object Options:
       |  --cache <file>  reuse and extend a file of accepted digests
       |  --defeq-cache   keep the positive is_def_eq cache on a profile that
       |                  predates it; needed for a library corpus before v4.35
+      |  --max-steps <n> reduction budget per declaration; on exceeding it the
+      |                  kernel reports where the reduction went
       |  --trace         name each declaration before checking it, so one
       |                  that never finishes can be identified
       |  --eval <term>   reduce a term against the export's environment and
@@ -126,6 +132,10 @@ object Options:
       case "--defeq-cache" :: t      => go(t, o.copy(defeqCache = true))
       case "--eval" :: v :: t        => go(t, o.copy(evalTerm = Some(v)))
       case "--trace" :: t            => go(t, o.copy(trace = true))
+      case "--max-steps" :: v :: t   =>
+        v.replace("_", "").toLongOption match
+          case Some(n) if n > 0 => go(t, o.copy(maxSteps = n))
+          case _                => Left(s"--max-steps expects a positive number, got $v")
       case "--profile" :: v :: t =>
         KernelProfile.all.find(p => p.label == v || p.label == s"v$v") match
           case Some(p) => go(t, o.copy(profile = p))

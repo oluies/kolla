@@ -684,6 +684,66 @@ different set of free variables, which produces a recursor whose minor premise
 applies the motive to the wrong index. `ctorParts` returns both from one pass.
 v4.35's `check_recursors` rejects the result, which is what it is for.
 
+### K21 — what a non-terminating check is doing
+
+A declaration that does not finish cannot be diagnosed from outside. The
+thread does not reach a safepoint, so `jstack`, `jcmd` and `SIGQUIT` are all
+refused, and a driver that reports a step after it returns reports nothing at
+all about the step that never does. `--trace` (K19) names the declaration; it
+cannot say what the kernel is doing inside it.
+
+So the counters ride on the `maxSteps` guard, which already existed. Lowering
+the budget with `--max-steps` turns "it is still going" into a statement of
+what it was going on: `is_def_eq` calls, how many were answered by structural
+identity or by the positive cache, how large the cached and failed pair sets
+grew, delta attempts against delta cache misses, and the twelve most-attempted
+constants. No threads and no sampling, so the kernel stays pure and
+cross-platform, and the default budget is unchanged at `1 << 32` — a
+diagnostic flag must not quietly become a semantic one, which
+`WorkReportSuite` asserts.
+
+On `IntermediateField.restrictScalars_top` from the v4.35.0 `Mathlib` export,
+with a 200,000,000 step budget:
+
+    is_def_eq calls: 15,605,480 (identical: 4,010,052, cache hits: 66,
+      distinct cached pairs: 1,115,948, distinct failed pairs: 3,507,931)
+    delta attempts: 17,826,635 of which cache misses: 128, distinct constants: 115
+
+    most attempted (attempts / misses)
+      5,537,750 / 1   Set.ofPred        2,469,420 / 1   Membership.mem
+      3,875,294 / 4   Set.range         2,469,375 / 1   Set.Mem
+      1,238,442 / 1   Union.union       1,238,442 / 1   Set.union
+        412,814 / 1   LE.le               412,814 / 1   Set.Subset
+
+Every constant is `Set` machinery, and the typeclass projections move in
+lockstep with their `Set` instances — `Union.union` and `Set.union` both
+1,238,442, `LE.le` and `Set.Subset` both 412,814 — so each projection is being
+resolved through its instance on every comparison.
+
+Two readings were wrong, and both are worth keeping because each would have
+sent someone to optimise something that already works.
+
+The first was that the kernel re-derives these constants millions of times.
+It does not: 128 cache misses in 17.8 million attempts, one to four per
+constant. `unfoldCache` is almost perfect and delta is not the cost.
+
+The second was that free variables make each cached pair unique, since going
+under a binder mints a fresh one. The measurement refuted it in an unexpected
+way: the count of fvar-bearing writes, 2,943,484, exceeds the set's size,
+1,115,948, so at least 1.8 million writes were of pairs already cached. The
+pairs recur rather than being unique.
+
+What is established is narrower and still useful. The cost is the search: 11.6
+million comparisons that are neither identical nor cached, over 115 constants.
+And the positive `is_def_eq` cache is not paying for itself here — 1,115,948
+entries answering 66 queries, a hit rate of 0.006%, while P12 shows the same
+cache is the difference between `std` finishing and exhausting 24 GB on an
+older profile. Why the rate is that low is open. Reads and writes use the same
+pair and the read sits at the top of `is_def_eq_core`, so the obvious
+explanations — a key mismatch, or writing without reading — are both ruled
+out. Answering it needs counters on the nested descent rather than on the
+entry.
+
 ## DSL
 
 ### D5 — binders are Scala functions

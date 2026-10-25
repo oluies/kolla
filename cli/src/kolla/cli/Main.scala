@@ -145,7 +145,7 @@ object Main extends IOApp:
       Check
         .stream(
           file, read(file), profile, o.abortOnReject, emit, progress,
-          Options.selects(o), store, store.map(_.flush), traceOf(o)
+          Options.selects(o), store, store.map(_.flush), traceOf(o), o.maxSteps
         )
         .flatMap(reportOne(o, profile, file, _))
     }

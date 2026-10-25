@@ -68,6 +68,8 @@ kolla [options] <export-file>...
                   predates it; needed for a library corpus before v4.35
   --trace         name each declaration before checking it, so one that
                   never finishes can be identified
+  --max-steps <n> reduction budget per declaration; on exceeding it the
+                  kernel reports where the reduction went
   --eval <term>   reduce a term against the export's environment and print
                   it, instead of checking the file
   --profiles      list the profiles and exit
@@ -136,6 +138,16 @@ That is how the Mathlib tail was measured and how the declaration a full check
 stops on was identified; docs/semantics.md K19 records both, including an
 earlier wrong answer that came from reading an exact position off a counter
 that only reports every 25000 declarations.
+
+`--max-steps <n>` goes a layer deeper. The kernel reports where a reduction
+went when it exceeds the budget — `is_def_eq` calls, how many were answered by
+identity or by the cache, delta attempts against cache misses, and the
+most-attempted constants — which is the only moment a check that does not
+finish says anything. On the declaration above it names `Set.ofPred`,
+`Set.range` and their typeclass projections, and shows that the cost is the
+search rather than the unfolding: 128 delta cache misses in 17.8 million
+attempts. docs/semantics.md K21 has the figures and two readings the numbers
+refuted.
 
 ## Reducing a term
 

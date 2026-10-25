@@ -5,7 +5,13 @@ package kolla.kernel
   *
   * A fresh `TypeChecker` is created per declaration, so no cache is shared.
   */
-final class DeclarationChecker(val profile: KernelProfile = KernelProfile.default):
+final class DeclarationChecker(
+    val profile: KernelProfile = KernelProfile.default,
+    /** The reduction budget each declaration gets. Lowering it turns a check
+      * that does not finish into a report of what it was doing (K21).
+      */
+    val maxSteps: Long = TypeChecker.defaultMaxSteps
+):
 
   /** `check_no_metavar_no_fvar`. */
   private def checkNoMetavarNoFvar(n: Name, e: Expr): Unit =
@@ -23,7 +29,7 @@ final class DeclarationChecker(val profile: KernelProfile = KernelProfile.defaul
     tc.ensureSort(sort, v.tpe)
 
   private def checker(env: Environment, safety: DefinitionSafety): TypeChecker =
-    new TypeChecker(env, profile, safety)
+    new TypeChecker(env, profile, safety, LocalContext.empty, maxSteps)
 
   private def mismatch(n: Name, given0: Expr, expected: Expr, tc: TypeChecker): Nothing =
     throw new KernelException(

@@ -81,7 +81,9 @@ final class Replay(
     /** Accepted digests to trust from an earlier run, and a sink for the ones
       * this run accepts. See docs/semantics.md P15.
       */
-    cache: Option[ReplayCache] = None
+    cache: Option[ReplayCache] = None,
+    /** The reduction budget per declaration; see docs/semantics.md K21. */
+    maxSteps: Long = TypeChecker.defaultMaxSteps
 ):
 
   /** Feeds a whole file at once, which is what a frontend with the items
@@ -90,14 +92,14 @@ final class Replay(
   def this(items: Vector[ExportItem], profile: KernelProfile, hoist: Boolean) =
     // An unbounded window: the items are already in memory, so holding them
     // costs nothing and the order is exactly what the whole-file pass gives.
-    this(profile, hoist, Int.MaxValue, _ => true, None)
+    this(profile, hoist, Int.MaxValue, _ => true, None, TypeChecker.defaultMaxSteps)
     items.foreach(feed)
     finish()
 
   def this(items: Vector[ExportItem], profile: KernelProfile) =
     this(items, profile, true)
 
-  private val dc = new DeclarationChecker(profile)
+  private val dc = new DeclarationChecker(profile, maxSteps)
 
   private var env: Environment = Environment.empty
 

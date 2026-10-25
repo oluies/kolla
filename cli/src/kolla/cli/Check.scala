@@ -125,10 +125,11 @@ object Check:
         * time it took once it returns. A step that never returns is reported
         * only by the first call, which is the point. See docs/semantics.md K20.
         */
-      trace: Option[(List[Name], Option[Long]) => IO[Unit]] = None
+      trace: Option[(List[Name], Option[Long]) => IO[Unit]] = None,
+      maxSteps: Long = kolla.kernel.TypeChecker.defaultMaxSteps
   ): IO[Either[Failure, Result]] =
     IO.monotonic.flatMap { start =>
-      val replay  = new Replay(profile, true, Replay.defaultHoistWindow, check, cache)
+      val replay  = new Replay(profile, true, Replay.defaultHoistWindow, check, cache, maxSteps)
       var tally   = ReplayTally()
       var read    = 0L
       var seen    = 0L

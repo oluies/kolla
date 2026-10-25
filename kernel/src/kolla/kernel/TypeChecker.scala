@@ -46,7 +46,49 @@ final class TypeChecker(
   private val failureCache    = mutable.HashSet.empty[ExprPair]
 
   private val failedPairs = mutable.ArrayDeque.empty[String]
-  private var steps: Long = 0L
+  private var steps: Long = 0
+
+  /** What the reduction spent itself on, for when it does not terminate.
+    *
+    * A declaration that never finishes cannot be diagnosed from outside: the
+    * thread does not reach a safepoint, so `jstack`, `jcmd` and `SIGQUIT` are
+    * all refused, and a driver that reports a step after it returns reports
+    * nothing at all. These ride on the `maxSteps` guard instead, so running
+    * with a lower cap turns "it is still going" into a statement of what it
+    * was going on. Single-threaded by construction: one `TypeChecker` per
+    * declaration, and only the checking thread touches them.
+    * See docs/semantics.md K21.
+    */
+  private val unfolded      = mutable.HashMap.empty[Name, Long]
+  private val missed        = mutable.HashMap.empty[Name, Long]
+  private var defEqCalls    = 0L
+  private var deltaSteps    = 0L
+  private var deltaMisses   = 0L
+  private var defEqIdentical = 0L
+  private var defEqCacheHit  = 0L
+  private var cachedWithFVar = 0L
+
+  /** Where the reduction went, most expensive constant first.
+    *
+    * Printed with the `maxSteps` exception, which is the only moment a
+    * non-terminating check says anything. The counts are unfoldings, so a
+    * constant near the top is one the kernel kept re-deriving.
+    */
+  def work: String =
+    val top = unfolded.toVector.sortBy(-_._2).take(12)
+    val sb  = new StringBuilder
+    sb ++= f"  is_def_eq calls: $defEqCalls%,d"
+    sb ++= f" (identical: $defEqIdentical%,d, cache hits: $defEqCacheHit%,d,"
+    sb ++= f" distinct cached pairs: ${successCache.size}%,d,"
+    sb ++= f" cache writes mentioning an fvar: $cachedWithFVar%,d,"
+    sb ++= f" distinct failed pairs: ${failureCache.size}%,d)\n"
+    sb ++= f"  delta attempts: $deltaSteps%,d"
+    sb ++= f" of which cache misses: $deltaMisses%,d"
+    sb ++= f", distinct constants: ${unfolded.size}%,d\n"
+    if top.nonEmpty then
+      sb ++= "  most attempted (attempts / misses):\n"
+      top.foreach((n, c) => sb ++= f"    ${c}%,12d / ${missed.getOrElse(n, 0L)}%,-10d $n\n")
+    sb.result()
 
   /** The pairs `is_def_eq` rejected, most recent last. */
   def defeqTrace: List[String] = failedPairs.toList
@@ -58,7 +100,7 @@ final class TypeChecker(
     if steps > maxSteps then
       throw KernelException(
         ExceptionKind.DeepRecursion,
-        s"exceeded $maxSteps reduction steps"
+        s"exceeded $maxSteps reduction steps\n$work"
       )
 
   private def recordFailure(t: Expr, s: Expr): Unit =
@@ -428,14 +470,23 @@ final class TypeChecker(
   private def unfoldDefinitionCore(e: Expr): Option[Expr] = e match
     case c: Expr.Const =>
       isDelta(c).map { d =>
+        // Attempts and misses are counted apart: an attempt that the cache
+        // answers is cheap, and conflating the two would read a working cache
+        // as repeated work. See docs/semantics.md K21.
+        deltaSteps += 1
+        unfolded.update(c.name, unfolded.getOrElse(c.name, 0L) + 1L)
+        def fresh(): Expr =
+          deltaMisses += 1
+          missed.update(c.name, missed.getOrElse(c.name, 0L) + 1L)
+          ExprOps.instantiateValueLevelParams(d, c.levels)
         if c.levels.nonEmpty then
           unfoldCache.get(c) match
             case Some(r) => r
             case None =>
-              val r = ExprOps.instantiateValueLevelParams(d, c.levels)
+              val r = fresh()
               unfoldCache(c) = r
               r
-        else ExprOps.instantiateValueLevelParams(d, c.levels)
+        else fresh()
       }
     case _ => None
 
@@ -792,7 +843,12 @@ final class TypeChecker(
 
   // ------------------------------------------------------------- is_def_eq
 
-  private def cacheSuccess(t: Expr, s: Expr): Unit = successCache.add(new ExprPair(t, s))
+  private def cacheSuccess(t: Expr, s: Expr): Unit =
+    // A count of writes, not of entries: it exceeded the set's size when
+    // measured, which is how the duplicate writes were noticed. `hasFVar` is
+    // in the cached data word, so this is O(1). See docs/semantics.md K21.
+    if t.hasFVar || s.hasFVar then cachedWithFVar += 1
+    successCache.add(new ExprPair(t, s))
   private def succeededBefore(t: Expr, s: Expr): Boolean =
     profile.cacheDefEqSuccess && successCache.contains(new ExprPair(t, s))
   private def cacheFailure(t: Expr, s: Expr): Unit = failureCache.add(new ExprPair(t, s))
@@ -846,7 +902,12 @@ final class TypeChecker(
 
   /** `quick_is_def_eq`: `None` means "not an easy case". */
   private def quickIsDefEq(t: Expr, s: Expr, eager: Boolean): Eval[Option[Boolean]] =
-    if t == s || succeededBefore(t, s) then Eval.now(Some(true))
+    if t == s then
+      defEqIdentical += 1
+      Eval.now(Some(true))
+    else if succeededBefore(t, s) then
+      defEqCacheHit += 1
+      Eval.now(Some(true))
     else if t.kindOrd == s.kindOrd then
       (t, s) match
         case (_: Expr.Lam, _: Expr.Lam) | (_: Expr.ForallE, _: Expr.ForallE) =>
@@ -1133,6 +1194,7 @@ final class TypeChecker(
 
   /** `is_def_eq_core`. */
   private def isDefEqCoreE(t: Expr, s: Expr, eager: Boolean): Eval[Boolean] =
+    defEqCalls += 1
     step()
     Eval.defer(quickIsDefEq(t, s, eager)).flatMap {
       case Some(r) => Eval.now(r)
