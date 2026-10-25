@@ -45,14 +45,14 @@ object Main extends IOApp:
       case Right(term) =>
         Check
           .stream(file, read(file), profile, abortOnReject = false,
-                  (_, _, _) => IO.unit, progressOf(o), _ => false)
+                  (_, _, _) => IO.unit, progressOf(o), _ => false, None, None, None, o.maxSteps)
           .flatMap {
             case Left(f: Check.Failure.Exhausted)  => Console[IO].errorln(f.message).as(ExitCode(3))
             case Left(f)                           => Console[IO].errorln(f.message).as(ExitCode(2))
             case Right(r) =>
               Console[IO].errorln(
                 f"  ${r.tally.carriedOver}%,d declarations admitted unchecked as ${profile.label}"
-              ) *> IO(kolla.dsl.Evaluate(r.environment, profile, term)).flatMap {
+              ) *> IO(kolla.dsl.Evaluate(r.environment, profile, term, o.maxSteps)).flatMap {
                 case Left(why) => Console[IO].errorln(s"--eval: $why").as(ExitCode(1))
                 case Right(res) =>
                   // Printed unbounded: here the term is the answer, and

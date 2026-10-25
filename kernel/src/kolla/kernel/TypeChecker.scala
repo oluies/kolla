@@ -59,6 +59,15 @@ final class TypeChecker(
     * declaration, and only the checking thread touches them.
     * See docs/semantics.md K21.
     */
+  /** Whether the per-constant tables are worth keeping.
+    *
+    * They cost two `HashMap` operations per delta attempt, which on the K21
+    * example is 17.8 million of them for one declaration. A run at the
+    * default budget is not going to print a report, so it does not pay for
+    * them; the plain counters are a `Long` increment and stay unconditional.
+    */
+  private val diagnosing    = maxSteps != TypeChecker.defaultMaxSteps
+
   private val unfolded      = mutable.HashMap.empty[Name, Long]
   private val missed        = mutable.HashMap.empty[Name, Long]
   private var defEqCalls    = 0L
@@ -68,11 +77,17 @@ final class TypeChecker(
   private var defEqCacheHit  = 0L
   private var cachedWithFVar = 0L
 
-  /** Where the reduction went, most expensive constant first.
+  /** Where the reduction went, most attempted constant first.
     *
     * Printed with the `maxSteps` exception, which is the only moment a
-    * non-terminating check says anything. The counts are unfoldings, so a
-    * constant near the top is one the kernel kept re-deriving.
+    * non-terminating check says anything.
+    *
+    * The first column is delta *attempts*, most of which `unfoldCache`
+    * answers; it says which constants the search keeps reaching for, not what
+    * the kernel re-derives. Re-derivation is the misses column, and on the
+    * K21 example that is 128 against 17.8 million attempts. The per-constant
+    * tables are only filled when a budget was set, so a default run reports
+    * the counters and no breakdown.
     */
   def work: String =
     val top = unfolded.toVector.sortBy(-_._2).take(12)
@@ -474,10 +489,10 @@ final class TypeChecker(
         // answers is cheap, and conflating the two would read a working cache
         // as repeated work. See docs/semantics.md K21.
         deltaSteps += 1
-        unfolded.update(c.name, unfolded.getOrElse(c.name, 0L) + 1L)
+        if diagnosing then unfolded.update(c.name, unfolded.getOrElse(c.name, 0L) + 1L)
         def fresh(): Expr =
           deltaMisses += 1
-          missed.update(c.name, missed.getOrElse(c.name, 0L) + 1L)
+          if diagnosing then missed.update(c.name, missed.getOrElse(c.name, 0L) + 1L)
           ExprOps.instantiateValueLevelParams(d, c.levels)
         if c.levels.nonEmpty then
           unfoldCache.get(c) match
@@ -847,7 +862,7 @@ final class TypeChecker(
     // A count of writes, not of entries: it exceeded the set's size when
     // measured, which is how the duplicate writes were noticed. `hasFVar` is
     // in the cached data word, so this is O(1). See docs/semantics.md K21.
-    if t.hasFVar || s.hasFVar then cachedWithFVar += 1
+    if diagnosing && (t.hasFVar || s.hasFVar) then cachedWithFVar += 1
     successCache.add(new ExprPair(t, s))
   private def succeededBefore(t: Expr, s: Expr): Boolean =
     profile.cacheDefEqSuccess && successCache.contains(new ExprPair(t, s))

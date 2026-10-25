@@ -35,8 +35,13 @@ object Evaluate:
     * `Left` is the kernel's own reason, so an ill-typed term reads the same
     * way it would in a rejected declaration.
     */
-  def apply(env: Environment, profile: KernelProfile, term: Expr): Either[String, Result] =
-    val tc = new TypeChecker(env, profile)
+  def apply(
+      env: Environment,
+      profile: KernelProfile,
+      term: Expr,
+      maxSteps: Long = TypeChecker.defaultMaxSteps
+  ): Either[String, Result] =
+    val tc = new TypeChecker(env, profile, DefinitionSafety.Safe, LocalContext.empty, maxSteps)
     try
       val tpe       = tc.check(term)
       var truncated = false

@@ -367,7 +367,7 @@ final class Replay(
           blockNames,
           () =>
             val decl = InductiveChecker.declarationOf(exportedInds, exportedCtors)
-            val r    = AddInductive.add(env, decl, profile)
+            val r    = AddInductive.add(env, decl, profile, maxSteps)
             InductiveChecker.validate(
               exportedInds, exportedCtors, r.inductives, r.constructors, exportedRecs, r.recursors
             )

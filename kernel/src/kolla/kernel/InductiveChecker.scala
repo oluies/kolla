@@ -14,7 +14,11 @@ final class InductiveChecker(
     env0: Environment,
     decl: Declaration.InductDecl,
     profile: KernelProfile = KernelProfile.default,
-    numNested: Int = 0
+    numNested: Int = 0,
+    /** The reduction budget, so `--max-steps` reaches an inductive block too
+      * and not only the declarations `DeclarationChecker` checks (K21).
+      */
+    maxSteps: Long = TypeChecker.defaultMaxSteps
 ):
   private val lparams   = decl.levelParams
   private val nparams   = decl.numParams
@@ -33,7 +37,7 @@ final class InductiveChecker(
   private var resultLevel: Level = Level.zero
   private var isNotZero  = false
 
-  private def tc: TypeChecker = new TypeChecker(env, profile, safety, lctx)
+  private def tc: TypeChecker = new TypeChecker(env, profile, safety, lctx, maxSteps)
 
   private def bad(detail: String): Nothing =
     throw KernelException(ExceptionKind.InvalidDeclaration, detail)

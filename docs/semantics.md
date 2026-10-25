@@ -702,6 +702,19 @@ cross-platform, and the default budget is unchanged at `1 << 32` — a
 diagnostic flag must not quietly become a semantic one, which
 `WorkReportSuite` asserts.
 
+The budget reaches every path that checks. `AddInductive` and
+`InductiveChecker` build `TypeChecker`s of their own, so an inductive block
+would otherwise have run against the default budget and reported nothing,
+which is the one case the flag is most wanted for; the same applies to
+`--eval`, which accepted the flag and ignored it. Both are forwarded now and
+both are tested. The admit path (P18, P21) is not forwarded, because it checks
+nothing.
+
+The per-constant tables are only filled when a budget was set. They cost two
+`HashMap` operations per delta attempt, and at 17.8 million attempts for one
+declaration that is not worth paying on a run that will never print a report.
+The plain counters are a `Long` increment and stay unconditional.
+
 On `IntermediateField.restrictScalars_top` from the v4.35.0 `Mathlib` export,
 with a 200,000,000 step budget:
 

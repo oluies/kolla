@@ -138,3 +138,19 @@ class EvaluateSuite extends munit.FunSuite:
     val env = admitOnly(Vector(ax))
     assert(env.contains(Name.parse("P")), clue(env.size))
   }
+
+  test("--eval honours a reduction budget") {
+    // The flag is documented for every path; before this it was accepted on
+    // the eval path and silently ignored. Matched loosely on purpose: the
+    // report's layout is not the contract. See docs/semantics.md K21.
+    val term = LeanParser.parseOrThrow("Nat.add 2 3")
+    Evaluate(env, profile, term, 1L) match
+      case Left(why) => assert(why.contains("exceeded 1 reduction steps"), clue(why))
+      case Right(r)  => fail(s"a one-step budget should not reach ${r.value}")
+  }
+
+  test("a generous budget leaves the answer unchanged") {
+    val term = LeanParser.parseOrThrow("Nat.add 2 3")
+    assertEquals(Evaluate(env, profile, term, 1000000L).map(_.value), Right(Expr.natLit(5)))
+    assertEquals(Evaluate(env, profile, term).map(_.value), Right(Expr.natLit(5)))
+  }
