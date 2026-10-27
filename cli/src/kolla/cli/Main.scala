@@ -33,7 +33,8 @@ object Main extends IOApp:
     * for the same reason: the question here is what the file *claims*, not
     * whether the claims follow. A `sorry` type-checks like a proof, so this is
     * the report that distinguishes them. Exit 1 when any named declaration
-    * rests on `sorryAx`, so a script can act on it. See docs/semantics.md A1.
+    * rests on `sorryAx` or on an axiom outside Lean's trust base, so a script
+    * can act on it. See docs/semantics.md A1.
     */
   private def axiomsOf(o: Options): IO[ExitCode] =
     val file    = o.files.head
@@ -61,11 +62,19 @@ object Main extends IOApp:
                      else c.render.stripSuffix("\n")
                    )
                  }
-          yield
-            if unknown.nonEmpty then ExitCode(2)
-            else if found.exists(_.hasSorry) then ExitCode(1)
-            else ExitCode.Success
+          yield axiomExit(found, unknown.nonEmpty)
       }
+
+  /** The exit code for a set of closures.
+    *
+    * A verdict outranks a misspelling: a closure resting on `sorryAx` or on an
+    * axiom outside Lean's trust base is the answer even when another name on
+    * the command line was not in the file.
+    */
+  private[cli] def axiomExit(found: List[kolla.kernel.Axioms.Closure], unknown: Boolean): ExitCode =
+    if found.exists(c => c.hasSorry || c.unusual.nonEmpty) then ExitCode(1)
+    else if unknown then ExitCode(2)
+    else ExitCode.Success
 
   /** Reduces a term against the export's environment.
     *

@@ -166,6 +166,8 @@ class OptionsSuite extends munit.FunSuite:
     assertEquals(ok("--axioms", "A", "--axioms", "B", "a").axiomsOf, List("A", "B"))
     assert(err("--axioms", "A", "--eval", "t", "a").contains("mutually exclusive"))
     assert(err("--axioms", "A", "a", "b").contains("exactly one export file"))
+    assert(err("--axioms", "A", "--cache", "c.txt", "a").contains("mutually exclusive"))
+    assert(err("--axioms", "A", "--check", "Nat", "a").contains("mutually exclusive"))
     // and it composes with the flags that apply
     assert(ok("--axioms", "A", "--json", "a").json)
     assert(ok("--axioms", "A", "--progress", "a").progress)

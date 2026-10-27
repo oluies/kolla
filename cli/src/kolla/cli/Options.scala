@@ -157,11 +157,15 @@ object Options:
         Left("--axioms takes exactly one export file to read")
       else if o.evalTerm.isDefined && o.files.length != 1 then
         Left("--eval takes exactly one export file to reduce against")
-      // Rejected rather than ignored: `--eval` checks nothing, so a cache has
-      // nothing to record and a selector has nothing to select.
+      // Rejected rather than ignored: `--eval` and `--axioms` check nothing,
+      // so a cache has nothing to record and a selector nothing to select.
       else if o.evalTerm.isDefined && o.cache.isDefined then
         Left("--eval and --cache are mutually exclusive: --eval checks nothing")
       else if o.evalTerm.isDefined && o.checkOnly.nonEmpty then
         Left("--eval and --check are mutually exclusive: --eval checks nothing")
+      else if o.axiomsOf.nonEmpty && o.cache.isDefined then
+        Left("--axioms and --cache are mutually exclusive: --axioms checks nothing")
+      else if o.axiomsOf.nonEmpty && o.checkOnly.nonEmpty then
+        Left("--axioms and --check are mutually exclusive: --axioms checks nothing")
       else Right(o)
     }

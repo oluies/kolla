@@ -170,8 +170,9 @@ sorryAx rests on 1 axiom(s), reached through 4 constant(s)
   sorryAx  <- NOT A PROOF: left as sorry
 ```
 
-Exit 0 when nothing unusual, 1 when a declaration rests on `sorryAx`, 2 when
-the name is not in the file. The point is dependencies: a `sorry` in the
+Exit 0 when nothing unusual, 1 when a declaration rests on `sorryAx` or on an
+axiom outside the three Lean ships, 2 when the name is not in the file. A
+verdict outranks a misspelling: 1 wins over 2. The point is dependencies: a `sorry` in the
 declaration you are reading is visible in the source, and one in a dependency
 is not — nor is either, when all you have is an export. docs/semantics.md A1.
 

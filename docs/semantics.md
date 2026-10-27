@@ -1621,10 +1621,18 @@ attention. Checked against a real export, `Classical.em` rests on exactly those
 three, which is what Lean reports for it, and `Nat.add_comm` on none.
 
 The exit code says it so a script can act: 0 when nothing unusual, 1 when any
-named declaration rests on `sorryAx`, 2 when a name is not in the file. An
-unknown name is an error rather than an empty closure, because "rests on no
-axioms" would otherwise read as a clean bill of health for something that was
-never there.
+named declaration rests on `sorryAx` or on an axiom outside those three, 2 when
+a name is not in the file. All three classes the report separates are in the
+exit code, because a script that gates on it would otherwise accept a proof
+resting on a custom axiom. A verdict outranks a misspelling — 1 is returned
+rather than 2 when both apply — so one wrong name among several does not hide
+the answer for the rest. An unknown name is an error rather than an empty
+closure, because "rests on no axioms" would otherwise read as a clean bill of
+health for something that was never there.
+
+`--axioms` refuses `--cache` and `--check` as `--eval` does (D13): the
+environment is admitted, so a cache has nothing to record and a selector
+nothing to select.
 
 The environment is admitted rather than checked, as `--eval` does (D13). The
 question is what the file claims, not whether the claims follow, and admitting
