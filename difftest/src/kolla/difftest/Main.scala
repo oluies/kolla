@@ -109,9 +109,15 @@ object Main extends IOApp:
       xs.foldLeft(IO.pure(Vector.empty[B]))((acc, a) => acc.flatMap(b => f(a).map(b ++ _)))
 
   private def selectedToolchains(o: Options): IO[List[Toolchain]] =
-    IO.blocking(Toolchains.parse(Layout.readFile(Layout.toolchainsFile))).map { all =>
-      if o.toolchains.isEmpty then all
-      else all.filter(t => o.toolchains.exists(s => t.spec == s || t.version == s))
+    IO.blocking(Toolchains.parse(Layout.readFile(Layout.toolchainsFile))).flatMap { all =>
+      Toolchains.select(all, o.toolchains) match
+        case Right(ts) => IO.pure(ts)
+        case Left(unmatched) =>
+          IO.raiseError(
+            new RuntimeException(
+              s"no such toolchain: ${unmatched.mkString(", ")}\nknown: ${all.map(_.spec).mkString(", ")}"
+            )
+          )
     }
 
   private def selectedCorpora(o: Options): IO[List[Corpus]] =
@@ -121,6 +127,12 @@ object Main extends IOApp:
       fixtures <- Corpus.fixtures
       ml       <- o.mathlib.fold(IO.pure(List.empty[Corpus]))(d => Corpus.mathlibSample(d).map(List(_)))
       all = cases ++ bad ++ fixtures ++ List(Corpus.init, Corpus.std, Corpus.lean) ++ ml
+      _ <- IO.raiseWhen(o.corpora.exists(n => !all.exists(_.name == n))) {
+             val unmatched = o.corpora.filterNot(n => all.exists(_.name == n))
+             new RuntimeException(
+               s"no such corpus: ${unmatched.mkString(", ")}\nknown: ${all.map(_.name).mkString(", ")}"
+             )
+           }
     yield
       if o.corpora.nonEmpty then all.filter(c => o.corpora.contains(c.name))
       // The committed fixtures need no toolchain, so the platform comparison

@@ -37,5 +37,19 @@ object Toolchains:
       }
       .toList
 
+  /** The toolchains `names` selects, or the names that match nothing.
+    *
+    * A name matching nothing is an error rather than an empty selection:
+    * every command would otherwise do nothing and report success, which reads
+    * as a run that found no disagreement.
+    */
+  def select(all: List[Toolchain], names: List[String]): Either[List[String], List[Toolchain]] =
+    if names.isEmpty then Right(all)
+    else
+      def matches(t: Toolchain, s: String) = t.spec == s || t.version == s
+      val unmatched = names.filterNot(s => all.exists(t => matches(t, s)))
+      if unmatched.nonEmpty then Left(unmatched)
+      else Right(all.filter(t => names.exists(s => matches(t, s))))
+
   def render(ts: List[Toolchain]): String =
     ts.map(t => if t.hasReference then t.spec else s"${t.spec} $noReferenceFlag").mkString("\n")

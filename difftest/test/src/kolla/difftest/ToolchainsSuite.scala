@@ -75,6 +75,19 @@ class ToolchainsSuite extends munit.FunSuite:
     assertEquals(labels.sorted, KernelProfile.all.map(_.label).sorted)
   }
 
+  test("selecting by name keeps order, and a name matching nothing is an error") {
+    val all = Toolchains.parse("leanprover/lean4:v4.25.0\nleanprover/lean4:v4.35.0 no-reference")
+    assertEquals(Toolchains.select(all, Nil), Right(all))
+    assertEquals(Toolchains.select(all, List("v4.25.0")).map(_.map(_.spec)),
+                 Right(List("leanprover/lean4:v4.25.0")))
+    assertEquals(Toolchains.select(all, List("leanprover/lean4:v4.35.0")).map(_.map(_.spec)),
+                 Right(List("leanprover/lean4:v4.35.0")))
+    assertEquals(Toolchains.select(all, List("v4.35.0", "v4.25.0")).map(_.map(_.spec)),
+                 Right(all.map(_.spec)))
+    assertEquals(Toolchains.select(all, List("v4.34.1")), Left(List("v4.34.1")))
+    assertEquals(Toolchains.select(all, List("v4.25.0", "v4.34.1")), Left(List("v4.34.1")))
+  }
+
   test("a slug is safe as a directory name") {
     Toolchains.parse("leanprover/lean4:v4.35.0\nleanprover/lean4:nightly-2026-01-01")
       .foreach(t => assert(!t.slug.exists(c => c == '/' || c == ':'), clue(t.slug)))
