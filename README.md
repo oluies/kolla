@@ -70,6 +70,8 @@ kolla [options] <export-file>...
                   never finishes can be identified
   --max-steps <n> reduction budget per declaration; on exceeding it the
                   kernel reports where the reduction went
+  --axioms <name> report the axioms this declaration rests on, and whether
+                  it was left as sorry; repeatable
   --eval <term>   reduce a term against the export's environment and print
                   it, instead of checking the file
   --profiles      list the profiles and exit
@@ -148,6 +150,30 @@ finish says anything. On the declaration above it names `Set.ofPred`,
 search rather than the unfolding: 128 delta cache misses in 17.8 million
 attempts. docs/semantics.md K21 has the figures and two readings the numbers
 refuted.
+
+## What a theorem rests on
+
+Type-checking says a declaration follows from what the file declared. It does
+not say what the file declared — and `sorry` elaborates to the `sorryAx` axiom,
+so a theorem with no proof type-checks exactly like one with a proof.
+`--axioms` reports the difference:
+
+```
+$ kolla --profile v4.35.0 --axioms Classical.em init.export
+Classical.em rests on 3 axiom(s), reached through 120 constant(s)
+  Classical.choice  (Lean's trust base)
+  Quot.sound  (Lean's trust base)
+  propext  (Lean's trust base)
+
+$ kolla --profile v4.35.0 --axioms sorryAx init.export
+sorryAx rests on 1 axiom(s), reached through 4 constant(s)
+  sorryAx  <- NOT A PROOF: left as sorry
+```
+
+Exit 0 when nothing unusual, 1 when a declaration rests on `sorryAx`, 2 when
+the name is not in the file. The point is dependencies: a `sorry` in the
+declaration you are reading is visible in the source, and one in a dependency
+is not — nor is either, when all you have is an export. docs/semantics.md A1.
 
 ## Reducing a term
 

@@ -28,6 +28,8 @@ final case class Options(
     defeqCache: Boolean = false,
     /** Reduce this term against the export's environment instead of checking. */
     evalTerm: Option[String] = None,
+    /** Report what these declarations transitively rest on, repeatable. */
+    axiomsOf: List[String] = Nil,
     /** Name each declaration before checking it, and time the slow ones. */
     trace: Boolean = false,
     /** The reduction budget per declaration. Lowering it makes a check that
@@ -67,6 +69,8 @@ object Options:
       |                  kernel reports where the reduction went
       |  --trace         name each declaration before checking it, so one
       |                  that never finishes can be identified
+      |  --axioms <name> report the axioms this declaration rests on, and
+      |                  whether it was left as sorry; repeatable
       |  --eval <term>   reduce a term against the export's environment and
       |                  print it, instead of checking the file
       |  --profiles      list the profiles and exit
@@ -131,6 +135,7 @@ object Options:
       case "--cache" :: v :: t       => go(t, o.copy(cache = Some(v)))
       case "--defeq-cache" :: t      => go(t, o.copy(defeqCache = true))
       case "--eval" :: v :: t        => go(t, o.copy(evalTerm = Some(v)))
+      case "--axioms" :: v :: t      => go(t, o.copy(axiomsOf = o.axiomsOf :+ v))
       case "--trace" :: t            => go(t, o.copy(trace = true))
       case "--max-steps" :: v :: t   =>
         v.replace("_", "").toLongOption match
@@ -146,6 +151,10 @@ object Options:
       if o.help || o.version || o.listProfiles then Right(o)
       else if o.files.isEmpty then Left(s"no export file given\n\n$usage")
       else if o.quiet && o.verbose then Left("--quiet and --verbose are mutually exclusive")
+      else if o.axiomsOf.nonEmpty && o.evalTerm.isDefined then
+        Left("--axioms and --eval are mutually exclusive")
+      else if o.axiomsOf.nonEmpty && o.files.length != 1 then
+        Left("--axioms takes exactly one export file to read")
       else if o.evalTerm.isDefined && o.files.length != 1 then
         Left("--eval takes exactly one export file to reduce against")
       // Rejected rather than ignored: `--eval` checks nothing, so a cache has

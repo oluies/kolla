@@ -39,6 +39,22 @@ object ReplayJson:
       "profile" -> JsonWriter.str(profile)
     )
 
+  /** One declaration's axiom closure, for `--axioms --json`. */
+  def axioms(
+      declaration: String,
+      axioms: Vector[String],
+      hasSorry: Boolean,
+      unusual: Vector[String],
+      profile: String
+  ): String =
+    JsonWriter.obj(
+      "declaration" -> JsonWriter.str(declaration),
+      "axioms"      -> JsonWriter.arr(axioms.map(JsonWriter.str)),
+      "sorry"       -> JsonWriter.bool(hasSorry),
+      "unusual"     -> JsonWriter.arr(unusual.map(JsonWriter.str)),
+      "profile"     -> JsonWriter.str(profile)
+    )
+
   /** The run as a whole, which a reader uses to check it saw everything. */
   def summary(source: String, profile: String, platform: String, t: ReplayTally, wallNanos: Long): String =
     JsonWriter.obj(

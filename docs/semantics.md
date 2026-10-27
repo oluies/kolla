@@ -1594,6 +1594,51 @@ must reach the same verdict. It fails on `Quot.mk` in `quot-sound-3.1.0.ndjson`
 without the fix, so a committed fixture is enough and the Mathlib closure is
 not needed to keep it honest.
 
+## Auditing
+
+### A1 — what a declaration rests on is a separate question
+
+Type-checking answers whether a declaration follows from what the file
+declared. It does not answer what the file declared. The gap matters because
+`sorry` elaborates to the `sorryAx` axiom, so a theorem with no proof at all
+type-checks exactly like one with a proof, and kolla accepts both — `sorryAx`
+is a well-formed axiom declaration and nothing in the kernel treats it
+specially. `difftest` even turns nanoda's `unpermitted_axiom_hard_error` off,
+because real exports declare it.
+
+`Axioms.of` walks the dependency graph of a declaration and collects the
+axioms, which is what Lean's `#print axioms` reports. `--axioms <name>` is the
+command line for it. Both the type and the value are followed: a statement's
+meaning rests on the constants in its type as much as its proof rests on those
+in its value, and a recursor's rules carry terms nothing else reaches. The walk
+is iterative because a real environment nests deeper than the stack allows,
+and a cycle is tolerated rather than fatal.
+
+Three classes are reported apart. `sorryAx` means the declaration is not a
+proof. `propext`, `Classical.choice` and `Quot.sound` are the three axioms Lean
+ships and depending on them is unremarkable. Anything else is worth a reader's
+attention. Checked against a real export, `Classical.em` rests on exactly those
+three, which is what Lean reports for it, and `Nat.add_comm` on none.
+
+The exit code says it so a script can act: 0 when nothing unusual, 1 when any
+named declaration rests on `sorryAx`, 2 when a name is not in the file. An
+unknown name is an error rather than an empty closure, because "rests on no
+axioms" would otherwise read as a clean bill of health for something that was
+never there.
+
+The environment is admitted rather than checked, as `--eval` does (D13). The
+question is what the file claims, not whether the claims follow, and admitting
+is 83 seconds on a Mathlib export against a full check that does not finish
+(K19). A caller wanting both runs both.
+
+Why this is worth having rather than reading the source: a `sorry` in the
+declaration you are reading is visible, and a `sorry` in one of its
+dependencies is not. Neither is visible when all you have is an export or an
+olean you did not build. The prompting case was a published file whose
+accompanying document said "Lean proves" a result while the theorem's proof was
+`sorry` — which the source showed plainly, but only because the `sorry` happened
+to be in the file someone thought to open.
+
 ## Frontends
 
 ### F1 — the checking is one implementation, the driver loop is three

@@ -23,8 +23,49 @@ object Main extends IOApp:
         Console[IO].println(s"kolla $version, default profile ${o.profile.label}").as(ExitCode.Success)
       // A listing is an answer, not a misuse: stdout and exit 0, so it pipes.
       case Right(o) if o.listProfiles => Console[IO].println(Options.profiles).as(ExitCode.Success)
+      case Right(o) if o.axiomsOf.nonEmpty  => axiomsOf(o)
       case Right(o) if o.evalTerm.isDefined => evalOne(o, o.evalTerm.get)
       case Right(o) => checkAll(o)
+
+  /** Reports what declarations rest on, which type-checking does not say.
+    *
+    * The environment is admitted rather than checked, as `--eval` does and
+    * for the same reason: the question here is what the file *claims*, not
+    * whether the claims follow. A `sorry` type-checks like a proof, so this is
+    * the report that distinguishes them. Exit 1 when any named declaration
+    * rests on `sorryAx`, so a script can act on it. See docs/semantics.md A1.
+    */
+  private def axiomsOf(o: Options): IO[ExitCode] =
+    val file    = o.files.head
+    val profile = Options.profileOf(o)
+    Check
+      .stream(file, read(file), profile, abortOnReject = false,
+              (_, _, _) => IO.unit, progressOf(o), _ => false)
+      .flatMap {
+        case Left(f: Check.Failure.Exhausted)  => Console[IO].errorln(f.message).as(ExitCode(3))
+        case Left(f)                           => Console[IO].errorln(f.message).as(ExitCode(2))
+        case Right(r) =>
+          val closures = o.axiomsOf.map(nm => kolla.kernel.Axioms.of(r.environment, Name.parse(nm)))
+          val unknown  = closures.collect { case Left(why) => why }
+          val found    = closures.collect { case Right(c) => c }
+          for
+            _ <- Console[IO].errorln(
+                   f"  ${r.tally.carriedOver}%,d declarations read as ${profile.label}"
+                 )
+            _ <- unknown.foldLeft(IO.unit)((acc, w) => acc *> Console[IO].errorln(s"--axioms: $w"))
+            _ <- found.foldLeft(IO.unit) { (acc, c) =>
+                   acc *> Console[IO].println(
+                     if o.json then ReplayJson.axioms(c.declaration.toString,
+                                                      c.axioms.map(_.toString), c.hasSorry,
+                                                      c.unusual.map(_.toString), profile.label)
+                     else c.render.stripSuffix("\n")
+                   )
+                 }
+          yield
+            if unknown.nonEmpty then ExitCode(2)
+            else if found.exists(_.hasSorry) then ExitCode(1)
+            else ExitCode.Success
+      }
 
   /** Reduces a term against the export's environment.
     *
