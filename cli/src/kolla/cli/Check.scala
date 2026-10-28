@@ -126,10 +126,12 @@ object Check:
         * only by the first call, which is the point. See docs/semantics.md K20.
         */
       trace: Option[(List[Name], Option[Long]) => IO[Unit]] = None,
-      maxSteps: Long = kolla.kernel.TypeChecker.defaultMaxSteps
+      maxSteps: Long = kolla.kernel.TypeChecker.defaultMaxSteps,
+      /** The environment to check on top of; see `Serve`. */
+      initial: kolla.kernel.Environment = kolla.kernel.Environment.empty
   ): IO[Either[Failure, Result]] =
     IO.monotonic.flatMap { start =>
-      val replay  = new Replay(profile, true, Replay.defaultHoistWindow, check, cache, maxSteps)
+      val replay  = new Replay(profile, true, Replay.defaultHoistWindow, check, cache, maxSteps, initial)
       var tally   = ReplayTally()
       var read    = 0L
       var seen    = 0L

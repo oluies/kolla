@@ -83,8 +83,24 @@ final class Replay(
       */
     cache: Option[ReplayCache] = None,
     /** The reduction budget per declaration; see docs/semantics.md K21. */
-    maxSteps: Long = TypeChecker.defaultMaxSteps
+    maxSteps: Long = TypeChecker.defaultMaxSteps,
+    /** The environment to replay on top of, for a caller that has already
+      * checked a library and is now checking something against it. The names
+      * it already holds are the ones `check` is expected to answer false for:
+      * a declaration the base has is skipped, not checked twice.
+      */
+    initial: Environment = Environment.empty
 ):
+
+  // A digest mixes a dependency's digest, and the base's names have none here
+  // (`stepDigest`'s `dep` is this replay's own table). Two different bases
+  // would therefore give one candidate the same digest, and a cache entry
+  // written under one would be reused under the other. See docs/semantics.md
+  // S1 and P15.
+  require(
+    initial.size == 0 || cache.isEmpty,
+    "a seeded replay cannot carry a digest cache"
+  )
 
   /** Feeds a whole file at once, which is what a frontend with the items
     * already in memory wants.
@@ -101,7 +117,7 @@ final class Replay(
 
   private val dc = new DeclarationChecker(profile, maxSteps)
 
-  private var env: Environment = Environment.empty
+  private var env: Environment = initial
 
   /** Items whose order is settled and which have not been stepped yet. */
   private val ready = mutable.ArrayDeque.empty[ExportItem]

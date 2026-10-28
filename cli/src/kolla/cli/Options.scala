@@ -38,7 +38,8 @@ final case class Options(
     maxSteps: Long = kolla.kernel.TypeChecker.defaultMaxSteps,
     help: Boolean = false,
     version: Boolean = false,
-    listProfiles: Boolean = false
+    listProfiles: Boolean = false,
+    serve: Boolean = false
 )
 
 object Options:
@@ -73,6 +74,8 @@ object Options:
       |                  whether it was left as sorry; repeatable
       |  --eval <term>   reduce a term against the export's environment and
       |                  print it, instead of checking the file
+      |  --serve         keep the environment and answer requests on stdin:
+      |                  load, check, axioms, type, eval, status, quit
       |  --profiles      list the profiles and exit
       |  -h, --help      this message
       |  --version       the version and the default profile
@@ -130,6 +133,7 @@ object Options:
       case ("-h" | "--help") :: _    => Right(o.copy(help = true))
       case "--version" :: _          => Right(o.copy(version = true))
       case "--profiles" :: _         => Right(o.copy(listProfiles = true))
+      case "--serve" :: t            => go(t, o.copy(serve = true))
       case "--only" :: v :: t        => go(t, o.copy(only = o.only :+ v))
       case "--check" :: v :: t       => go(t, o.copy(checkOnly = o.checkOnly :+ v))
       case "--cache" :: v :: t       => go(t, o.copy(cache = Some(v)))
@@ -149,6 +153,13 @@ object Options:
       case f :: t                                  => go(t, o.copy(files = o.files :+ f))
     go(args, Options()).flatMap { o =>
       if o.help || o.version || o.listProfiles then Right(o)
+      // The environment can be built entirely through `load` requests, so a
+      // file on the command line is a preload rather than the input.
+      else if o.serve && o.files.length > 1 then
+        Left("--serve takes at most one export file to preload")
+      else if o.serve && (o.evalTerm.isDefined || o.axiomsOf.nonEmpty) then
+        Left("--serve answers eval and axioms as requests, not as flags")
+      else if o.serve then Right(o)
       else if o.files.isEmpty then Left(s"no export file given\n\n$usage")
       else if o.quiet && o.verbose then Left("--quiet and --verbose are mutually exclusive")
       else if o.axiomsOf.nonEmpty && o.evalTerm.isDefined then

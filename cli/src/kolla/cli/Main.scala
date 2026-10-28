@@ -23,6 +23,7 @@ object Main extends IOApp:
         Console[IO].println(s"kolla $version, default profile ${o.profile.label}").as(ExitCode.Success)
       // A listing is an answer, not a misuse: stdout and exit 0, so it pipes.
       case Right(o) if o.listProfiles => Console[IO].println(Options.profiles).as(ExitCode.Success)
+      case Right(o) if o.serve              => Serve.run(o, read)
       case Right(o) if o.axiomsOf.nonEmpty  => axiomsOf(o)
       case Right(o) if o.evalTerm.isDefined => evalOne(o, o.evalTerm.get)
       case Right(o) => checkAll(o)

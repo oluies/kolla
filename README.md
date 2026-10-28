@@ -74,6 +74,8 @@ kolla [options] <export-file>...
                   it was left as sorry; repeatable
   --eval <term>   reduce a term against the export's environment and print
                   it, instead of checking the file
+  --serve         keep the environment and answer requests on stdin:
+                  load, check, axioms, type, eval, status, quit
   --profiles      list the profiles and exit
   -h, --help      this message
   --version       the version and the default profile
@@ -175,6 +177,36 @@ axiom outside the three Lean ships, 2 when the name is not in the file. A
 verdict outranks a misspelling: 1 wins over 2. The point is dependencies: a `sorry` in the
 declaration you are reading is visible in the source, and one in a dependency
 is not — nor is either, when all you have is an export. docs/semantics.md A1.
+
+## Answering many questions
+
+Every mode above builds an environment, answers one question and throws it
+away, and the environment is what costs: 90 seconds for `init`, 83 seconds to
+read and admit Mathlib. `--serve` keeps it and takes requests on standard
+input, one per line, replying with one JSON object per line.
+
+```
+$ kolla --profile v4.35.0 --serve
+load .difftest/leanprover-lean4-v4.35.0/init.export
+{"op":"load","ok":true,"file":"...","accepted":59349,"rejected":0,"carriedOver":0,"errored":0,"declarations":59349,"ms":82815}
+check .difftest/leanprover-lean4-v4.35.0/case-natlit.export
+{"op":"check","ok":true,"file":"...","accepted":11,"rejected":0,"carriedOver":320,"errored":0,"declarations":59349,"ms":17}
+axioms Classical.em
+{"op":"axioms","ok":true,"result":{"declaration":"Classical.em","axioms":["Classical.choice","Quot.sound","propext"],"sorry":false,"unusual":[],"profile":"v4.35.0"},"constants":120,"ms":6}
+eval Nat.add 2 3
+{"op":"eval","ok":true,"partial":false,"result":{"eval":"Nat.add 2 3","value":"5","type":"Nat","profile":"v4.35.0"},"ms":2}
+```
+
+The operations are `load`, `check`, `axioms`, `type`, `eval`, `status` and
+`quit`. A file named on the command line is preloaded, so `kolla --serve
+init.export` answers immediately.
+
+`check` is the one an iterating caller wants: it checks only the declarations
+the base does not already hold and keeps nothing, so a candidate costs its own
+declarations rather than the library's. `load` is the same check and keeps what
+it built. Discarding is sound rather than careful — `Environment` is immutable,
+so a rejected candidate has nothing to leave behind. A failed request is
+answered with `"ok": false` and the session goes on. docs/semantics.md S1.
 
 ## Reducing a term
 

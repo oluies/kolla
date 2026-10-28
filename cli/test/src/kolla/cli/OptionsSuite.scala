@@ -160,6 +160,14 @@ class OptionsSuite extends munit.FunSuite:
     assert(ok("--trace", "--progress", "a").trace)
   }
 
+  test("--serve needs no file, takes one to preload, and rejects the one-shot modes") {
+    assert(ok("--serve").serve)
+    assertEquals(ok("--serve", "a").files, List("a"))
+    assert(err("--serve", "a", "b").contains("at most one export file"))
+    assert(err("--serve", "--eval", "t").contains("as requests, not as flags"))
+    assert(err("--serve", "--axioms", "A").contains("as requests, not as flags"))
+  }
+
   test("--axioms parses, repeats, and rejects what it cannot combine with") {
     assertEquals(ok("a").axiomsOf, Nil)
     assertEquals(ok("--axioms", "Nat.add_comm", "a").axiomsOf, List("Nat.add_comm"))

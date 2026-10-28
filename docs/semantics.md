@@ -1647,6 +1647,48 @@ accompanying document said "Lean proves" a result while the theorem's proof was
 `sorry` — which the source showed plainly, but only because the `sorry` happened
 to be in the file someone thought to open.
 
+## Serving
+
+### S1 — a resident environment answers from where the last question left off
+
+Every other mode of the command line builds an environment, answers one
+question and throws it away. The environment is what costs: `init` is 90
+seconds to check and Mathlib 83 seconds to read and admit (docs/scale.md),
+against microseconds for the question itself. A caller with many questions
+pays for the environment once per question.
+
+`--serve` keeps it. A request is one line on standard input — an operation and,
+for most of them, one argument running to the end of the line — and a reply is
+one JSON object per line on standard output. `Serve.handle` is one request, so
+the session is a fold over the lines with the environment as its state.
+
+A `check` reads a candidate export and returns its verdict without keeping
+anything; a `load` keeps what it built. Both check only the names the base does
+not already hold, through `Serve.delta`, and `Replay` admits the rest unchecked
+and counts them as carried over, the same treatment `--check` gives a
+declaration outside its prefix (P14). Here that is not a narrowing: the base
+was checked when it was loaded. Measured against a resident `init` at v4.35.0,
+`case-natlit` checks its 11 new declarations in 17 ms with 320 carried over,
+where the same answer from a cold start is the 90 seconds of the base plus the
+candidate.
+
+Discarding is sound rather than careful: `Environment` is immutable, so a
+candidate's declarations exist only in the environment that step returned, and
+dropping that value is the whole of the rollback. A rejected candidate cannot
+leave anything behind to be found by the next question.
+
+A seeded replay refuses a digest cache, and `Replay` requires it rather than
+trusting the caller. A digest mixes each dependency's digest from the replay's
+own table (P15, P16), and a seeded base contributes no entries to that table,
+so one candidate would digest the same against two different bases and an entry
+written under one would be reused under the other.
+
+A request that fails is answered with `"ok": false` and the session continues:
+unknown operations, missing arguments, unreadable files, unknown constants and
+terms that do not parse are all expected from a caller that generates its
+requests. Standard input is the protocol, so `load -` is refused rather than
+read.
+
 ## Frontends
 
 ### F1 — the checking is one implementation, the driver loop is three
