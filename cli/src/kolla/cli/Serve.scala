@@ -24,6 +24,23 @@ object Serve:
   final case class State(profile: KernelProfile, env: Environment, maxSteps: Long, served: Long):
     def declarations: Int = env.size
 
+  /** Whether every declaration of a replay went through the kernel.
+    *
+    * `Replay` carries a rejected declaration into the environment unchecked so
+    * that the rest of the file can still be replayed (P6), so the environment
+    * a failed replay ends with holds something the kernel did not accept. That
+    * is why such a load is not kept: the base this session answers from, and
+    * checks candidates against, holds only what passed.
+    *
+    * Carried-over declarations are not counted against it. The only selector
+    * here is `delta`, which answers false exactly for the names the base
+    * already holds, and those were checked when the base was loaded. Requiring
+    * none of them would refuse every load after the first. `notReached` cannot
+    * be other than zero, since the session never aborts on a rejection.
+    */
+  def checked(t: kolla.leanexport.ReplayTally): Boolean =
+    t.rejected == 0 && t.failed == 0 && t.notReached == 0
+
   /** Which of a candidate's declarations the base has not checked already.
     *
     * `Replay` admits the rest unchecked and reports them as carried over, the
@@ -92,18 +109,20 @@ object Serve:
             case Left(e) => (next, Some(failed(op, took, message(e))), true)
             case Right(Left(f)) => (next, Some(failed(op, took, f.message)), true)
             case Right(Right(r)) =>
-              val t = r.tally
+              val t    = r.tally
+              val held = keep && checked(t)
               (
-                if keep then next.copy(env = r.environment) else next,
+                if held then next.copy(env = r.environment) else next,
                 Some(reply(op, took,
                   "ok"           -> JsonWriter.bool(t.ok),
                   "file"         -> JsonWriter.str(arg),
+                  "kept"         -> JsonWriter.bool(held),
                   "accepted"     -> JsonWriter.num(t.accepted.toLong),
                   "rejected"     -> JsonWriter.num(t.rejected.toLong),
                   "carriedOver"  -> JsonWriter.num(t.carriedOver.toLong),
                   "errored"      -> JsonWriter.num(t.failed.toLong),
                   "declarations" -> JsonWriter.num(
-                    (if keep then r.environment.size else state.env.size).toLong
+                    (if held then r.environment.size else state.env.size).toLong
                   )
                 )),
                 true

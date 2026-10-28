@@ -38,10 +38,15 @@ class ServeSuite extends CatsEffectSuite:
   private val goodItems: Vector[ExportItem] = baseItems :+ defn("R", type0, prop)
   private val badItems: Vector[ExportItem]  = baseItems :+ defn("Broken", prop, type0)
 
+  /** A candidate that rests on the ill-typed `Broken`. */
+  private val usesBrokenItems: Vector[ExportItem] =
+    badItems :+ defn("Uses", prop, Expr.Const(Name.parse("Broken"), Nil))
+
   private val files: Map[String, String] = Map(
-    "base" -> ndjson(baseItems),
-    "good" -> ndjson(goodItems),
-    "bad"  -> ndjson(badItems)
+    "base"       -> ndjson(baseItems),
+    "good"       -> ndjson(goodItems),
+    "bad"        -> ndjson(badItems),
+    "usesBroken" -> ndjson(usesBrokenItems)
   )
 
   private def bytes(name: String): fs2.Stream[IO, Byte] =
@@ -105,6 +110,52 @@ class ServeSuite extends CatsEffectSuite:
       assert(out.contains("\"rejected\":1"), clue(out))
       assertEquals(s.declarations, 2)
       assert(after.contains("\"declarations\":2"), clue(after))
+  }
+
+  test("a load that did not check cleanly is not kept") {
+    for
+      (s, out, go)   <- ask(start, "load bad")
+      (_, after, _)  <- ask(s, "status")
+    yield
+      assert(go)
+      assert(out.contains("\"ok\":false"), clue(out))
+      assert(out.contains("\"kept\":false"), clue(out))
+      // `Replay` carries a rejected declaration into the environment it
+      // returns (P6); keeping that would make it part of the base.
+      assertEquals(s.declarations, 0)
+      assert(!s.env.contains(Name.parse("Broken")))
+      assert(after.contains("\"declarations\":0"), clue(after))
+  }
+
+  test("a rejection does not become a base a later candidate rests on") {
+    for
+      (tainted, _, _) <- ask(start, "load bad")
+      (_, out, _)     <- ask(tainted, "check usesBroken")
+      (_, ax, _)      <- ask(tainted, "axioms Broken")
+    yield
+      // With `Broken` in the base, `delta` would skip it and `Uses` would be
+      // accepted against it.
+      assert(out.contains("\"ok\":false"), clue(out))
+      assert(out.contains("\"rejected\":1"), clue(out))
+      assert(ax.contains("\"ok\":false"), clue(ax))
+  }
+
+  test("a clean load is kept") {
+    for (s, out, _) <- ask(start, "load base")
+    yield
+      assert(out.contains("\"kept\":true"), clue(out))
+      assertEquals(s.declarations, 2)
+  }
+
+  test("what the base already holds does not stop a later load being kept") {
+    for
+      base        <- loaded
+      (s, out, _) <- ask(base, "load good")
+    yield
+      assert(out.contains("\"kept\":true"), clue(out))
+      assert(out.contains("\"carriedOver\":2"), clue(out))
+      assertEquals(s.declarations, 3)
+      assert(s.env.contains(Name.parse("R")))
   }
 
   test("a file that cannot be read is answered, not fatal") {

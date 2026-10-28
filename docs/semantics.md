@@ -1663,11 +1663,21 @@ one JSON object per line on standard output. `Serve.handle` is one request, so
 the session is a fold over the lines with the environment as its state.
 
 A `check` reads a candidate export and returns its verdict without keeping
-anything; a `load` keeps what it built. Both check only the names the base does
-not already hold, through `Serve.delta`, and `Replay` admits the rest unchecked
-and counts them as carried over, the same treatment `--check` gives a
-declaration outside its prefix (P14). Here that is not a narrowing: the base
-was checked when it was loaded. Measured against a resident `init` at v4.35.0,
+anything; a `load` keeps what it built, and only if every declaration in it
+went through the kernel. That condition is the point rather than tidiness:
+`Replay` carries a rejected declaration into the environment it returns so the
+rest of the file can still be replayed (P6), so keeping the environment from a
+failed load would put something the kernel refused into the base, where `delta`
+would then skip it as already checked and every later candidate would rest on
+it. The reply says `kept` so a caller knows which environment it is now talking
+to.
+
+Both operations check only the names the base does not already hold, through
+`Serve.delta`, and `Replay` admits the rest unchecked and counts them as
+carried over, the same treatment `--check` gives a declaration outside its
+prefix (P14). Here that is not a narrowing, because the base holds only what
+passed. Carried-over declarations are therefore not counted against a load:
+requiring none of them would refuse every load after the first. Measured against a resident `init` at v4.35.0,
 `case-natlit` checks its 11 new declarations in 17 ms with 320 carried over,
 where the same answer from a cold start is the 90 seconds of the base plus the
 candidate.

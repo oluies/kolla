@@ -204,9 +204,14 @@ init.export` answers immediately.
 `check` is the one an iterating caller wants: it checks only the declarations
 the base does not already hold and keeps nothing, so a candidate costs its own
 declarations rather than the library's. `load` is the same check and keeps what
-it built. Discarding is sound rather than careful — `Environment` is immutable,
-so a rejected candidate has nothing to leave behind. A failed request is
-answered with `"ok": false` and the session goes on. docs/semantics.md S1.
+it built, and only if every declaration in it was accepted — a rejected one is
+still carried into the environment a replay returns (P6), and keeping that
+would leave the base resting on something the kernel refused. The reply says
+`kept` either way.
+
+Discarding is sound rather than careful: `Environment` is immutable, so a
+rejected candidate has nothing to leave behind. A failed request is answered
+with `"ok": false` and the session goes on. docs/semantics.md S1.
 
 ## Reducing a term
 

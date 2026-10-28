@@ -166,6 +166,11 @@ class OptionsSuite extends munit.FunSuite:
     assert(err("--serve", "a", "b").contains("at most one export file"))
     assert(err("--serve", "--eval", "t").contains("as requests, not as flags"))
     assert(err("--serve", "--axioms", "A").contains("as requests, not as flags"))
+    assert(err("--serve", "--cache", "c.txt").contains("mutually exclusive"))
+    assert(err("--serve", "--check", "Nat").contains("mutually exclusive"))
+    // The file rule is the only one --serve is exempt from, so it cannot skip
+    // the rest by returning early.
+    assert(err("--serve", "-q", "-v").contains("--quiet and --verbose"))
   }
 
   test("--axioms parses, repeats, and rejects what it cannot combine with") {

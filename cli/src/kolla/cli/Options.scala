@@ -154,13 +154,20 @@ object Options:
     go(args, Options()).flatMap { o =>
       if o.help || o.version || o.listProfiles then Right(o)
       // The environment can be built entirely through `load` requests, so a
-      // file on the command line is a preload rather than the input.
+      // file on the command line is a preload rather than the input. That is
+      // the only rule `--serve` is exempt from: the checks below still apply,
+      // so it cannot pass them by returning early.
       else if o.serve && o.files.length > 1 then
         Left("--serve takes at most one export file to preload")
       else if o.serve && (o.evalTerm.isDefined || o.axiomsOf.nonEmpty) then
         Left("--serve answers eval and axioms as requests, not as flags")
-      else if o.serve then Right(o)
-      else if o.files.isEmpty then Left(s"no export file given\n\n$usage")
+      // A seeded replay cannot carry a digest cache, and `Replay` refuses the
+      // combination, so a cache here could only be silently unused.
+      else if o.serve && o.cache.isDefined then
+        Left("--serve and --cache are mutually exclusive: a resident environment carries no cache")
+      else if o.serve && o.checkOnly.nonEmpty then
+        Left("--serve and --check are mutually exclusive: a check request names its own file")
+      else if !o.serve && o.files.isEmpty then Left(s"no export file given\n\n$usage")
       else if o.quiet && o.verbose then Left("--quiet and --verbose are mutually exclusive")
       else if o.axiomsOf.nonEmpty && o.evalTerm.isDefined then
         Left("--axioms and --eval are mutually exclusive")
