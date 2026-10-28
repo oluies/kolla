@@ -39,7 +39,8 @@ final case class Options(
     help: Boolean = false,
     version: Boolean = false,
     listProfiles: Boolean = false,
-    serve: Boolean = false
+    serve: Boolean = false,
+    maxTimeMillis: Option[Long] = None
 )
 
 object Options:
@@ -68,6 +69,8 @@ object Options:
       |                  predates it; needed for a library corpus before v4.35
       |  --max-steps <n> reduction budget per declaration; on exceeding it the
       |                  kernel reports where the reduction went
+      |  --max-time <ms> wall-clock budget per declaration, with the same
+      |                  report; independent of --max-steps
       |  --trace         name each declaration before checking it, so one
       |                  that never finishes can be identified
       |  --axioms <name> report the axioms this declaration rests on, and
@@ -141,6 +144,10 @@ object Options:
       case "--eval" :: v :: t        => go(t, o.copy(evalTerm = Some(v)))
       case "--axioms" :: v :: t      => go(t, o.copy(axiomsOf = o.axiomsOf :+ v))
       case "--trace" :: t            => go(t, o.copy(trace = true))
+      case "--max-time" :: v :: t    =>
+        v.replace("_", "").toLongOption match
+          case Some(n) if n > 0 => go(t, o.copy(maxTimeMillis = Some(n)))
+          case _                => Left(s"--max-time expects a positive number of milliseconds, got $v")
       case "--max-steps" :: v :: t   =>
         v.replace("_", "").toLongOption match
           case Some(n) if n > 0 => go(t, o.copy(maxSteps = n))

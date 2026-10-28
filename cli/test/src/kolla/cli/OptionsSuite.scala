@@ -160,6 +160,17 @@ class OptionsSuite extends munit.FunSuite:
     assert(ok("--trace", "--progress", "a").trace)
   }
 
+  test("--max-time takes milliseconds and has to be positive") {
+    assertEquals(ok("a").maxTimeMillis, None)
+    assertEquals(ok("--max-time", "250", "a").maxTimeMillis, Some(250L))
+    assertEquals(ok("--max-time", "1_000", "a").maxTimeMillis, Some(1000L))
+    assert(err("--max-time", "0", "a").contains("positive"))
+    assert(err("--max-time", "soon", "a").contains("positive"))
+    // Independent of the step budget: both can be given.
+    val both = ok("--max-time", "250", "--max-steps", "99", "a")
+    assertEquals((both.maxTimeMillis, both.maxSteps), (Some(250L), 99L))
+  }
+
   test("--serve needs no file, takes one to preload, and rejects the one-shot modes") {
     assert(ok("--serve").serve)
     assertEquals(ok("--serve", "a").files, List("a"))

@@ -24,7 +24,9 @@ final class TypeChecker(
     val profile: KernelProfile = KernelProfile.default,
     val definitionSafety: DefinitionSafety = DefinitionSafety.Safe,
     initialLocalContext: LocalContext = LocalContext.empty,
-    val maxSteps: Long = TypeChecker.defaultMaxSteps
+    val maxSteps: Long = TypeChecker.defaultMaxSteps,
+    /** A wall-clock bound on this declaration, alongside `maxSteps`. */
+    val timeLimit: Option[TypeChecker.TimeLimit] = None
 ):
 
   private val ngen = new NameGenerator()
@@ -66,7 +68,10 @@ final class TypeChecker(
     * default budget is not going to print a report, so it does not pay for
     * them; the plain counters are a `Long` increment and stay unconditional.
     */
-  private val diagnosing    = maxSteps != TypeChecker.defaultMaxSteps
+  private val diagnosing    = maxSteps != TypeChecker.defaultMaxSteps || timeLimit.isDefined
+
+  /** When this declaration started, by the limit's own clock. */
+  private val startedAt: Long = timeLimit.fold(0L)(_.now())
 
   private val unfolded      = mutable.HashMap.empty[Name, Long]
   private val missed        = mutable.HashMap.empty[Name, Long]
@@ -117,6 +122,13 @@ final class TypeChecker(
         ExceptionKind.DeepRecursion,
         s"exceeded $maxSteps reduction steps\n$work"
       )
+    timeLimit.foreach { l =>
+      if steps % l.every == 0L && l.now() - startedAt >= l.nanos then
+        throw KernelException(
+          ExceptionKind.DeepRecursion,
+          s"exceeded the ${l.nanos / 1000000L} ms budget after $steps reduction steps\n$work"
+        )
+    }
 
   private def recordFailure(t: Expr, s: Expr): Unit =
     if failedPairs.length >= TypeChecker.maxTraceEntries then failedPairs.removeHead()
@@ -1296,6 +1308,37 @@ final class TypeChecker(
 object TypeChecker:
   val defaultMaxSteps: Long = 1L << 32
   val maxTraceEntries: Int  = 32
+
+  /** How often the clock is read, in reduction steps.
+    *
+    * It has to be below what an ordinary declaration costs, or the limit
+    * cannot fire for one at all: the declarations of the committed nested
+    * fixture take between 256 and 1024 steps each, so at 4096 the clock was
+    * never read for any of them.
+    */
+  val defaultClockEvery: Long = 256L
+
+  /** A wall-clock bound on checking one declaration.
+    *
+    * `maxSteps` bounds the work; this bounds the waiting, which is what a
+    * caller with a deadline of its own can state. The two are independent:
+    * whichever is reached first ends the declaration, and both report where
+    * the reduction went.
+    *
+    * The clock is supplied rather than named here, because the kernel cross-
+    * builds to three platforms and a test needs a clock it controls. It is
+    * read every `every` steps rather than on each one: a step is a few
+    * nanoseconds and reading a clock is of the same order, so sampling keeps
+    * the guard off the hot path. The bound is therefore overshot by at most
+    * what `every` steps cost.
+    *
+    * One instance can be shared by every declaration of a run. Each
+    * `TypeChecker` reads the clock once when it is built, so the bound is per
+    * declaration rather than for the run as a whole.
+    */
+  final class TimeLimit(val nanos: Long, val now: () => Long, val every: Long = defaultClockEvery):
+    require(nanos > 0, "a time limit must be positive")
+    require(every > 0, "a clock interval must be positive")
 
   /** `g_dont_care`: placeholder for a binder whose variable does not occur. */
   private[kernel] val dontCare: Expr = Expr.const(Name.mkSimple("_dontCare"))

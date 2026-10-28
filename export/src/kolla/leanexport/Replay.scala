@@ -77,7 +77,9 @@ final class Replay(
       * it already holds are the ones `check` is expected to answer false for:
       * a declaration the base has is skipped, not checked twice.
       */
-    initial: Environment = Environment.empty
+    initial: Environment = Environment.empty,
+    /** A wall-clock bound per declaration, alongside `maxSteps`. */
+    timeLimit: Option[TypeChecker.TimeLimit] = None
 ):
 
   // A digest mixes a dependency's digest, and the base's names have none here
@@ -103,7 +105,7 @@ final class Replay(
   def this(items: Vector[ExportItem], profile: KernelProfile) =
     this(items, profile, true)
 
-  private val dc = new DeclarationChecker(profile, maxSteps)
+  private val dc = new DeclarationChecker(profile, maxSteps, timeLimit)
 
   private var env: Environment = initial
 
@@ -371,7 +373,7 @@ final class Replay(
           blockNames,
           () =>
             val decl = InductiveChecker.declarationOf(exportedInds, exportedCtors)
-            val r    = AddInductive.add(env, decl, profile, maxSteps)
+            val r    = AddInductive.add(env, decl, profile, maxSteps, timeLimit)
             InductiveChecker.validate(
               exportedInds, exportedCtors, r.inductives, r.constructors, exportedRecs, r.recursors
             )

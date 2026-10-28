@@ -39,9 +39,10 @@ object Evaluate:
       env: Environment,
       profile: KernelProfile,
       term: Expr,
-      maxSteps: Long = TypeChecker.defaultMaxSteps
+      maxSteps: Long = TypeChecker.defaultMaxSteps,
+      timeLimit: Option[TypeChecker.TimeLimit] = None
   ): Either[String, Result] =
-    val tc = new TypeChecker(env, profile, DefinitionSafety.Safe, LocalContext.empty, maxSteps)
+    val tc = new TypeChecker(env, profile, DefinitionSafety.Safe, LocalContext.empty, maxSteps, timeLimit)
     try
       val tpe       = tc.check(term)
       var truncated = false

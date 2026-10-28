@@ -1699,6 +1699,56 @@ terms that do not parse are all expected from a caller that generates its
 requests. Standard input is the protocol, so `load -` is refused rather than
 read.
 
+### S2 — a budget in steps is not a budget a caller can state
+
+`--max-steps` bounds the work and reports where it went (K21), which is what
+diagnosing a check that does not finish needs. It is not what a caller with a
+deadline of its own can use: there is no conversion from reduction steps to
+milliseconds, and the step cost of a declaration is not known before checking
+it. `--max-time <ms>`, and the `deadline` request in a session, bound the
+waiting instead. The two are independent and whichever is reached first ends
+the declaration.
+
+`TypeChecker.TimeLimit` carries the clock rather than naming one. The kernel
+cross-builds to three platforms, and a test that waits for a real clock is a
+test that is slow and flaky by construction; every case in `TimeLimitSuite`
+runs against a clock it moves itself. The frontend supplies
+`() => System.nanoTime()`.
+
+The clock is read every `every` steps, 256 by default, not on each one: a step
+is a few nanoseconds and so is reading a clock. That makes the bound a floor
+rather than a ceiling — a declaration is stopped at the first step boundary
+after its budget, overshooting by at most what 256 steps cost. The interval has
+to be below what an ordinary declaration costs or the limit cannot fire for one
+at all: the committed nested fixture's declarations take between 256 and 1024
+steps each, and at an earlier default of 4096 the clock was never read for any
+of them, so `--max-time 1` on that file reported everything accepted.
+
+One `TimeLimit` serves a whole run. Each `TypeChecker` reads the clock once when
+it is built, so the bound is per declaration and not for the run as a whole,
+which is the same scope `maxSteps` has.
+
+Setting a limit also turns on the per-constant tables that `maxSteps` turns on
+(K21), because naming the constant the reduction was in is the whole value of
+the report. That is not free, and the two costs are worth keeping apart.
+Measured on `init` at v4.35.0 on one loaded host:
+
+| run | wall | peak RSS |
+|---|---|---|
+| plain | 90.0s | 1.05 GB |
+| `--max-steps` just below the default, so the tables are on | 115.5s | 1.53 GB |
+| `--max-time` it never reaches | 120.5s | 1.69 GB |
+
+So the diagnosis is 25 seconds of it and the clock about 5, which answers the
+question the sampling interval was chosen for: reading the clock every 256
+steps costs about 4% and the report it pays for costs 28%. A caller that wants
+the cheapest possible stop and no report wants neither flag.
+
+A session reports the first declaration that did not pass as `reason` on the
+`load` and `check` replies, which is how a budget reaches the caller: a count
+of rejections says a candidate failed, and the reason says it ran out of time
+in `Set.ofPred` rather than being ill-typed.
+
 ## Frontends
 
 ### F1 — the checking is one implementation, the driver loop is three

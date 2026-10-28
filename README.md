@@ -70,6 +70,8 @@ kolla [options] <export-file>...
                   never finishes can be identified
   --max-steps <n> reduction budget per declaration; on exceeding it the
                   kernel reports where the reduction went
+  --max-time <ms> wall-clock budget per declaration, with the same report;
+                  independent of --max-steps
   --axioms <name> report the axioms this declaration rests on, and whether
                   it was left as sorry; repeatable
   --eval <term>   reduce a term against the export's environment and print
@@ -197,9 +199,16 @@ eval Nat.add 2 3
 {"op":"eval","ok":true,"partial":false,"result":{"eval":"Nat.add 2 3","value":"5","type":"Nat","profile":"v4.35.0"},"ms":2}
 ```
 
-The operations are `load`, `check`, `axioms`, `type`, `eval`, `status` and
-`quit`. A file named on the command line is preloaded, so `kolla --serve
-init.export` answers immediately.
+The operations are `load`, `check`, `axioms`, `type`, `eval`, `deadline`,
+`status` and `quit`. A file named on the command line is preloaded, so `kolla
+--serve init.export` answers immediately.
+
+`deadline <ms>` bounds each declaration by the clock, and `deadline 0` removes
+it. A caller cannot convert reduction steps into milliseconds, which is what
+`--max-steps` offers, so this is the budget it can actually state. Every reply
+carries `reason`: the first declaration that did not pass, with what stopped
+it, so a budget that runs out names the constant the reduction was in rather
+than only adding to a count. docs/semantics.md S2.
 
 `check` is the one an iterating caller wants: it checks only the declarations
 the base does not already hold and keeps nothing, so a candidate costs its own

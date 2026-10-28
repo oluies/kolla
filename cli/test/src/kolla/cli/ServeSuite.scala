@@ -198,6 +198,51 @@ class ServeSuite extends CatsEffectSuite:
     }
   }
 
+  test("a deadline is set, reported and cleared") {
+    for
+      (s1, out1, _) <- ask(start, "deadline 250")
+      (_, st, _)    <- ask(s1, "status")
+      (s2, out2, _) <- ask(s1, "deadline 0")
+      (_, bad, go)  <- ask(s1, "deadline soon")
+    yield
+      assert(out1.contains("\"deadline\":250"), clue(out1))
+      assertEquals(s1.timeLimit.map(_.nanos), Some(250L * 1000000L))
+      assert(st.contains("\"deadline\":250"), clue(st))
+      assert(out2.contains("\"deadline\":0"), clue(out2))
+      assertEquals(s2.timeLimit, None)
+      assert(go && bad.contains("\"ok\":false"), clue(bad))
+  }
+
+  test("a deadline of zero steps on a candidate is answered, with the reason") {
+    // A budget nothing can meet, so the reply has to carry what stopped it
+    // rather than only a count.
+    // A clock that ticks a millisecond per read; a clock standing still never
+    // exceeds anything, however late it says it is.
+    var ticks = 0L
+    val stopped = start.copy(
+      timeLimit = Some(new TypeChecker.TimeLimit(1L, () => { ticks += 1000000L; ticks }, 1L))
+    )
+    for (_, out, go) <- ask(stopped, "load base")
+    yield
+      assert(go)
+      assert(out.contains("\"ok\":false"), clue(out))
+      assert(out.contains("\"kept\":false"), clue(out))
+      assert(out.contains("ms budget"), clue(out))
+  }
+
+  test("a reply names the first declaration that did not pass") {
+    for
+      base        <- loaded
+      (_, out, _) <- ask(base, "check bad")
+    yield
+      assert(out.contains("\"reason\":\"Broken:"), clue(out))
+  }
+
+  test("a clean reply has no reason") {
+    for (_, out, _) <- ask(start, "load base")
+    yield assert(out.contains("\"reason\":null"), clue(out))
+  }
+
   test("quit ends the session") {
     for (_, out, go) <- ask(start, "quit")
     yield

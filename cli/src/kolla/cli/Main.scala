@@ -96,14 +96,15 @@ object Main extends IOApp:
       case Right(term) =>
         Check
           .stream(file, read(file), profile, abortOnReject = false,
-                  (_, _, _) => IO.unit, progressOf(o), _ => false, None, None, None, o.maxSteps)
+                  (_, _, _) => IO.unit, progressOf(o), _ => false, None, None, None, o.maxSteps,
+                  kolla.kernel.Environment.empty, timeLimitOf(o))
           .flatMap {
             case Left(f: Check.Failure.Exhausted)  => Console[IO].errorln(f.message).as(ExitCode(3))
             case Left(f)                           => Console[IO].errorln(f.message).as(ExitCode(2))
             case Right(r) =>
               Console[IO].errorln(
                 f"  ${r.tally.carriedOver}%,d declarations admitted unchecked as ${profile.label}"
-              ) *> IO(kolla.dsl.Evaluate(r.environment, profile, term, o.maxSteps)).flatMap {
+              ) *> IO(kolla.dsl.Evaluate(r.environment, profile, term, o.maxSteps, timeLimitOf(o))).flatMap {
                 case Left(why) => Console[IO].errorln(s"--eval: $why").as(ExitCode(1))
                 case Right(res) =>
                   // Printed unbounded: here the term is the answer, and
@@ -196,7 +197,8 @@ object Main extends IOApp:
       Check
         .stream(
           file, read(file), profile, o.abortOnReject, emit, progress,
-          Options.selects(o), store, store.map(_.flush), traceOf(o), o.maxSteps
+          Options.selects(o), store, store.map(_.flush), traceOf(o), o.maxSteps,
+          kolla.kernel.Environment.empty, timeLimitOf(o)
         )
         .flatMap(reportOne(o, profile, file, _))
     }
@@ -228,6 +230,17 @@ object Main extends IOApp:
         reused *> admitted *> late *> report.as(if r.tally.ok then ExitCode.Success else ExitCode(1))
 
   /** `-` is standard input, so the CLI composes with a pipeline. */
+  /** The wall-clock budget, with the only clock a frontend has to offer.
+    *
+    * `TypeChecker.TimeLimit` takes the clock rather than naming one, so that
+    * the kernel cross-builds and a test can control it. See docs/semantics.md
+    * S2.
+    */
+  private[cli] def timeLimitOf(o: Options): Option[kolla.kernel.TypeChecker.TimeLimit] =
+    o.maxTimeMillis.map(ms =>
+      new kolla.kernel.TypeChecker.TimeLimit(ms * 1000000L, () => System.nanoTime())
+    )
+
   private def read(file: String): fs2.Stream[IO, Byte] =
     if file == "-" then fs2.io.stdin[IO](1024 * 1024)
     else Files[IO].readAll(Path(file))

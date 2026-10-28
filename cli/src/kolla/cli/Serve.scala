@@ -2,8 +2,8 @@ package kolla.cli
 
 import cats.effect.IO
 import cats.effect.std.Console
-import kolla.kernel.{Axioms, Environment, KernelProfile, Name, Pretty}
-import kolla.leanexport.{JsonWriter, ReplayJson}
+import kolla.kernel.{Axioms, Environment, KernelProfile, Name, Pretty, TypeChecker}
+import kolla.leanexport.{JsonWriter, ReplayJson, ReplayOutcome, ReplayTally}
 
 /** A resident kernel: one environment, many questions.
   *
@@ -21,8 +21,16 @@ import kolla.leanexport.{JsonWriter, ReplayJson}
 object Serve:
 
   /** What the session holds between requests. */
-  final case class State(profile: KernelProfile, env: Environment, maxSteps: Long, served: Long):
+  final case class State(
+      profile: KernelProfile,
+      env: Environment,
+      maxSteps: Long,
+      served: Long,
+      /** The wall-clock budget per declaration, set by a `deadline` request. */
+      timeLimit: Option[TypeChecker.TimeLimit] = None
+  ):
     def declarations: Int = env.size
+    def deadlineMillis: Long = timeLimit.fold(0L)(_.nanos / 1000000L)
 
   /** Whether every declaration of a replay went through the kernel.
     *
@@ -38,7 +46,7 @@ object Serve:
     * none of them would refuse every load after the first. `notReached` cannot
     * be other than zero, since the session never aborts on a rejection.
     */
-  def checked(t: kolla.leanexport.ReplayTally): Boolean =
+  def checked(t: ReplayTally): Boolean =
     t.rejected == 0 && t.failed == 0 && t.notReached == 0
 
   /** Which of a candidate's declarations the base has not checked already.
@@ -74,12 +82,13 @@ object Serve:
   private def replay(
       state: State,
       file: String,
-      bytes: String => fs2.Stream[IO, Byte]
+      bytes: String => fs2.Stream[IO, Byte],
+      reason: (Name, ReplayOutcome) => IO[Unit]
   ): IO[Either[Check.Failure, Check.Result]] =
     Check.stream(
       file, bytes(file), state.profile, abortOnReject = false,
-      (_, _, _) => IO.unit, None, delta(state.env), None, None, None,
-      state.maxSteps, state.env
+      (n, outcome, _) => reason(n, outcome), None, delta(state.env), None, None, None,
+      state.maxSteps, state.env, state.timeLimit
     )
 
   /** Answers one request, and says whether the session goes on. */
@@ -104,7 +113,21 @@ object Serve:
       else if arg == "-" then
         IO.pure((next, Some(failed(op, 0L, "--serve reads requests on stdin; name a file")), true))
       else
-        timed(replay(state, arg, bytes).attempt).map { (outcome, took) =>
+        // The first declaration that did not pass, so a reply says why and not
+        // only how many. A time limit is reported through it, which is the
+        // point of having one: the caller learns which constant the reduction
+        // was in when the budget ran out.
+        var first: Option[String] = None
+        val note: (Name, ReplayOutcome) => IO[Unit] = (n, outcome) =>
+          IO {
+            val bad = outcome match
+              case _: ReplayOutcome.Rejected => true
+              case _: ReplayOutcome.Failed   => true
+              case _                         => false
+            if first.isEmpty && bad then
+              first = Some(ReplayTally.detail(outcome).fold(n.toString)(d => s"$n: $d"))
+          }
+        timed(replay(state, arg, bytes, note).attempt).map { (outcome, took) =>
           outcome match
             case Left(e) => (next, Some(failed(op, took, message(e))), true)
             case Right(Left(f)) => (next, Some(failed(op, took, f.message)), true)
@@ -123,7 +146,8 @@ object Serve:
                   "errored"      -> JsonWriter.num(t.failed.toLong),
                   "declarations" -> JsonWriter.num(
                     (if held then r.environment.size else state.env.size).toLong
-                  )
+                  ),
+                  "reason" -> first.fold("null")(JsonWriter.str)
                 )),
                 true
               )
@@ -193,6 +217,22 @@ object Serve:
                       )), true)
                 }
 
+      case "deadline" =>
+        arg.replace("_", "").toLongOption match
+          case None =>
+            IO.pure((next, Some(failed(op, 0L, "deadline expects a number of milliseconds")), true))
+          case Some(ms) if ms < 0 =>
+            IO.pure((next, Some(failed(op, 0L, "deadline expects a positive number, or 0 for none")), true))
+          case Some(ms) =>
+            val limit =
+              if ms == 0 then None
+              else Some(new TypeChecker.TimeLimit(ms * 1000000L, () => System.nanoTime()))
+            val s2 = next.copy(timeLimit = limit)
+            IO.pure((s2, Some(reply(op, 0L,
+              "ok"       -> JsonWriter.bool(true),
+              "deadline" -> JsonWriter.num(s2.deadlineMillis)
+            )), true))
+
       case "status" =>
         IO.pure((next, Some(reply(op, 0L,
           "ok"              -> JsonWriter.bool(true),
@@ -200,6 +240,7 @@ object Serve:
           "declarations"    -> JsonWriter.num(state.declarations.toLong),
           "quotInitialized" -> JsonWriter.bool(state.env.quotInitialized),
           "maxSteps"        -> JsonWriter.num(state.maxSteps),
+          "deadline"        -> JsonWriter.num(state.deadlineMillis),
           "served"          -> JsonWriter.num(state.served)
         )), true))
 
@@ -218,7 +259,7 @@ object Serve:
     */
   def run(o: Options, bytes: String => fs2.Stream[IO, Byte]): IO[cats.effect.ExitCode] =
     val profile = Options.profileOf(o)
-    val start   = State(profile, Environment.empty, o.maxSteps, 0L)
+    val start   = State(profile, Environment.empty, o.maxSteps, 0L, Main.timeLimitOf(o))
 
     val preload: IO[State] =
       o.files.headOption.fold(IO.pure(start)) { f =>

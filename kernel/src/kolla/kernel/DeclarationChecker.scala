@@ -10,7 +10,9 @@ final class DeclarationChecker(
     /** The reduction budget each declaration gets. Lowering it turns a check
       * that does not finish into a report of what it was doing (K21).
       */
-    val maxSteps: Long = TypeChecker.defaultMaxSteps
+    val maxSteps: Long = TypeChecker.defaultMaxSteps,
+    /** A wall-clock bound each declaration gets, alongside `maxSteps`. */
+    val timeLimit: Option[TypeChecker.TimeLimit] = None
 ):
 
   /** `check_no_metavar_no_fvar`. */
@@ -29,7 +31,7 @@ final class DeclarationChecker(
     tc.ensureSort(sort, v.tpe)
 
   private def checker(env: Environment, safety: DefinitionSafety): TypeChecker =
-    new TypeChecker(env, profile, safety, LocalContext.empty, maxSteps)
+    new TypeChecker(env, profile, safety, LocalContext.empty, maxSteps, timeLimit)
 
   private def mismatch(n: Name, given0: Expr, expected: Expr, tc: TypeChecker): Nothing =
     throw new KernelException(

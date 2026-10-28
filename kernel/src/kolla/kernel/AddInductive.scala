@@ -28,7 +28,11 @@ object AddInductive:
       /** The reduction budget, forwarded so `--max-steps` applies to an
         * inductive block as it does to any other declaration (K21).
         */
-      maxSteps: Long = TypeChecker.defaultMaxSteps
+      maxSteps: Long = TypeChecker.defaultMaxSteps,
+      /** A wall-clock bound, forwarded with `maxSteps` so that it reaches
+        * every declaration the same way (K21, S2).
+        */
+      timeLimit: Option[TypeChecker.TimeLimit] = None
   ): AddInductiveResult =
     // Reject metavariables, free variables and references to auxiliary types.
     decl.types.foreach { t =>
@@ -40,11 +44,11 @@ object AddInductive:
 
     val res      = new ElimNestedInductive(env, decl).apply()
     val nnested  = res.numNested
-    val auxCheck = new InductiveChecker(env, res.auxDecl, profile, nnested, maxSteps).run()
+    val auxCheck = new InductiveChecker(env, res.auxDecl, profile, nnested, maxSteps, timeLimit).run()
 
     if nnested == 0 then
       AddInductiveResult(auxCheck.env, auxCheck.inductives, auxCheck.constructors, auxCheck.recursors, 0)
-    else restore(env, decl, profile, res, auxCheck.env, maxSteps)
+    else restore(env, decl, profile, res, auxCheck.env, maxSteps, timeLimit)
 
   private def checkNoMetavarNoFvar(n: Name, e: Expr): Unit =
     if e.hasExprMVar then
@@ -58,7 +62,8 @@ object AddInductive:
       profile: KernelProfile,
       res: ElimNestedResult,
       auxEnv: Environment,
-      maxSteps: Long
+      maxSteps: Long,
+      timeLimit: Option[TypeChecker.TimeLimit]
   ): AddInductiveResult =
     val safety     = if decl.isUnsafe then DefinitionSafety.Unsafe else DefinitionSafety.Safe
     val allIndNames = decl.types.map(_.name)
@@ -131,13 +136,13 @@ object AddInductive:
     // The parametric arguments `Ds` of a nested occurrence `I Ds` do not appear
     // in the auxiliary declaration, so they would otherwise never be checked.
     // They are checked last, in the restored environment.
-    val paramTc = new TypeChecker(newEnv, profile, safety, res.paramsLctx, maxSteps)
+    val paramTc = new TypeChecker(newEnv, profile, safety, res.paramsLctx, maxSteps, timeLimit)
     res.aux2nested.values.foreach(nested => paramTc.check(nested, decl.levelParams))
 
     // Re-check what `restoreNested` rewrote. The checks above are expected to
     // make this redundant; it keeps a mistake in the restoration from reaching
     // the environment.
-    val tc = new TypeChecker(newEnv, profile, safety, LocalContext.empty, maxSteps)
+    val tc = new TypeChecker(newEnv, profile, safety, LocalContext.empty, maxSteps, timeLimit)
     constructors.foreach(c => tc.check(c.toConstantVal.tpe, decl.levelParams))
     newRecNames.foreach { recName =>
       val info = newEnv.get(recName)

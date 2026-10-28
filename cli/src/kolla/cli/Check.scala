@@ -128,10 +128,12 @@ object Check:
       trace: Option[(List[Name], Option[Long]) => IO[Unit]] = None,
       maxSteps: Long = kolla.kernel.TypeChecker.defaultMaxSteps,
       /** The environment to check on top of; see `Serve`. */
-      initial: kolla.kernel.Environment = kolla.kernel.Environment.empty
+      initial: kolla.kernel.Environment = kolla.kernel.Environment.empty,
+      /** A wall-clock bound per declaration, alongside `maxSteps`. */
+      timeLimit: Option[kolla.kernel.TypeChecker.TimeLimit] = None
   ): IO[Either[Failure, Result]] =
     IO.monotonic.flatMap { start =>
-      val replay  = new Replay(profile, true, Replay.defaultHoistWindow, check, cache, maxSteps, initial)
+      val replay  = new Replay(profile, true, Replay.defaultHoistWindow, check, cache, maxSteps, initial, timeLimit)
       var tally   = ReplayTally()
       var read    = 0L
       var seen    = 0L
