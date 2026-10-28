@@ -1647,6 +1647,36 @@ accompanying document said "Lean proves" a result while the theorem's proof was
 `sorry` — which the source showed plainly, but only because the `sorry` happened
 to be in the file someone thought to open.
 
+### K22 — what the kernel may be used from several threads for
+
+`TypeChecker` says of itself that it is single-threaded by construction: one
+per declaration, and only the checking thread touches its caches and counters.
+The other half of the claim is that everything shared is immutable — `Expr`
+(its data word is computed in the constructor, not memoised later), `Name`,
+`Level`, `ConstantInfo` and `Environment`, which is persistent. Several
+checkers may therefore read the same declarations at once, which is what any
+parallel checking would rest on. `ConcurrencySuite` in `difftest` exercises it:
+eight real threads, released together by a latch, replaying one export and
+checking against one environment, each result compared with a sequential run.
+
+Real threads rather than fibers, because a synchronous `IO` runs to completion
+on one carrier thread, so a fiber-based test can pass without two things ever
+having run at once.
+
+Two limits of that suite are worth stating. It is an agreement test, not a race
+detector: with the mutable state shared it would be free to pass. The
+deterministic half is the one that asserts two checkers doing the same work
+report the same counts, since a counter or cache held in common makes the
+second cheaper than the first. That catches a globalised counter — verified by
+making `defEqCalls` one, which fails the test — and does not catch a globalised
+`whnfCache`, which the fixtures exercise too lightly to show up. Neither is a
+reason to trust a future parallel driver without measuring it.
+
+`NameGenerator` is per `TypeChecker` and starts from zero, so two checkers mint
+the same fresh variable names. That is safe only because neither can reach the
+other's local context, which is a sharper statement than K6's "globally
+unique": the names are unique within one checker.
+
 ## Serving
 
 ### S1 — a resident environment answers from where the last question left off
