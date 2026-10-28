@@ -27,6 +27,12 @@ The checking itself is `kolla.leanexport.Replay`, a pure stepper shared by all
 three frontends; they differ only in how they interleave its steps — a fiber
 yield, an animation frame, a blocking loop.
 
+`.claude/skills/` holds two skills for an agent driving kolla:
+[`kolla-serve`](.claude/skills/kolla-serve/SKILL.md) for checking candidates
+against a resident kernel, and
+[`kolla-audit`](.claude/skills/kolla-audit/SKILL.md) for finding out what a
+declaration rests on.
+
 ## As a library
 
 **Nothing is published yet.** `repo1.maven.org` has no `kolla-kernel_3`, there
@@ -176,7 +182,14 @@ sorryAx rests on 1 axiom(s), reached through 4 constant(s)
 
 Exit 0 when nothing unusual, 1 when a declaration rests on `sorryAx` or on an
 axiom outside the three Lean ships, 2 when the name is not in the file. A
-verdict outranks a misspelling: 1 wins over 2. The point is dependencies: a `sorry` in the
+verdict outranks a misspelling: 1 wins over 2.
+
+`--require-axioms propext,Classical.choice,Quot.sound` replaces that judgement
+with a set you state, and an empty list permits nothing. "Nothing unusual" says
+depending on Lean's three axioms is unremarkable, which is true of ordinary
+mathematics and not something to assume on a caller's behalf;
+`ComparatorChallenges/*.json` states its `permitted_axioms` for the same
+reason. docs/semantics.md S3. The point is dependencies: a `sorry` in the
 declaration you are reading is visible in the source, and one in a dependency
 is not — nor is either, when all you have is an export. docs/semantics.md A1.
 
@@ -203,12 +216,25 @@ The operations are `load`, `check`, `axioms`, `type`, `eval`, `deadline`,
 `status` and `quit`. A file named on the command line is preloaded, so `kolla
 --serve init.export` answers immediately.
 
+`gate <name> <a,b,c>` answers whether a declaration rests on anything outside
+the set you name, which is the criterion a comparator challenge states; an
+empty set permits nothing. `names <prefix>`, `mentions <name>` and `unfold
+<name>` read the environment, answering what you would otherwise go back to
+Lean for — `mentions` scans every declaration's references, so it costs 2.2
+seconds over `init` and proportionally more on a library.
+
 `deadline <ms>` bounds each declaration by the clock, and `deadline 0` removes
 it. A caller cannot convert reduction steps into milliseconds, which is what
 `--max-steps` offers, so this is the budget it can actually state. Every reply
 carries `reason`: the first declaration that did not pass, with what stopped
 it, so a budget that runs out names the constant the reduction was in rather
 than only adding to a count. docs/semantics.md S2.
+
+Two skills in `.claude/skills/` describe this for an agent driving kolla rather
+than a person reading a manual: `kolla-serve` is the session — the requests, the
+deadline, and how to read a reply — and `kolla-audit` is what a declaration
+rests on and why grepping for `sorry` is not the same question. A coding agent
+with that directory on its path picks them up by name.
 
 `check` is the one an iterating caller wants: it checks only the declarations
 the base does not already hold and keeps nothing, so a candidate costs its own
