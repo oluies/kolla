@@ -203,6 +203,10 @@ enum Declaration:
     case DefnDecl(v)             => List(v.toConstantVal.name)
     case ThmDecl(v)              => List(v.toConstantVal.name)
     case OpaqueDecl(v)           => List(v.toConstantVal.name)
-    case QuotDecl                => Nil
+    // The four constants `add_quot` installs. Empty would mean no selector can
+    // reach the declaration: `Replay` asks whether any of a step's names is
+    // selected, and none of an empty list is, so a text-format `#QUOT` was
+    // never checked and its failure to install was swallowed with it.
+    case QuotDecl                => Quot.declarations.map(_.toConstantVal.name)
     case MutualDefnDecl(ds)      => ds.map(_.toConstantVal.name)
     case InductDecl(_, _, ts, _) => ts.flatMap(t => t.name :: t.ctors.map(_.name))

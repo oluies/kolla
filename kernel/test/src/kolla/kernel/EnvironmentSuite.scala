@@ -97,7 +97,12 @@ class EnvironmentSuite extends munit.FunSuite:
       List("T", "T.mk")
     )
     assert(!Declaration.QuotDecl.anyUnsafe)
-    assertEquals(Declaration.QuotDecl.declNames, Nil)
+    // Not empty: an empty list is selected by no predicate, so the quotient
+    // declaration could not be checked at all. See docs/semantics.md X6.
+    assertEquals(
+      Declaration.QuotDecl.declNames.map(_.toString),
+      List("Quot", "Quot.mk", "Quot.lift", "Quot.ind")
+    )
   }
 
   test("a nested recursor's major premise is not the block's own type") {

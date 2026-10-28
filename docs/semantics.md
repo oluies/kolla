@@ -238,8 +238,37 @@ own constructors, and the `#IND` grammar has no slot for sibling types
 (`val.all` is never written). A mutual inductive block therefore cannot be
 reconstructed: checking the first type fails because its constructors mention a
 type that has not been declared. `difftest/toolchains.txt` excludes the toolchains
-that emit this format; the reader still accepts it, which is enough for
-single-type inductives.
+that emit this format; the reader still accepts it.
+
+Not even a single-type inductive can be *checked* from a text export, which
+this said until `TextV1Suite` measured it. `Replay` sends an
+`ExportItem.Decl(InductDecl)` to `DeclarationChecker.add`, which throws
+`inductive declarations are not implemented yet`, so the declaration is
+rejected. The admit path does better: `Replay.admit` routes it to
+`AddInductive.add`, which derives the recursor the file does not carry (P18),
+so an unselected text inductive lands in the environment complete. Checking one
+would mean sending the same declaration to `AddInductive.add` on the checked
+path too; nothing but the throw stands in the way.
+
+### X6 — a declaration with no names is selected by nothing
+
+`Replay` asks whether any of a step's names is selected, and none of an empty
+list is, under any predicate. `Declaration.QuotDecl.declNames` was `Nil`, so a
+text-format `#QUOT` could not be checked however the selector was set: it took
+the admit path every time, was reported as carried over with no names at all,
+and when `Quot.add` threw there — it needs `Eq` in the environment — the `Try`
+around the recover swallowed the failure and left `quotInitialized` false. That
+is P21's silent failure, reached by a different road: quotient reduction off,
+and nothing said.
+
+The names are now the four constants `add_quot` installs, so the declaration is
+selectable, checkable, and counted. On the committed text-v1 literal the
+verdict count went from four to eight for this reason. An export's `#QUOT` is
+still only as installable as its environment: with no `Eq` it is a reported
+rejection, which is the point — before, it was nothing.
+
+The NDJSON path never had the problem, because a `QuotInfo`'s name is the
+constant's own.
 
 ### X5 — text v1 has no reducibility hints
 
