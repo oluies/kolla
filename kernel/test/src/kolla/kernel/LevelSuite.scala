@@ -135,10 +135,29 @@ class LevelSuite extends munit.ScalaCheckSuite:
     }
   }
 
-  property("max is associative up to equivalence") {
-    forAll { (a: Level, b: Level, c: Level) =>
-      Level.isEquiv(Level.max(Level.max(a, b), c), Level.max(a, Level.max(b, c)))
+  property("max is associative up to equivalence on imax-free levels") {
+    forAll { (a: Generators.NoIMax, b: Generators.NoIMax, c: Generators.NoIMax) =>
+      Level.isEquiv(
+        Level.max(Level.max(a.level, b.level), c.level),
+        Level.max(a.level, Level.max(b.level, c.level))
+      )
     }
+  }
+
+  test("max is not associative up to equivalence once imax is involved") {
+    // What the property above used to sample, and fail on about one triple in
+    // 250. A raw `Max` rather than the smart constructor, as the generator
+    // builds (L2), over an `imax` whose domination `geq` will not see (L5).
+    val w = Level.Param(Name.mkSimple("w"))
+    val x = Level.IMax(w, Level.one)
+    val a = Level.Max(Level.zero, Level.zero)
+    val b = Level.Succ(x)
+    val left  = Level.max(Level.max(a, b), x)
+    val right = Level.max(a, Level.max(b, x))
+    assert(!Level.isEquiv(left, right), clue(s"$left  vs  $right"))
+    // The two normal forms differ by a `w` the left side does not drop.
+    assertEquals(Level.normalize(left).toString, "max (succ (max w 1)) w")
+    assertEquals(Level.normalize(right).toString, "succ (max w 1)")
   }
 
   property("max dominates its arguments on imax-free levels") {

@@ -96,6 +96,29 @@ through `is_geq`, which renormalizes both sides. It is incomplete:
 `geq(succ (imax u v), imax u v)` is `false`, because the `is_imax(l2)` branch demands
 `geq(l1, u) && geq(l1, v)`.
 
+### L7 — `max` is not associative up to equivalence
+
+`max (max a b) c` and `max a (max b c)` are not always `isEquiv`. The smallest
+case found is a raw `Max(0, 0)` for `a` — as the generators build, not the
+smart constructor (L2) — with `b = succ (imax w 1)` and `c = imax w 1`. The
+normal forms are `max (succ (max w 1)) w` and `succ (max w 1)`: the left side
+keeps a `w` that every value of the right side dominates, which `geq` will not
+say (L5).
+
+This was a property in `LevelSuite` asserting associativity over the
+unrestricted generator. It holds on imax-free levels, where 20,000 sampled
+triples produced no counterexample, and fails on about one triple in 250 of the
+unrestricted one — so roughly a third of the runs it was not served from Mill's
+cache for. It had been passing because the suite rarely re-runs. The property
+now says "on imax-free levels" and the counterexample is pinned beside it.
+
+What is **not** established is whether Lean agrees. `Level.geq` is a port of
+`lean::is_geq` with the same conservatism (L5), so the incompleteness is
+expected to be shared, but no one has put a level of this shape through Lean or
+nanoda and compared. Until someone does, this is kolla's behaviour recorded,
+not a divergence either way. The way to settle it is a corpus carrying such a
+level, which is what `difftest` is for.
+
 ### L6 — level metavariables
 
 `Level.MVar` exists (`src/Lean/Level.lean:95`) even though no export file contains one.
