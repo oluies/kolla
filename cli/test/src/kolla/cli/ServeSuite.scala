@@ -243,6 +243,58 @@ class ServeSuite extends CatsEffectSuite:
     yield assert(out.contains("\"reason\":null"), clue(out))
   }
 
+  test("names lists by prefix, and says how many there were") {
+    for
+      base        <- loaded
+      (_, all, _) <- ask(base, "names ")
+      (_, one, _) <- ask(base, "names Q")
+      (_, none, _) <- ask(base, "names Zzz")
+    yield
+      assert(all.contains("\"total\":2"), clue(all))
+      assert(one.contains("\"names\":[\"Q\"]"), clue(one))
+      assert(none.contains("\"total\":0"), clue(none))
+  }
+
+  test("mentions finds the declarations that name one") {
+    for
+      base         <- loaded
+      (_, out, _)  <- ask(base, "mentions P")
+      (_, miss, _) <- ask(base, "mentions Nope")
+    yield
+      // Q is `P`, so it mentions it; P mentions nothing.
+      assert(out.contains("\"names\":[\"Q\"]"), clue(out))
+      assert(miss.contains("\"ok\":false"), clue(miss))
+  }
+
+  test("unfold gives a definition's value, and refuses an axiom") {
+    for
+      base         <- loaded
+      (_, out, _)  <- ask(base, "unfold Q")
+      (_, ax, _)   <- ask(base, "unfold P")
+      (_, miss, _) <- ask(base, "unfold Nope")
+    yield
+      assert(out.contains("\"value\":\"P\""), clue(out))
+      assert(ax.contains("no value to unfold"), clue(ax))
+      assert(miss.contains("unknown constant"), clue(miss))
+  }
+
+  test("gate states the permitted set and what fell outside it") {
+    for
+      base          <- loaded
+      (_, inside, _) <- ask(base, "gate Q P")
+      (_, out, _)    <- ask(base, "gate Q")
+      (_, empty, _)  <- ask(base, "gate Q ")
+      (_, bad, go)   <- ask(base, "gate")
+    yield
+      assert(inside.contains("\"ok\":true"), clue(inside))
+      assert(inside.contains("\"notPermitted\":[]"), clue(inside))
+      // No set named is the empty set, which permits nothing.
+      assert(out.contains("\"ok\":false"), clue(out))
+      assert(out.contains("\"notPermitted\":[\"P\"]"), clue(out))
+      assert(empty.contains("\"notPermitted\":[\"P\"]"), clue(empty))
+      assert(go && bad.contains("\"ok\":false"), clue(bad))
+  }
+
   test("quit ends the session") {
     for (_, out, go) <- ask(start, "quit")
     yield

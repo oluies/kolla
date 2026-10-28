@@ -40,7 +40,9 @@ final case class Options(
     version: Boolean = false,
     listProfiles: Boolean = false,
     serve: Boolean = false,
-    maxTimeMillis: Option[Long] = None
+    maxTimeMillis: Option[Long] = None,
+    /** The axioms a `--axioms` run accepts, if the caller named them. */
+    requireAxioms: Option[Set[String]] = None
 )
 
 object Options:
@@ -77,8 +79,12 @@ object Options:
       |                  whether it was left as sorry; repeatable
       |  --eval <term>   reduce a term against the export's environment and
       |                  print it, instead of checking the file
+      |  --require-axioms <a,b,c>
+      |                  with --axioms, exit 1 unless every declaration rests
+      |                  only on these; an empty list permits none
       |  --serve         keep the environment and answer requests on stdin:
-      |                  load, check, axioms, type, eval, status, quit
+      |                  load, check, axioms, gate, type, unfold, names,
+      |                  mentions, eval, deadline, status, quit
       |  --profiles      list the profiles and exit
       |  -h, --help      this message
       |  --version       the version and the default profile
@@ -137,6 +143,8 @@ object Options:
       case "--version" :: _          => Right(o.copy(version = true))
       case "--profiles" :: _         => Right(o.copy(listProfiles = true))
       case "--serve" :: t            => go(t, o.copy(serve = true))
+      case "--require-axioms" :: v :: t =>
+        go(t, o.copy(requireAxioms = Some(v.split(",").map(_.trim).filter(_.nonEmpty).toSet)))
       case "--only" :: v :: t        => go(t, o.copy(only = o.only :+ v))
       case "--check" :: v :: t       => go(t, o.copy(checkOnly = o.checkOnly :+ v))
       case "--cache" :: v :: t       => go(t, o.copy(cache = Some(v)))
@@ -166,6 +174,8 @@ object Options:
       // so it cannot pass them by returning early.
       else if o.serve && o.files.length > 1 then
         Left("--serve takes at most one export file to preload")
+      else if o.requireAxioms.isDefined && o.axiomsOf.isEmpty && !o.serve then
+        Left("--require-axioms needs --axioms, which names what to gate")
       else if o.serve && (o.evalTerm.isDefined || o.axiomsOf.nonEmpty) then
         Left("--serve answers eval and axioms as requests, not as flags")
       // A seeded replay cannot carry a digest cache, and `Replay` refuses the

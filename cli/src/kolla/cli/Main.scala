@@ -60,20 +60,39 @@ object Main extends IOApp:
                      if o.json then ReplayJson.axioms(c.declaration.toString,
                                                       c.axioms.map(_.toString), c.hasSorry,
                                                       c.unusual.map(_.toString), profile.label)
-                     else c.render.stripSuffix("\n")
+                     else
+                       val extra = o.requireAxioms
+                         .map(ps => kolla.kernel.Axioms.within(c, ps.map(Name.parse)))
+                         .filter(_.nonEmpty)
+                         .map(ns => s"\n  not permitted: ${ns.mkString(", ")}")
+                         .getOrElse("")
+                       c.render.stripSuffix("\n") + extra
                    )
                  }
-          yield axiomExit(found, unknown.nonEmpty)
+          yield axiomExit(found, unknown.nonEmpty, o.requireAxioms.map(_.map(Name.parse)))
       }
 
   /** The exit code for a set of closures.
     *
     * A verdict outranks a misspelling: a closure resting on `sorryAx` or on an
-    * axiom outside Lean's trust base is the answer even when another name on
+    * axiom outside what is permitted is the answer even when another name on
     * the command line was not in the file.
+    *
+    * `permitted` is the caller's own set when it named one with
+    * `--require-axioms`, and otherwise the three Lean ships. Naming it is not
+    * the same as accepting the default: an empty set permits nothing, which is
+    * how a caller asks for a proof that rests on no axiom at all.
     */
-  private[cli] def axiomExit(found: List[kolla.kernel.Axioms.Closure], unknown: Boolean): ExitCode =
-    if found.exists(c => c.hasSorry || c.unusual.nonEmpty) then ExitCode(1)
+  private[cli] def axiomExit(
+      found: List[kolla.kernel.Axioms.Closure],
+      unknown: Boolean,
+      permitted: Option[Set[Name]] = None
+  ): ExitCode =
+    val outside: kolla.kernel.Axioms.Closure => Boolean = c =>
+      permitted match
+        case Some(ps) => kolla.kernel.Axioms.within(c, ps).nonEmpty
+        case None     => c.hasSorry || c.unusual.nonEmpty
+    if found.exists(outside) then ExitCode(1)
     else if unknown then ExitCode(2)
     else ExitCode.Success
 

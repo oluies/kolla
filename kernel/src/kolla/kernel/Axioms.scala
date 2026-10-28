@@ -27,6 +27,17 @@ object Axioms:
   val standard: Set[Name] =
     Set(Name.parse("propext"), Name.parse("Classical.choice"), Name.parse("Quot.sound"))
 
+  /** Whether `closure` rests on nothing outside `permitted`.
+    *
+    * The gate a caller actually wants, and the criterion a comparator
+    * challenge states: `permitted_axioms` there is the three Lean ships, and a
+    * candidate resting on anything else — `sorryAx` first among them — does
+    * not count. Stating the set is the point: "no unusual axioms" is a
+    * judgement about which axioms are ordinary, and a caller may not share it.
+    */
+  def within(closure: Closure, permitted: Set[Name]): Vector[Name] =
+    closure.axioms.filterNot(permitted.contains)
+
   /** What `name` rests on. `axioms` is sorted, so two runs compare. */
   final case class Closure(declaration: Name, axioms: Vector[Name], constants: Int):
     /** The declaration has no proof: some part of it was left as `sorry`. */
@@ -74,6 +85,13 @@ object Axioms:
       Right(Closure(name, found.toVector.sortBy(_.toString), seen.size))
 
   /** Every constant an declaration's type and value mention. */
+  /** What `info` names: every constant its type, value and rules reach.
+    *
+    * Public because premise selection asks the same question the axiom walk
+    * does, one declaration deep rather than transitively.
+    */
+  def referencesOf(info: ConstantInfo): Set[Name] = references(info)
+
   private def references(info: ConstantInfo): Set[Name] =
     val out = mutable.HashSet.empty[Name]
     def walk(e: Expr): Unit =

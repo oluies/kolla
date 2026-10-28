@@ -32,6 +32,11 @@ object Serve:
     def declarations: Int = env.size
     def deadlineMillis: Long = timeLimit.fold(0L)(_.nanos / 1000000L)
 
+  /** How many names a listing answers with. A caller asking for a prefix of
+    * Mathlib wants a handle on it, not 729,263 of them in one line.
+    */
+  val maxNames: Int = 200
+
   /** Whether every declaration of a replay went through the kernel.
     *
     * `Replay` carries a rejected declaration into the environment unchecked so
@@ -232,6 +237,84 @@ object Serve:
               "ok"       -> JsonWriter.bool(true),
               "deadline" -> JsonWriter.num(s2.deadlineMillis)
             )), true))
+
+      case "names" =>
+        timed(IO {
+          val hits = state.env.names.filter(_.toString.startsWith(arg))
+          (hits.length, hits.take(Serve.maxNames))
+        }).map { (pair, took) =>
+          val (total, shown) = pair
+          (next, Some(reply(op, took,
+            "ok"    -> JsonWriter.bool(true),
+            "prefix" -> JsonWriter.str(arg),
+            "total" -> JsonWriter.num(total.toLong),
+            "names" -> JsonWriter.arr(shown.map(n => JsonWriter.str(n.toString)))
+          )), true)
+        }
+
+      case "mentions" =>
+        named { n =>
+          timed(IO {
+            if !state.env.contains(n) then None
+            else
+              val hits = state.env.declarations.collect {
+                case i if Axioms.referencesOf(i).contains(n) => i.name
+              }
+              Some((hits.length, hits.take(Serve.maxNames)))
+          }).map { (found, took) =>
+            found match
+              case None => (next, Some(failed(op, took, s"unknown constant '$n'")), true)
+              case Some((total, shown)) =>
+                (next, Some(reply(op, took,
+                  "ok"    -> JsonWriter.bool(true),
+                  "name"  -> JsonWriter.str(n.toString),
+                  "total" -> JsonWriter.num(total.toLong),
+                  "names" -> JsonWriter.arr(shown.map(m => JsonWriter.str(m.toString)))
+                )), true)
+          }
+        }
+
+      case "unfold" =>
+        named { n =>
+          timed(IO(state.env.find(n))).map { (info, took) =>
+            info match
+              case None => (next, Some(failed(op, took, s"unknown constant '$n'")), true)
+              case Some(i) =>
+                i.value(allowOpaque = true) match
+                  case None =>
+                    (next, Some(failed(op, took, s"'$n' has no value to unfold")), true)
+                  case Some(v) =>
+                    (next, Some(reply(op, took,
+                      "ok"    -> JsonWriter.bool(true),
+                      "name"  -> JsonWriter.str(n.toString),
+                      "value" -> JsonWriter.str(Pretty.expr(v, Int.MaxValue)),
+                      "type"  -> JsonWriter.str(Pretty.expr(i.tpe, Int.MaxValue))
+                    )), true)
+          }
+        }
+
+      case "gate" =>
+        // The comparator's criterion: a named set, and what falls outside it.
+        if arg.isEmpty then
+          IO.pure((next, Some(failed(op, 0L, "gate needs a declaration, then the axioms it may rest on")), true))
+        else
+          val parts     = arg.split("\\s+").toList
+          val target    = Name.parse(parts.head)
+          val permitted = parts.tail.flatMap(_.split(",")).map(_.trim).filter(_.nonEmpty).map(Name.parse).toSet
+          timed(IO(Axioms.of(state.env, target))).map { (closure, took) =>
+            closure match
+              case Left(why) => (next, Some(failed(op, took, why)), true)
+              case Right(c) =>
+                val outside = Axioms.within(c, permitted)
+                (next, Some(reply(op, took,
+                  "ok"           -> JsonWriter.bool(outside.isEmpty),
+                  "declaration"  -> JsonWriter.str(c.declaration.toString),
+                  "permitted"    -> JsonWriter.arr(permitted.toVector.map(_.toString).sorted.map(JsonWriter.str)),
+                  "notPermitted" -> JsonWriter.arr(outside.map(m => JsonWriter.str(m.toString))),
+                  "sorry"        -> JsonWriter.bool(c.hasSorry)
+                )), true)
+          }
+        end if
 
       case "status" =>
         IO.pure((next, Some(reply(op, 0L,

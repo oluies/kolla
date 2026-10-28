@@ -1779,6 +1779,34 @@ A session reports the first declaration that did not pass as `reason` on the
 of rejections says a candidate failed, and the reason says it ran out of time
 in `Set.ofPred` rather than being ill-typed.
 
+### S3 — the gate, and reading the environment without Lean
+
+Three additions turn the session from a checker into something a caller can
+interrogate.
+
+`gate <name> <a,b,c>` answers whether a declaration rests on anything outside
+the set the caller named, and `--require-axioms` is the same question on the
+command line. `Axioms.unusual` already separated Lean's three from the rest,
+but that separation is a judgement: it says depending on `propext`,
+`Classical.choice` and `Quot.sound` is unremarkable, which is true of ordinary
+mathematics and not something a caller has to accept. A comparator challenge
+states its `permitted_axioms` explicitly and that is the right shape, so
+`Axioms.within` takes the set. An empty set permits nothing, which is how a
+caller asks for a proof resting on no axiom at all; naming no set on a `gate`
+request means exactly that, rather than falling back to the default.
+
+`names <prefix>`, `mentions <name>` and `unfold <name>` read the environment.
+They answer what a caller would otherwise go back to Lean for: what is
+declared under a prefix, which declarations reach a given constant, and what a
+definition's value is. `mentions` is a scan of every declaration's references,
+so it costs with the environment rather than with the answer: 2.2 seconds over
+`init`'s 59,349 declarations, and proportionally more on a library. A listing
+answers with at most `Serve.maxNames` names and the total it found, because a
+prefix of Mathlib matches more than a line should carry.
+
+`Axioms.referencesOf` is the one-declaration-deep version of the walk the axiom
+closure does transitively, and is public for this.
+
 ## Frontends
 
 ### F1 — the checking is one implementation, the driver loop is three

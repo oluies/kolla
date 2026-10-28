@@ -160,6 +160,14 @@ class OptionsSuite extends munit.FunSuite:
     assert(ok("--trace", "--progress", "a").trace)
   }
 
+  test("--require-axioms parses a list and needs something to gate") {
+    assertEquals(ok("a").requireAxioms, None)
+    assertEquals(ok("--axioms", "A", "--require-axioms", "propext, Quot.sound", "a").requireAxioms,
+                 Some(Set("propext", "Quot.sound")))
+    assertEquals(ok("--axioms", "A", "--require-axioms", "", "a").requireAxioms, Some(Set.empty[String]))
+    assert(err("--require-axioms", "propext", "a").contains("needs --axioms"))
+  }
+
   test("--max-time takes milliseconds and has to be positive") {
     assertEquals(ok("a").maxTimeMillis, None)
     assertEquals(ok("--max-time", "250", "a").maxTimeMillis, Some(250L))
