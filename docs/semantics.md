@@ -1729,6 +1729,13 @@ terms that do not parse are all expected from a caller that generates its
 requests. Standard input is the protocol, so `load -` is refused rather than
 read.
 
+That has to hold for a request that *throws* as well as one that returns a
+refusal, or a single bad request costs the caller the minutes it spent loading.
+Two things arrange it: the replay is deferred, so a reader that throws while
+being built fails the `IO` rather than throwing out of a method whose type says
+it cannot, and the session loop attempts each request and answers a failure
+with the state from before it.
+
 ### S2 — a budget in steps is not a budget a caller can state
 
 `--max-steps` bounds the work and reports where it went (K21), which is what
@@ -1754,9 +1761,24 @@ at all: the committed nested fixture's declarations take between 256 and 1024
 steps each, and at an earlier default of 4096 the clock was never read for any
 of them, so `--max-time 1` on that file reported everything accepted.
 
-One `TimeLimit` serves a whole run. Each `TypeChecker` reads the clock once when
-it is built, so the bound is per declaration and not for the run as a whole,
-which is the same scope `maxSteps` has.
+One `TimeLimit` serves a whole run, and the window lives in the instance: the
+first `TypeChecker` built from one calls `begin`, and `fresh` opens another.
+The scope of a budget is therefore the scope of its instance, and the callers
+that correspond to one declaration take a fresh one — `DeclarationChecker`
+when `add` or `addInfo` is entered, and `AddInductive.add` for a whole block.
+
+Recording the start in the `TypeChecker` instead, which is what this did at
+first, bounds a checker rather than a declaration: `InductiveChecker.tc` is a
+`def` with twenty uses, so a block restarted its budget twenty times and could
+run twenty multiples of it. Sharing one instance for the whole run is the
+opposite error — the first declaration would spend the window for all of them.
+Both are mutation-checked in `TimeLimitSuite`.
+
+A caller states milliseconds, and above `TypeChecker.maxTimeMillis` the product
+with a million wraps: 18,446,744,073,710 ms came out as 0.45 ms, and larger
+values wrapped negative and tripped the `require` inside the kernel, which
+ended a session. Both `--max-time` and the `deadline` request refuse the
+out-of-range value instead of multiplying it.
 
 Setting a limit also turns on the per-constant tables that `maxSteps` turns on
 (K21), because naming the constant the reduction was in is the whole value of

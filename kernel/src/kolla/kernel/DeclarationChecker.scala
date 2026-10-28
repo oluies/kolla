@@ -30,8 +30,19 @@ final class DeclarationChecker(
     val sort = tc.check(v.tpe, v.levelParams)
     tc.ensureSort(sort, v.tpe)
 
+  /** The limit for the declaration being checked now.
+    *
+    * One window per declaration, not per `TypeChecker`: `add` and `addInfo`
+    * build several for one declaration, and a budget that restarted for each
+    * would bound none of them. Set by `declaration`. See docs/semantics.md S2.
+    */
+  private var current: Option[TypeChecker.TimeLimit] = timeLimit
+
+  /** Opens a fresh window for the declaration about to be checked. */
+  private def openWindow(): Unit = current = timeLimit.map(_.fresh())
+
   private def checker(env: Environment, safety: DefinitionSafety): TypeChecker =
-    new TypeChecker(env, profile, safety, LocalContext.empty, maxSteps, timeLimit)
+    new TypeChecker(env, profile, safety, LocalContext.empty, maxSteps, current)
 
   private def mismatch(n: Name, given0: Expr, expected: Expr, tc: TypeChecker): Nothing =
     throw new KernelException(
@@ -134,7 +145,9 @@ final class DeclarationChecker(
     newEnv
 
   /** `environment::add(declaration, check)`. */
-  def add(env: Environment, d: Declaration, check: Boolean = true): Environment = d match
+  def add(env: Environment, d: Declaration, check: Boolean = true): Environment =
+    openWindow()
+    d match
     case Declaration.AxiomDecl(v)       => addAxiom(env, v, check)
     case Declaration.DefnDecl(v)        => addDefinition(env, v, check)
     case Declaration.ThmDecl(v)         => addTheorem(env, v, check)
@@ -155,7 +168,9 @@ final class DeclarationChecker(
     * consistency not yet validated, so `check` reports whether an entry was
     * fully checked.
     */
-  def addInfo(env: Environment, info: ConstantInfo): (Environment, CheckOutcome) = info match
+  def addInfo(env: Environment, info: ConstantInfo): (Environment, CheckOutcome) =
+    openWindow()
+    info match
     case ConstantInfo.AxiomInfo(v)  => (addAxiom(env, v), CheckOutcome.Checked)
     case ConstantInfo.DefnInfo(v)   => (addDefinition(env, v), CheckOutcome.Checked)
     case ConstantInfo.ThmInfo(v)    => (addTheorem(env, v), CheckOutcome.Checked)

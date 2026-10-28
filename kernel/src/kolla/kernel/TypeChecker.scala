@@ -70,8 +70,7 @@ final class TypeChecker(
     */
   private val diagnosing    = maxSteps != TypeChecker.defaultMaxSteps || timeLimit.isDefined
 
-  /** When this declaration started, by the limit's own clock. */
-  private val startedAt: Long = timeLimit.fold(0L)(_.now())
+  timeLimit.foreach(_.begin())
 
   private val unfolded      = mutable.HashMap.empty[Name, Long]
   private val missed        = mutable.HashMap.empty[Name, Long]
@@ -123,7 +122,7 @@ final class TypeChecker(
         s"exceeded $maxSteps reduction steps\n$work"
       )
     timeLimit.foreach { l =>
-      if steps % l.every == 0L && l.now() - startedAt >= l.nanos then
+      if steps % l.every == 0L && l.exceeded then
         throw KernelException(
           ExceptionKind.DeepRecursion,
           s"exceeded the ${l.nanos / 1000000L} ms budget after $steps reduction steps\n$work"
@@ -1339,6 +1338,30 @@ object TypeChecker:
   final class TimeLimit(val nanos: Long, val now: () => Long, val every: Long = defaultClockEvery):
     require(nanos > 0, "a time limit must be positive")
     require(every > 0, "a clock interval must be positive")
+
+    private var startedAt: Long = Long.MinValue
+
+    /** Starts the window, once. Every `TypeChecker` built from this instance
+      * calls it, and the first call is the one that counts: a declaration
+      * whose checking is spread over several checkers — an inductive block
+      * builds more than twenty — gets one budget between them rather than one
+      * each. The scope of a limit is therefore the scope of its instance,
+      * which is why a caller takes a `fresh` one per declaration.
+      */
+    def begin(): Unit = if startedAt == Long.MinValue then startedAt = now()
+
+    def exceeded: Boolean = startedAt != Long.MinValue && now() - startedAt >= nanos
+
+    /** The same bound and clock, with its window not yet started. */
+    def fresh(): TimeLimit = new TimeLimit(nanos, now, every)
+
+  /** The largest bound `TimeLimit` can hold, in milliseconds.
+    *
+    * A caller states milliseconds and the kernel keeps nanoseconds, so a
+    * larger number silently wraps: 18,446,744,073,710 ms came out as 0.45 ms.
+    * Callers check against this rather than multiplying first.
+    */
+  val maxTimeMillis: Long = Long.MaxValue / 1000000L
 
   /** `g_dont_care`: placeholder for a binder whose variable does not occur. */
   private[kernel] val dontCare: Expr = Expr.const(Name.mkSimple("_dontCare"))

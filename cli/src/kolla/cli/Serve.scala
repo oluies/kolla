@@ -90,11 +90,14 @@ object Serve:
       bytes: String => fs2.Stream[IO, Byte],
       reason: (Name, ReplayOutcome) => IO[Unit]
   ): IO[Either[Check.Failure, Check.Result]] =
-    Check.stream(
+    // Deferred, so that a reader which throws while being built fails the `IO`
+    // instead of throwing out of a method whose type says it does not. The
+    // request is then answered like any other failure (S1).
+    IO.defer(Check.stream(
       file, bytes(file), state.profile, abortOnReject = false,
       (n, outcome, _) => reason(n, outcome), None, delta(state.env), None, None, None,
       state.maxSteps, state.env, state.timeLimit
-    )
+    ))
 
   /** Answers one request, and says whether the session goes on. */
   def handle(
@@ -228,6 +231,11 @@ object Serve:
             IO.pure((next, Some(failed(op, 0L, "deadline expects a number of milliseconds")), true))
           case Some(ms) if ms < 0 =>
             IO.pure((next, Some(failed(op, 0L, "deadline expects a positive number, or 0 for none")), true))
+          // Above this the milliseconds wrap when the kernel turns them into
+          // nanoseconds, which used to end the session on a `require`.
+          case Some(ms) if ms > TypeChecker.maxTimeMillis =>
+            IO.pure((next, Some(failed(op, 0L,
+              s"deadline expects at most ${TypeChecker.maxTimeMillis} milliseconds")), true))
           case Some(ms) =>
             val limit =
               if ms == 0 then None
@@ -360,8 +368,16 @@ object Serve:
           open match
             case None => IO.pure((None, ()))
             case Some(s) =>
-              handle(s, line, bytes).flatMap { (s2, out, go) =>
-                out.fold(IO.unit)(Console[IO].println).as((if go then Some(s2) else None, ()))
+              // Attempted rather than trusted: the rule is that a failed
+              // request is answered and the session goes on, and that has to
+              // hold for a request that throws as well as one that returns a
+              // refusal. The state kept is the one before the request, since
+              // what a throwing request did to it is not known.
+              handle(s, line, bytes).attempt.flatMap {
+                case Right((s2, out, go)) =>
+                  out.fold(IO.unit)(Console[IO].println).as((if go then Some(s2) else None, ()))
+                case Left(e) =>
+                  Console[IO].println(failed(split(line)._1, 0L, message(e))).as((Some(s), ()))
               }
         }
         .takeWhile((open, _) => open.isDefined, takeFailure = true)

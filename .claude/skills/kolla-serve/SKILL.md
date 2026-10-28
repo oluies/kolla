@@ -88,6 +88,9 @@ something to act on; "timeout" is not.
 
 The deadline is a floor, not a ceiling: the clock is read every 256 reduction
 steps, so a declaration is stopped at the first step boundary after its budget.
+It bounds one declaration, an inductive block included, and the largest value
+it takes is 9,223,372,036,854 ms — above that the milliseconds would wrap, so
+the request is refused.
 Setting it also turns on the per-constant diagnosis that makes the report
 useful, which costs about 28% on a library-scale run; the clock itself costs
 about 4%.

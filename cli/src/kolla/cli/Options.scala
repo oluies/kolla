@@ -1,6 +1,6 @@
 package kolla.cli
 
-import kolla.kernel.KernelProfile
+import kolla.kernel.{KernelProfile, TypeChecker}
 
 /** What the command line asked for. */
 final case class Options(
@@ -154,8 +154,13 @@ object Options:
       case "--trace" :: t            => go(t, o.copy(trace = true))
       case "--max-time" :: v :: t    =>
         v.replace("_", "").toLongOption match
-          case Some(n) if n > 0 => go(t, o.copy(maxTimeMillis = Some(n)))
-          case _                => Left(s"--max-time expects a positive number of milliseconds, got $v")
+          case Some(n) if n > 0 && n <= TypeChecker.maxTimeMillis =>
+            go(t, o.copy(maxTimeMillis = Some(n)))
+          // Rejected rather than multiplied: milliseconds above this wrap when
+          // the kernel turns them into nanoseconds, and 18,446,744,073,710 came
+          // out as 0.45 ms. See docs/semantics.md S2.
+          case _ =>
+            Left(s"--max-time expects a positive number of milliseconds up to ${TypeChecker.maxTimeMillis}, got $v")
       case "--max-steps" :: v :: t   =>
         v.replace("_", "").toLongOption match
           case Some(n) if n > 0 => go(t, o.copy(maxSteps = n))
@@ -174,7 +179,9 @@ object Options:
       // so it cannot pass them by returning early.
       else if o.serve && o.files.length > 1 then
         Left("--serve takes at most one export file to preload")
-      else if o.requireAxioms.isDefined && o.axiomsOf.isEmpty && !o.serve then
+      else if o.requireAxioms.isDefined && o.serve then
+        Left("--require-axioms and --serve are mutually exclusive: a session gates with its gate request")
+      else if o.requireAxioms.isDefined && o.axiomsOf.isEmpty then
         Left("--require-axioms needs --axioms, which names what to gate")
       else if o.serve && (o.evalTerm.isDefined || o.axiomsOf.nonEmpty) then
         Left("--serve answers eval and axioms as requests, not as flags")

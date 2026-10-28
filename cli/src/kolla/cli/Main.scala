@@ -50,26 +50,34 @@ object Main extends IOApp:
           val closures = o.axiomsOf.map(nm => kolla.kernel.Axioms.of(r.environment, Name.parse(nm)))
           val unknown  = closures.collect { case Left(why) => why }
           val found    = closures.collect { case Right(c) => c }
+          val permitted = o.requireAxioms.map(_.map(Name.parse))
+
+          // What the caller's set refused, when it named one.
+          def refused(c: kolla.kernel.Axioms.Closure): Option[Vector[Name]] =
+            permitted.map(ps => kolla.kernel.Axioms.within(c, ps))
+
+          def line(c: kolla.kernel.Axioms.Closure): String =
+            if o.json then
+              ReplayJson.axioms(
+                c.declaration.toString, c.axioms.map(_.toString), c.hasSorry,
+                c.unusual.map(_.toString), profile.label,
+                permitted.map(_.toVector.map(_.toString).sorted),
+                refused(c).map(_.map(_.toString))
+              )
+            else
+              val extra = refused(c)
+                .filter(_.nonEmpty)
+                .map(ns => s"\n  not permitted: ${ns.mkString(", ")}")
+                .getOrElse("")
+              c.render.stripSuffix("\n") + extra
+
           for
             _ <- Console[IO].errorln(
                    f"  ${r.tally.carriedOver}%,d declarations read as ${profile.label}"
                  )
             _ <- unknown.foldLeft(IO.unit)((acc, w) => acc *> Console[IO].errorln(s"--axioms: $w"))
-            _ <- found.foldLeft(IO.unit) { (acc, c) =>
-                   acc *> Console[IO].println(
-                     if o.json then ReplayJson.axioms(c.declaration.toString,
-                                                      c.axioms.map(_.toString), c.hasSorry,
-                                                      c.unusual.map(_.toString), profile.label)
-                     else
-                       val extra = o.requireAxioms
-                         .map(ps => kolla.kernel.Axioms.within(c, ps.map(Name.parse)))
-                         .filter(_.nonEmpty)
-                         .map(ns => s"\n  not permitted: ${ns.mkString(", ")}")
-                         .getOrElse("")
-                       c.render.stripSuffix("\n") + extra
-                   )
-                 }
-          yield axiomExit(found, unknown.nonEmpty, o.requireAxioms.map(_.map(Name.parse)))
+            _ <- found.foldLeft(IO.unit)((acc, c) => acc *> Console[IO].println(line(c)))
+          yield axiomExit(found, unknown.nonEmpty, permitted)
       }
 
   /** The exit code for a set of closures.

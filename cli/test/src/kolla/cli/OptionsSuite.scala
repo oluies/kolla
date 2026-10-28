@@ -1,6 +1,6 @@
 package kolla.cli
 
-import kolla.kernel.KernelProfile
+import kolla.kernel.{KernelProfile, TypeChecker}
 
 class OptionsSuite extends munit.FunSuite:
 
@@ -166,6 +166,8 @@ class OptionsSuite extends munit.FunSuite:
                  Some(Set("propext", "Quot.sound")))
     assertEquals(ok("--axioms", "A", "--require-axioms", "", "a").requireAxioms, Some(Set.empty[String]))
     assert(err("--require-axioms", "propext", "a").contains("needs --axioms"))
+    // Ignored rather than honoured in a session, so refused; `gate` is the way.
+    assert(err("--serve", "--require-axioms", "propext").contains("mutually exclusive"))
   }
 
   test("--max-time takes milliseconds and has to be positive") {
@@ -173,6 +175,11 @@ class OptionsSuite extends munit.FunSuite:
     assertEquals(ok("--max-time", "250", "a").maxTimeMillis, Some(250L))
     assertEquals(ok("--max-time", "1_000", "a").maxTimeMillis, Some(1000L))
     assert(err("--max-time", "0", "a").contains("positive"))
+    assertEquals(ok("--max-time", s"${TypeChecker.maxTimeMillis}", "a").maxTimeMillis,
+                 Some(TypeChecker.maxTimeMillis))
+    // Above this the milliseconds wrap into nanoseconds; refused, not multiplied.
+    assert(err("--max-time", s"${TypeChecker.maxTimeMillis + 1}", "a").contains("up to"))
+    assert(err("--max-time", "10000000000000", "a").contains("up to"))
     assert(err("--max-time", "soon", "a").contains("positive"))
     // Independent of the step budget: both can be given.
     val both = ok("--max-time", "250", "--max-steps", "99", "a")

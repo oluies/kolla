@@ -135,19 +135,28 @@ class ConcurrencySuite extends munit.FunSuite:
   }
 
   test("a fresh variable name repeats across checkers, and their contexts stay apart") {
-    // Each `TypeChecker` has its own `NameGenerator`, so two of them mint the
-    // same names. That is only safe because neither can see the other's local
-    // context, which is what this asserts: the same name, different types.
+    // Each `TypeChecker` has its own `NameGenerator` starting from zero, so
+    // two of them mint the same names. That is safe only because neither can
+    // see the other's local context. Asserted through the answers: the two
+    // bind the same name to different types and each infers from its own.
     val a = new TypeChecker(Environment.empty, profile)
     val b = new TypeChecker(Environment.empty, profile)
     val prop  = Expr.Sort(Level.zero)
-    val type0 = Expr.Sort(Level.Succ(Level.zero))
-    // Checking a binder introduces a free variable in each checker's context.
+    val type1 = Expr.Sort(Level.Succ(Level.Succ(Level.zero)))
+    // `forall (x : Prop), x` is a Prop; for `forall (x : Sort 2), x` the
     val fa = a.check(Expr.ForallE(Name.mkSimple("x"), prop, Expr.BVar(0), BinderInfo.Default))
-    val fb = b.check(Expr.ForallE(Name.mkSimple("x"), type0, Expr.BVar(0), BinderInfo.Default))
-    assert(fa != null && fb != null)
-    assertEquals(a.env.size, 0)
-    assertEquals(b.env.size, 0)
+    val fb = b.check(Expr.ForallE(Name.mkSimple("x"), type1, Expr.BVar(0), BinderInfo.Default))
+    assertEquals(Pretty.expr(fa), "Sort 0")
+    // domain lives in Sort 3, and imax 3 2 is 3.
+    assertEquals(Pretty.expr(fb), "Sort 3")
+    assertNotEquals(Pretty.expr(fa), Pretty.expr(fb))
+    // In the other order, to rule out the answers coming from one shared
+    // context that the second checker happened to overwrite.
+    val c = new TypeChecker(Environment.empty, profile)
+    assertEquals(
+      Pretty.expr(c.check(Expr.ForallE(Name.mkSimple("x"), prop, Expr.BVar(0), BinderInfo.Default))),
+      "Sort 0"
+    )
   }
 
   extension [A](a: A) private def let[B](f: A => B): B = f(a)

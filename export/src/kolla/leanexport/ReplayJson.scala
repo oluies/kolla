@@ -45,14 +45,25 @@ object ReplayJson:
       axioms: Vector[String],
       hasSorry: Boolean,
       unusual: Vector[String],
-      profile: String
+      profile: String,
+      /** The set the caller named, and what fell outside it. Absent unless one
+        * was named, since `unusual` is a different question: it reports what
+        * is outside Lean's three, which is a judgement rather than a gate.
+        */
+      permitted: Option[Vector[String]] = None,
+      notPermitted: Option[Vector[String]] = None
   ): String =
+    val gate =
+      permitted.toSeq.map(ps => "permitted" -> JsonWriter.arr(ps.map(JsonWriter.str))) ++
+        notPermitted.toSeq.map(ns => "notPermitted" -> JsonWriter.arr(ns.map(JsonWriter.str)))
     JsonWriter.obj(
-      "declaration" -> JsonWriter.str(declaration),
-      "axioms"      -> JsonWriter.arr(axioms.map(JsonWriter.str)),
-      "sorry"       -> JsonWriter.bool(hasSorry),
-      "unusual"     -> JsonWriter.arr(unusual.map(JsonWriter.str)),
-      "profile"     -> JsonWriter.str(profile)
+      Seq(
+        "declaration" -> JsonWriter.str(declaration),
+        "axioms"      -> JsonWriter.arr(axioms.map(JsonWriter.str)),
+        "sorry"       -> JsonWriter.bool(hasSorry),
+        "unusual"     -> JsonWriter.arr(unusual.map(JsonWriter.str)),
+        "profile"     -> JsonWriter.str(profile)
+      ) ++ gate*
     )
 
   /** The run as a whole, which a reader uses to check it saw everything. */

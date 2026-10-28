@@ -295,6 +295,37 @@ class ServeSuite extends CatsEffectSuite:
       assert(go && bad.contains("\"ok\":false"), clue(bad))
   }
 
+  test("a deadline too large to hold is refused, and the session survives it") {
+    for
+      (s, out, go) <- ask(start, s"deadline ${TypeChecker.maxTimeMillis + 1}")
+      (_, st, _)   <- ask(s, "status")
+    yield
+      // It used to end the session on a `require` inside the kernel.
+      assert(go, clue("the session stays open"))
+      assert(out.contains("\"ok\":false"), clue(out))
+      assertEquals(s.timeLimit, None)
+      assert(st.contains("\"deadline\":0"), clue(st))
+  }
+
+  test("a request that throws is answered, and the environment survives") {
+    // The rule is that a failed request is answered and the session goes on.
+    // A throw has to be covered by it too, or one bad request costs the
+    // caller the minutes it spent loading.
+    val exploding: String => fs2.Stream[IO, Byte] =
+      _ => throw new RuntimeException("boom")
+    for
+      base          <- loaded
+      (s, out, go)  <- Serve.handle(base, "load anything", exploding).attempt.map {
+                         case Right((a, b, c)) => (a, b.getOrElse(""), c)
+                         case Left(e)          => (base, s"escaped: $e", true)
+                       }
+    yield
+      assert(!out.startsWith("escaped:"), clue(out))
+      assert(out.contains("\"ok\":false"), clue(out))
+      assert(go)
+      assertEquals(s.declarations, 2)
+  }
+
   test("quit ends the session") {
     for (_, out, go) <- ask(start, "quit")
     yield

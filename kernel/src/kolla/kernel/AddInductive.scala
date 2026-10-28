@@ -34,6 +34,10 @@ object AddInductive:
         */
       timeLimit: Option[TypeChecker.TimeLimit] = None
   ): AddInductiveResult =
+    // One window for the whole block, which is one declaration: the aux check
+    // and the restore build more than twenty checkers between them, and a
+    // budget that restarted for each would bound none of them (S2).
+    val window = timeLimit.map(_.fresh())
     // Reject metavariables, free variables and references to auxiliary types.
     decl.types.foreach { t =>
       checkNoMetavarNoFvar(t.name, t.tpe)
@@ -44,11 +48,11 @@ object AddInductive:
 
     val res      = new ElimNestedInductive(env, decl).apply()
     val nnested  = res.numNested
-    val auxCheck = new InductiveChecker(env, res.auxDecl, profile, nnested, maxSteps, timeLimit).run()
+    val auxCheck = new InductiveChecker(env, res.auxDecl, profile, nnested, maxSteps, window).run()
 
     if nnested == 0 then
       AddInductiveResult(auxCheck.env, auxCheck.inductives, auxCheck.constructors, auxCheck.recursors, 0)
-    else restore(env, decl, profile, res, auxCheck.env, maxSteps, timeLimit)
+    else restore(env, decl, profile, res, auxCheck.env, maxSteps, window)
 
   private def checkNoMetavarNoFvar(n: Name, e: Expr): Unit =
     if e.hasExprMVar then

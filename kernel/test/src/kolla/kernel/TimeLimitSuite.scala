@@ -16,8 +16,21 @@ class TimeLimitSuite extends munit.FunSuite:
   private val prop: Expr  = Expr.Sort(Level.zero)
   private val type0: Expr = Expr.Sort(Level.Succ(Level.zero))
 
+  private val natDecl: Declaration.InductDecl =
+    val nat = Name.parse("Nat")
+    Declaration.InductDecl(
+      Nil, 0,
+      List(InductiveType(nat, Expr.Sort(Level.one), List(
+        Constructor(Name.parse("Nat.zero"), Expr.const(nat)),
+        Constructor(Name.parse("Nat.succ"),
+          Expr.ForallE(Name.mkSimple("n"), Expr.const(nat), Expr.const(nat), BinderInfo.Default))
+      ))),
+      false
+    )
+
   private def limit(ms: Long, c: Fake, every: Long = 1L): TypeChecker.TimeLimit =
     new TypeChecker.TimeLimit(ms * 1000000L, c.now, every)
+
 
   test("a limit has to be positive, and so does its interval") {
     val c = new Fake
@@ -74,18 +87,71 @@ class TimeLimitSuite extends munit.FunSuite:
     assertEquals(c.reads, 0)
   }
 
+  test("milliseconds above the bound would wrap, so the bound is stated") {
+    val c = new Fake
+    assertEquals(TypeChecker.maxTimeMillis, Long.MaxValue / 1000000L)
+    // Just inside is a legal limit; the caller is expected to refuse above it
+    // rather than multiply, since the product wraps silently.
+    new TypeChecker.TimeLimit(TypeChecker.maxTimeMillis * 1000000L, c.now)
+    assert(TypeChecker.maxTimeMillis * 1000000L > 0L)
+    assert((TypeChecker.maxTimeMillis + 1L) * 1000000L < 0L, clue("the next one wraps"))
+  }
+
+  test("one window covers every checker built from the same limit") {
+    // The scope of a budget is the scope of its instance: an inductive block
+    // builds more than twenty checkers and must not restart for each.
+    val c     = new Fake(perRead = 1000000L)
+    val bound = limit(5, c)
+    val a     = new TypeChecker(Environment.empty, timeLimit = Some(bound))
+    val b     = new TypeChecker(Environment.empty, timeLimit = Some(bound))
+    assertEquals(c.reads, 1, clue("the second checker did not restart the window"))
+    assert(a != null && b != null)
+    // A fresh one opens a new window.
+    new TypeChecker(Environment.empty, timeLimit = Some(bound.fresh()))
+    assertEquals(c.reads, 2)
+  }
+
+  test("an inductive block opens one window, not one per checker") {
+    // `InductiveChecker.tc` is a `def` and `AddInductive` builds two more, so
+    // the clock used to be read once per checker and the budget restarted
+    // every time. With the interval set beyond reach, no step reads the
+    // clock, so what is left to count is the constructions.
+    val c = new Fake
+    // One limit for the run, as `Replay` holds it.
+    val run = new TypeChecker.TimeLimit(10000L * 1000000L, c.now, Long.MaxValue)
+    AddInductive.add(Environment.empty, natDecl, KernelProfile.default,
+                     TypeChecker.defaultMaxSteps, Some(run))
+    assertEquals(c.reads, 1, clue("the block restarted its window"))
+
+    // And the next block opens its own: a run-long window would be as wrong
+    // as a per-checker one, since the bound is per declaration.
+    AddInductive.add(Environment.empty, natDecl, KernelProfile.default,
+                     TypeChecker.defaultMaxSteps, Some(run))
+    assertEquals(c.reads, 2, clue("the second block reused the first window"))
+  }
+
+  test("each declaration opens its own window") {
+    // One limit for the run, a fresh window per declaration: otherwise the
+    // budget would be spent by whichever declaration came first.
+    val c  = new Fake
+    val dc = new DeclarationChecker(
+      KernelProfile.default, TypeChecker.defaultMaxSteps,
+      Some(new TypeChecker.TimeLimit(10000L * 1000000L, c.now, Long.MaxValue))
+    )
+    val prop = Expr.Sort(Level.zero)
+    val env1 = dc.addInfo(Environment.empty,
+      ConstantInfo.AxiomInfo(AxiomVal(ConstantVal(Name.parse("P"), Nil, prop), isUnsafe = false)))._1
+    val reads1 = c.reads
+    dc.addInfo(env1,
+      ConstantInfo.AxiomInfo(AxiomVal(ConstantVal(Name.parse("R"), Nil, prop), isUnsafe = false)))
+    assert(reads1 >= 1, clue(reads1))
+    assert(c.reads > reads1, clue(s"the second declaration reused the first window: ${c.reads}"))
+  }
+
   test("the budget reaches an inductive block, which has its own checkers") {
     val c = new Fake
     val nat = Name.parse("Nat")
-    val decl: Declaration.InductDecl = Declaration.InductDecl(
-      Nil, 0,
-      List(InductiveType(nat, Expr.Sort(Level.one), List(
-        Constructor(Name.parse("Nat.zero"), Expr.const(nat)),
-        Constructor(Name.parse("Nat.succ"),
-          Expr.ForallE(Name.mkSimple("n"), Expr.const(nat), Expr.const(nat), BinderInfo.Default))
-      ))),
-      false
-    )
+    val decl: Declaration.InductDecl = natDecl
     // Clean under a clock that does not move.
     assert(AddInductive.add(Environment.empty, decl, KernelProfile.default,
                             TypeChecker.defaultMaxSteps, Some(limit(10, c))).env.contains(nat))
