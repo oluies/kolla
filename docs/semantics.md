@@ -1764,8 +1764,18 @@ of them, so `--max-time 1` on that file reported everything accepted.
 One `TimeLimit` serves a whole run, and the window lives in the instance: the
 first `TypeChecker` built from one calls `begin`, and `fresh` opens another.
 The scope of a budget is therefore the scope of its instance, and the callers
-that correspond to one declaration take a fresh one — `DeclarationChecker`
-when `add` or `addInfo` is entered, and `AddInductive.add` for a whole block.
+that correspond to one declaration take a fresh one — each of
+`DeclarationChecker`'s public entry points, and `AddInductive.add` for a whole
+block.
+
+`checker` takes the window as a parameter rather than reading a field, and that
+is the whole of the lesson from getting it wrong. A field has a value on a path
+that forgot to set it: opening the window in `add` and `addInfo` alone left
+`addDefinition` — which `Replay` calls directly for a text-v1 definition,
+around both — reading the field's default, which was the run's own already
+started limit. Consecutive text-v1 definitions then shared one window, and in a
+session a `load` could begin with a window a previous request had opened.
+A parameter has no default to fall back to.
 
 Recording the start in the `TypeChecker` instead, which is what this did at
 first, bounds a checker rather than a declaration: `InductiveChecker.tc` is a

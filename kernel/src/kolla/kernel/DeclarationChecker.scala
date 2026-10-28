@@ -30,19 +30,24 @@ final class DeclarationChecker(
     val sort = tc.check(v.tpe, v.levelParams)
     tc.ensureSort(sort, v.tpe)
 
-  /** The limit for the declaration being checked now.
+  /** A wall-clock window for one declaration.
     *
-    * One window per declaration, not per `TypeChecker`: `add` and `addInfo`
-    * build several for one declaration, and a budget that restarted for each
-    * would bound none of them. Set by `declaration`. See docs/semantics.md S2.
+    * One per declaration, not per `TypeChecker`: checking a single declaration
+    * builds two or three, and a budget that restarted for each would bound
+    * none of them. Every public entry point opens its own and passes it to
+    * each checker it builds, which is why `checker` takes it rather than
+    * reading a field: a field has a value for a path that forgot to set it,
+    * and the one it had was the run's own limit — already started, and shared
+    * by every later declaration. See docs/semantics.md S2.
     */
-  private var current: Option[TypeChecker.TimeLimit] = timeLimit
+  private def window(): Option[TypeChecker.TimeLimit] = timeLimit.map(_.fresh())
 
-  /** Opens a fresh window for the declaration about to be checked. */
-  private def openWindow(): Unit = current = timeLimit.map(_.fresh())
-
-  private def checker(env: Environment, safety: DefinitionSafety): TypeChecker =
-    new TypeChecker(env, profile, safety, LocalContext.empty, maxSteps, current)
+  private def checker(
+      env: Environment,
+      safety: DefinitionSafety,
+      window: Option[TypeChecker.TimeLimit]
+  ): TypeChecker =
+    new TypeChecker(env, profile, safety, LocalContext.empty, maxSteps, window)
 
   private def mismatch(n: Name, given0: Expr, expected: Expr, tc: TypeChecker): Nothing =
     throw new KernelException(
@@ -55,25 +60,26 @@ final class DeclarationChecker(
   def addAxiom(env: Environment, v: AxiomVal, check: Boolean = true): Environment =
     if check then
       val safety = if v.isUnsafe then DefinitionSafety.Unsafe else DefinitionSafety.Safe
-      checkConstantVal(env, v.toConstantVal, checker(env, safety))
+      checkConstantVal(env, v.toConstantVal, checker(env, safety, window()))
     env.addCore(ConstantInfo.AxiomInfo(v))
 
   def addDefinition(env: Environment, v: DefinitionVal, check: Boolean = true): Environment =
     val cv = v.toConstantVal
+    val w  = window()
     if v.isUnsafe then
       // An unsafe definition may be recursive, so its header is checked, the
       // declaration is added, and only then is the body checked.
-      if check then checkConstantVal(env, cv, checker(env, DefinitionSafety.Unsafe))
+      if check then checkConstantVal(env, cv, checker(env, DefinitionSafety.Unsafe, w))
       val newEnv = env.addCore(ConstantInfo.DefnInfo(v))
       if check then
-        val tc = checker(newEnv, DefinitionSafety.Unsafe)
+        val tc = checker(newEnv, DefinitionSafety.Unsafe, w)
         checkNoMetavarNoFvar(cv.name, v.value)
         val valType = tc.check(v.value, cv.levelParams)
         if !tc.isDefEq(valType, cv.tpe) then mismatch(cv.name, valType, cv.tpe, tc)
       newEnv
     else
       if check then
-        val tc = checker(env, DefinitionSafety.Safe)
+        val tc = checker(env, DefinitionSafety.Safe, w)
         checkConstantVal(env, cv, tc)
         checkNoMetavarNoFvar(cv.name, v.value)
         val valType = tc.check(v.value, cv.levelParams)
@@ -83,7 +89,7 @@ final class DeclarationChecker(
   def addTheorem(env: Environment, v: TheoremVal, check: Boolean = true): Environment =
     val cv = v.toConstantVal
     if check then
-      val tc = checker(env, DefinitionSafety.Safe)
+      val tc = checker(env, DefinitionSafety.Safe, window())
       checkConstantVal(env, cv, tc)
       if !tc.isProp(cv.tpe) then
         throw KernelException(
@@ -99,7 +105,7 @@ final class DeclarationChecker(
   def addOpaque(env: Environment, v: OpaqueVal, check: Boolean = true): Environment =
     val cv = v.toConstantVal
     if check then
-      val tc = checker(env, DefinitionSafety.Safe)
+      val tc = checker(env, DefinitionSafety.Safe, window())
       checkConstantVal(env, cv, tc)
       checkNoMetavarNoFvar(cv.name, v.value)
       val valType = tc.check(v.value, cv.levelParams)
@@ -116,8 +122,9 @@ final class DeclarationChecker(
         "invalid mutual definition, the declarations are not tagged unsafe or partial"
       )
     val lparams = vs.head.toConstantVal.levelParams
+    val w       = window()
     if check then
-      val tc = checker(env, safety)
+      val tc = checker(env, safety, w)
       vs.foreach { v =>
         if v.toConstantVal.levelParams != lparams then
           throw KernelException(
@@ -135,7 +142,7 @@ final class DeclarationChecker(
       }
     val newEnv = vs.foldLeft(env)((e, v) => e.addCore(ConstantInfo.DefnInfo(v)))
     if check then
-      val tc = checker(newEnv, safety)
+      val tc = checker(newEnv, safety, w)
       vs.foreach { v =>
         val cv = v.toConstantVal
         checkNoMetavarNoFvar(cv.name, v.value)
@@ -146,7 +153,6 @@ final class DeclarationChecker(
 
   /** `environment::add(declaration, check)`. */
   def add(env: Environment, d: Declaration, check: Boolean = true): Environment =
-    openWindow()
     d match
     case Declaration.AxiomDecl(v)       => addAxiom(env, v, check)
     case Declaration.DefnDecl(v)        => addDefinition(env, v, check)
@@ -169,7 +175,6 @@ final class DeclarationChecker(
     * fully checked.
     */
   def addInfo(env: Environment, info: ConstantInfo): (Environment, CheckOutcome) =
-    openWindow()
     info match
     case ConstantInfo.AxiomInfo(v)  => (addAxiom(env, v), CheckOutcome.Checked)
     case ConstantInfo.DefnInfo(v)   => (addDefinition(env, v), CheckOutcome.Checked)
@@ -197,7 +202,8 @@ final class DeclarationChecker(
       (typeOnly(env, v.toConstantVal, info), CheckOutcome.TypeOnly)
 
   private def typeOnly(env: Environment, cv: ConstantVal, info: ConstantInfo): Environment =
-    val tc = checker(env, DefinitionSafety.Safe)
+    val w  = window()
+    val tc = checker(env, DefinitionSafety.Safe, w)
     env.checkName(cv.name)
     env.checkDuplicatedUnivParams(cv.levelParams)
     checkNoMetavarNoFvar(cv.name, cv.tpe)
@@ -205,7 +211,7 @@ final class DeclarationChecker(
     // constructors' types are checked, so the type is added first and the
     // well-formedness check runs against the extended environment.
     val next = env.addCore(info)
-    val tc2  = checker(next, DefinitionSafety.Safe)
+    val tc2  = checker(next, DefinitionSafety.Safe, w)
     val sort = tc2.check(cv.tpe, cv.levelParams)
     tc2.ensureSort(sort, cv.tpe)
     next

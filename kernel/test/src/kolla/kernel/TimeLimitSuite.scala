@@ -130,6 +130,37 @@ class TimeLimitSuite extends munit.FunSuite:
     assertEquals(c.reads, 2, clue("the second block reused the first window"))
   }
 
+  test("every public entry point opens its own window") {
+    // The hole this closes: Replay checks a text-v1 definition by calling
+    // addDefinition directly, around add and addInfo, and the window used to
+    // come from a field whose default was the run's own already-started limit.
+    val prop = Expr.Sort(Level.zero)
+    def cv(n: String) = ConstantVal(Name.parse(n), Nil, prop)
+
+    def readsFor(f: (DeclarationChecker, Environment) => Environment): Int =
+      val c  = new Fake
+      val dc = new DeclarationChecker(
+        KernelProfile.default, TypeChecker.defaultMaxSteps,
+        Some(new TypeChecker.TimeLimit(10000L * 1000000L, c.now, Long.MaxValue))
+      )
+      val e1 = f(dc, Environment.empty)
+      val after1 = c.reads
+      f(dc, e1)
+      c.reads - after1
+
+    // Each call opens a window of its own, so each reads the clock again.
+    assert(readsFor((dc, e) => dc.addAxiom(e, AxiomVal(cv(s"A${e.size}"), isUnsafe = false))) >= 1)
+    // `D : Type := Prop`, so the value's type is the declared one.
+    val type0 = Expr.Sort(Level.Succ(Level.zero))
+    assert(readsFor { (dc, e) =>
+      val n = Name.parse(s"D${e.size}")
+      dc.addDefinition(e, DefinitionVal(ConstantVal(n, Nil, type0), prop,
+                                        ReducibilityHints.Abbrev, DefinitionSafety.Safe, List(n)))
+    } >= 1)
+    assert(readsFor((dc, e) =>
+      dc.addInfo(e, ConstantInfo.AxiomInfo(AxiomVal(cv(s"I${e.size}"), isUnsafe = false)))._1) >= 1)
+  }
+
   test("each declaration opens its own window") {
     // One limit for the run, a fresh window per declaration: otherwise the
     // budget would be spent by whichever declaration came first.
