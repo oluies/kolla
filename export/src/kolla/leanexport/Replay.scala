@@ -44,18 +44,6 @@ final case class ReplayStep(names: List[Name], outcome: ReplayOutcome)
   * added at once, since the kernel derives its constructors and recursors
   * together. Each step gets its own `TypeChecker`, as `environment::add_*`
   * does, which `DeclarationChecker` arranges.
-  */
-/** Replays an export file's declarations into an environment, one step at a
-  * time, with no effect type of its own.
-  *
-  * The driver loops in `cli`, `web` and `difftest` differ only in how they
-  * interleave: a fiber yield, an animation frame, a blocking loop. The checking
-  * itself is the same and lives here, so the three cannot drift.
-  *
-  * A step is one declaration, or one whole inductive block: a block has to be
-  * added at once, since the kernel derives its constructors and recursors
-  * together. Each step gets its own `TypeChecker`, as `environment::add_*`
-  * does, which `DeclarationChecker` arranges.
   *
   * Items are pushed in with `feed` and `finish`, so a driver can supply them
   * from a stream and never hold the whole file. Only the hoisting prefix is
