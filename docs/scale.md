@@ -26,6 +26,8 @@ that last one a Mathlib run stalled at 150,036 declarations whatever the flags
 | `Mathlib` v4.35.0, fully checked | 6.26 GB | 729,263 in the file | no verdict | — |
 | `Mathlib` v4.35.0, `--check Nat.Prime` | 6.26 GB | 120 of 729,263 | 199.6s | 8.13 GB |
 | `Mathlib` v4.35.0, same with a warm `--cache` | 6.26 GB | 120 cached | 149.7s | 11.89 GB |
+| `exact_count_and_sat` statement, v4.35.0 | 73.6 MB | 17,669 | 21.0s | 3.30 GB |
+| `exact_count_and_sat` proof, v4.34.1 on v4_27, `--defeq-cache` | 2.36 GB | 95,176 | 2,773.8s | 24.45 GB |
 
 `mathlib-sample` and `std` carry no resident figure because they were run
 through `difftest`, which reports peak heap instead: 0.69 GB and 3.77 GB, with
@@ -38,7 +40,39 @@ heap that never reached a verdict, so there is no total to quote. Its
 declaration count is the file's, not a count of what was checked — the run
 stopped after 325,090 of them.
 
-## Per frontend
+## One theorem out of a real development
+
+The two `exact_count_and_sat` rows are the largest single verdict kolla has
+reached, and the only one where the whole closure of one claimed theorem was
+checked rather than a library prefix. They come from `openai/math`, whose
+`lean/docs/378.md` says Lean proves the Exponential Time Hypothesis is false.
+
+The repository states its results twice. `ComparatorChallenges/*.lean` holds
+the statements — all 418 of those files end in `sorry`, by design, because each
+challenge's JSON names a separate `solution_module` that is supposed to prove
+it. The statement row above is that file: 17,669 declarations, all accepted,
+resting on `sorryAx`, which is what `--axioms` is for.
+
+The proof row is the solution module. Getting to it cost more than checking it:
+16.4 hours to compile the 3,091 modules its imports reach, against 46.2 minutes
+to check the 2.36 GB export they produce. It came out at 95,176 accepted, none
+rejected, resting on exactly `propext`, `Classical.choice` and `Quot.sound` —
+the three the challenge's `permitted_axioms` allows, so
+`--require-axioms propext,Classical.choice,Quot.sound` exits 0.
+
+Two qualifications belong with that number. It was checked under `v4_27`,
+because `KernelProfile.forToolchain` maps the repository's v4.34.1 to the
+newest profile at or below it and there is no v4.34 profile; the kernel
+behaviours exercised are therefore the pre-4.35 ones (K1). And the export came
+from `lean4export`'s v4.34.0 tag built against v4.34.1, since no revision of
+that repository pins v4.34.1 — the built binary's own metadata was checked to
+report `4.34.1` before it was used.
+
+24.45 GB of resident set for one theorem is the figure to carry forward: the
+cost is the closure, not the file, and a library's worth of Mathlib comes along
+with it.
+
+## Per frontend## Per frontend
 
 The figures above are `cli.jvm`. The four frontends do not cost the same, and
 only the JVM one has been measured at library scale.

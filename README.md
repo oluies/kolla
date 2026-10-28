@@ -379,6 +379,15 @@ elapsed time, the slowest finishing one at 133 seconds, and the run stops making
 progress on `IntermediateField.restrictScalars_top` with memory to spare.
 docs/scale.md has the figures and docs/semantics.md K19 the distribution.
 
+One theorem out of a real development has also been checked end to end:
+`openai/math`'s claimed proof that the Exponential Time Hypothesis is false.
+Compiling the 3,091 modules it imports took 16.4 hours of Lean; checking the
+2.36 GB export they produce took 46.2 minutes and 24.45 GB, and came out at
+95,176 declarations accepted, none rejected, resting on exactly `propext`,
+`Classical.choice` and `Quot.sound` — the three that challenge's
+`permitted_axioms` allows. The statement file beside it rests on `sorryAx`,
+which is what `--axioms` is for. docs/scale.md has both and the qualifications.
+
 `init` at v4.28.0 adds 51,759 more against `lean4checker`. Read that precisely:
 both references report one verdict for a whole file, so the agreement is at file
 granularity. Only the comparison of kolla's own four builds is declaration by
