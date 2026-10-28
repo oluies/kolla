@@ -72,26 +72,28 @@ report `4.34.1` before it was used.
 cost is the closure, not the file, and a library's worth of Mathlib comes along
 with it.
 
-## Per frontend## Per frontend
+## Per frontend
 
-The figures above are `cli.jvm`. The four frontends do not cost the same, and
-only the JVM one has been measured at library scale.
+The figures above are `cli.jvm`. The four frontends do not cost the same.
 
 | frontend | measured on | cost |
 |---|---|---|
 | `cli.jvm` | `init`, `lean` | 1.19 GB / 47.7s and 3.09 GB / 260.9s |
 | `difftest` (JVM) | `init`, `std`, `lean`, `mathlib-sample` | 2.74-5.09 GB of heap, materialised |
-| `cli.native` | `init`, `std` | 51.6 GB / ~13min on `init`; `std` exhausted a 48 GB machine |
+| `cli.native` | `init`, `mathlib-sample`, the case corpora | 12.79 GB / 434.4s on `init`; 7.31 GB / 47.8s on `mathlib-sample` |
 | `web` (Node, browser) | handwritten fixtures only | not measured at library scale |
 
 Two of those rows need qualifying rather than quoting.
 
-The `cli.native` figures are from docs/semantics.md F7 and were taken before
-the driver streamed, so they describe the materialising path. Streaming removes
-the item vector but not the reader's index tables, and F7's diagnosis was the
-collector rather than the items, so the number is expected to improve without
-the gap closing. It has not been re-measured, because re-running it needs more
-memory than the host has and has already cost this machine several kills.
+The `cli.native` row is now measured rather than inferred, and it replaces a
+figure of 51.6 GB and about 13 minutes on `init` that was taken before the
+driver streamed. Streaming cut the peak to 12.79 GB, a factor of four, and the
+time to 7.2 minutes. The prediction that accompanied the old number — better,
+without closing the gap — held: native is still 9.1x the JVM's time and 10.7x
+its memory on `init`. docs/semantics.md F7 has the table and the bracket on
+where the crossover lies. `std` is the one row still carrying its old claim,
+that it exhausted a 48 GB machine without finishing; at `init`'s new figure
+that is worth redoing.
 
 `web` is not run on a library corpus at all. The browser takes its input
 through a textarea, which is already slow at the 2.2 MB fixture, and a 330 MB

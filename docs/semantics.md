@@ -1955,18 +1955,42 @@ is neither.
 
 ### F7 — the native build is not the one to run a library corpus with
 
-On `init` — 59,349 declarations from 6.5 million export lines — the JVM peaks
-at 3.0 GB of heap and finishes in 49 seconds. The native binary does the same
-work with a peak memory footprint of 51.6 GB and takes about 13 minutes. On
-`std`, half again as large, it had reached 6.5 GB of resident memory after 43
-minutes without finishing, and exhausted a 48 GB machine.
+Peak resident set and wall clock, both frontends on the same host:
 
-That inverts the small-corpus result, where native is usually the faster of the
-two: on the handwritten corpora it runs at 0.1x to 3x the JVM's time. The
-crossover is somewhere between a few thousand declarations and sixty thousand.
-The likely cause is the collector — Immix against a generational one, on a
-workload that allocates an `Expr` per node of every term it reads — but that is
-a hypothesis, not something measured here.
+| corpus | declarations | `cli.jvm` | `cli.native` |
+|---|---|---|---|
+| `case-recursors` | 10 | 0.58s / 0.22 GB | 0.08s / 0.07 GB |
+| `case-quotient` | 20 | 0.63s / 0.24 GB | 0.11s / 0.08 GB |
+| `case-natlit` | 29 | 0.70s / 0.28 GB | 0.19s / 0.15 GB |
+| `mathlib-sample` | 19,020 | 8.8s / 3.18 GB | 47.8s / 7.31 GB |
+| `init` | 59,349 | 47.7s / 1.19 GB | 434.4s / 12.79 GB |
+
+The conclusion holds and the old figures do not. `init` on native was recorded
+here as 51.6 GB and about 13 minutes, taken before the driver streamed;
+streaming cut it to 12.79 GB and 7.2 minutes, a factor of four in memory and
+nearly two in time. The gap to the JVM did not close: 9.1x the time and 10.7x
+the memory on `init`.
+
+Growth is sub-linear, which is worth knowing because the obvious estimate is
+wrong in the cautious direction: scaling `mathlib-sample`'s 7.31 GB linearly to
+`init`'s declaration count predicts 22.8 GB against the 12.79 GB measured. The
+interning tables are the floor (F8), and a floor amortises.
+
+The crossover is now bracketed rather than guessed. Native is three to seven
+times faster and a third of the memory on the handwritten corpora, and by
+19,020 declarations it is already 5.4x the time and 2.3x the memory. So it lies
+between tens of declarations and twenty thousand, not between a few thousand
+and sixty thousand.
+
+The likely cause remains the collector — Immix against a generational one, on a
+workload that allocates an `Expr` per node of every term it reads — and remains
+a hypothesis. What streaming removed was the item vector, not the allocation
+rate, and the fourfold drop is consistent with either reading.
+
+`std` has not been retested since the driver streamed. The earlier run reached
+6.5 GB after 43 minutes without finishing and exhausted a 48 GB machine; with
+`init` now at 12.79 GB that is worth redoing, and the figure here will say so
+when it is.
 
 What follows for the platform comparison is only that it runs on the committed
 fixtures (F6), which are thousands of declarations rather than tens of
