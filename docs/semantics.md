@@ -1998,8 +1998,40 @@ and sixty thousand.
 
 The cause is now better than a hypothesis on one point: the run does not die of
 resident data, which is 17.95 GB of a 51.54 GB machine when it fails. It dies
-because Immix cannot grow its heap further. Whether a generational collector
-would fit the same work in the same machine is still untested.
+because Immix cannot grow its heap further.
+
+The obvious next question — would another collector fit the same work — is only
+half answerable, because Scala Native ships no generational collector. `commix`
+is Immix made parallel and `boehm` is conservative mark-sweep, so an outcome
+either way narrows the hypothesis rather than settling the generational form of
+it.
+
+`commix` does not get as far as a comparison: it hangs on `init`, which `immix`
+finishes in 434 seconds. Two runs, built with `nativeGC = "commix"` and
+otherwise identical:
+
+| attempt | free memory at the start | CPU before it froze | resident | output |
+|---|---|---|---|---|
+| first | 130 MB, swap full | 14:22 | 960 KB | none |
+| second | 8.5 GB | 12:26 | 1.7 GB | none |
+
+Neither printed a GC error, where `immix` on `std` prints `Out of heap space
+grow heap` before it exits. Neither advanced its CPU time over a 60-second
+window. The second had 17.7 GB of pages free after it was killed, so the
+machine was not out of memory, and the two froze after comparable CPU budgets,
+which looks deterministic rather than circumstantial. `std` under `commix` was
+not run: it is strictly larger than the corpus the control already hangs on.
+
+What is not established is where it hangs. "No CPU progress, no error, memory
+to spare" is what was measured; "hangs inside the collector" needs a stack, and
+until one is taken the honest reading is that a `commix` build of this frontend
+does not complete a library corpus on this host.
+
+A measurement is only as good as the guard around it. The first stall sat for
+eleven minutes because the watchdog checked resident size, which is the failure
+mode this entry already knew about; a process evicted to 960 KB and frozen
+sails past it. It now also kills a run whose CPU time stops advancing, and says
+which of the two it killed.
 
 What follows for the platform comparison is only that it runs on the committed
 fixtures (F6), which are thousands of declarations rather than tens of
