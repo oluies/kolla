@@ -2191,6 +2191,35 @@ What changed is that the allocator has room to satisfy it without the
 expand-and-retry loop the stack caught. Whether that holds on `std`, which
 outgrew `immix` at 51.6 GB of footprint, is the next measurement.
 
+It holds. One run on `std`, `boehm`, `GC_INITIAL_HEAP_SIZE=8G`, full pool,
+with the wall ceiling raised to an hour for the larger corpus:
+
+| | wall | user / sys | resident | peak footprint | result |
+|---|---|---|---|---|---|
+| `immix` | 2,653.8s | — | 17.95 GB | 51.60 GB | `Out of heap space`, exit 1 |
+| `boehm`, 8 GB start | 1,918.6s | 1,936s / 501s | 9.16 GB | 10.10 GB | 99,619 accepted, 0 rejected |
+| `cli.jvm` | 304.5s | — | — | — | completes |
+
+This is the first native run to give `std` a verdict, at a fifth of the
+footprint at which `immix` gave up. It is one run, so it shows that `boehm`
+can finish `std`, not how often it hangs there.
+
+It is not cheap. It is 6.3 times the JVM's time. Unlike `init`, where user time
+ran at about 1.4 times the wall, here it barely exceeds one core. System time
+is 501 seconds, with 75.7 million page reclaims and no swapping, which is the
+collector mapping and touching pages rather than the machine being short. The
+runtime printed 133 cats-effect CPU-starvation warnings spread across the last
+31 minutes, against two or three per `init` run. Those are what a program sees
+when it is stopped for long collections, and they fit the single-core profile.
+There were 1,908 large-block warnings.
+
+So the native picture changes in kind but not in conclusion. A collector that
+fits the corpus exists, and a library corpus can be checked natively. But the
+JVM still does it six times faster, so a library corpus is still checked on the
+JVM. `boehm` with a preset heap is the native configuration to reach for when
+a native run is needed, and `immix` stays the default until it has more runs
+behind it.
+
 A measurement is only as good as the guard around it, and this one got past
 three guards in turn. A resident-size cap missed a process evicted to 960 KB.
 A no-CPU-progress check missed a process that advanced its CPU for six hours.
