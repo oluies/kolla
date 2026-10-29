@@ -2084,7 +2084,7 @@ work-stealing pool.
 
 Holding the pool to one worker (`computeWorkerThreadCount = 1` on `IOApp`)
 left the collector's markers in place and took the pool's out. The process then
-had four threads besides the markers rather than about eighteen. Three runs on
+had four threads besides the markers, where the `commix` sample had ten. Three runs on
 `init`, `boehm`, every one with the watchdog set to sample before killing:
 
 | attempt | wall | resident | peak footprint | result |
