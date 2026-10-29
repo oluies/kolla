@@ -2022,16 +2022,36 @@ machine was not out of memory, and the two froze after comparable CPU budgets,
 which looks deterministic rather than circumstantial. `std` under `commix` was
 not run: it is strictly larger than the corpus the control already hangs on.
 
-What is not established is where it hangs. "No CPU progress, no error, memory
-to spare" is what was measured; "hangs inside the collector" needs a stack, and
-until one is taken the honest reading is that a `commix` build of this frontend
-does not complete a library corpus on this host.
+A third run was left to go further and sampled with `/usr/bin/sample` while
+still alive. It had accumulated 5h52m of CPU over 6h12m of wall clock — 95% of
+a core, so it had been working, not parked — and its resident set had collapsed
+to under 10 MB. Every thread in the 5-second window was blocked:
 
-A measurement is only as good as the guard around it. The first stall sat for
-eleven minutes because the watchdog checked resident size, which is the failure
-mode this entry already knew about; a process evicted to 960 KB and frozen
-sails past it. It now also kills a run whose CPU time stops advancing, and says
-which of the two it killed.
+```
+main thread   LockSupport$park -> PosixThread.park -> pthread_cond_wait -> __psynch_cvwait
+9 others      thread_start -> semaphore_wait -> sem_wait
+```
+
+4,242 of 4,242 samples on each thread, so nothing executed while it was
+watched. Taken with the cumulative CPU, the reading is that it worked for hours
+and then went quiet, which matches the first two runs freezing at 12 and 14
+minutes: the same terminal state reached at very different points.
+
+So "hangs" is right and "spins" was wrong — a guess made from cumulative CPU
+before the stack was taken, and corrected by it. What the stack does *not* show
+is the collector: the frames name cats-effect's parking and Scala Native's
+thread primitives, and `semaphore_wait` inside `out` has no symbol beyond
+itself. A `commix` build of this frontend does not complete a library corpus on
+this host, and pinning that on the GC still wants evidence this sample does not
+carry.
+
+A measurement is only as good as the guard around it, and this one got past
+three guards in turn. A resident-size cap missed a process evicted to 960 KB.
+A no-CPU-progress check missed a process that advanced its CPU for six hours.
+Neither is wrong; both are incomplete, and what was missing is the cheapest
+guard of all — a wall-clock ceiling, since `immix` finishes this corpus in 434
+seconds and anything past a small multiple of that has already answered the
+question.
 
 What follows for the platform comparison is only that it runs on the committed
 fixtures (F6), which are thousands of declarations rather than tens of
