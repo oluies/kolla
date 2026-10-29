@@ -2045,6 +2045,18 @@ itself. A `commix` build of this frontend does not complete a library corpus on
 this host, and pinning that on the GC still wants evidence this sample does not
 carry.
 
+It points somewhere else worth saying. Those frames are the work-stealing pool
+that cats-effect 3.7.0 brought to Scala Native — the release notes call it
+"support for Scala Native 0.5, including full multithreading on LLVM", with the
+`WorkStealingThreadPool` ported from JVM-only to cross-build on both. This
+project is on 3.7.1, so the native binary runs that pool, and what the sample
+shows is one parked main thread and nine workers in `sem_wait`. A parallel
+collector and a work-stealing pool each with their own threads, both new on this
+platform, is a more specific suspect than "the collector", and it is also why
+`immix` completing where `commix` does not is evidence about the pair rather
+than about either alone. The cheap next test is a run with the pool held to one
+worker.
+
 A measurement is only as good as the guard around it, and this one got past
 three guards in turn. A resident-size cap missed a process evicted to 960 KB.
 A no-CPU-progress check missed a process that advanced its CPU for six hours.
