@@ -2057,6 +2057,30 @@ platform, is a more specific suspect than "the collector", and it is also why
 than about either alone. The cheap next test is a run with the pool held to one
 worker.
 
+`boehm` takes the collector out of that pair, and it does not take the hang
+with it. Two runs on `init` after a reboot, built with `nativeGC = "boehm"`
+against bdw-gc 8.2.12 and otherwise identical:
+
+| attempt | wall | resident | peak footprint | result |
+|---|---|---|---|---|
+| first | 367.8s | 2.60 GB | 2.73 GB | 59,349 accepted, 0 rejected |
+| second | killed at 1,503s | under 2 GB | — | no output |
+
+When it finishes, `boehm` beats `immix` on its own corpus: 15% less wall time,
+a fifth of the resident set and a thirteenth of the footprint. Its stderr
+carries repeated `Repeated allocation of very large block` warnings at 68 and
+132 KiB, which did not stop the first run. The second run is the finding. It
+was not frozen the way the `commix` runs were — the no-progress check never
+fired, so its CPU time kept moving — but it went four times past the first
+run's wall without printing anything. It was killed by the ceiling before a
+stack was taken, so where it was is not known.
+
+So the same binary on the same corpus completed once and failed to complete
+once, under a collector that shares no code with Immix. That moves weight off
+`commix` and onto what both builds share, which is the work-stealing pool. It
+does not establish the pool as the cause: the next run should be sampled before
+it is killed, and the one-worker run is still the test that separates them.
+
 A measurement is only as good as the guard around it, and this one got past
 three guards in turn. A resident-size cap missed a process evicted to 960 KB.
 A no-CPU-progress check missed a process that advanced its CPU for six hours.
