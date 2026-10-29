@@ -1955,42 +1955,51 @@ is neither.
 
 ### F7 — the native build is not the one to run a library corpus with
 
-Peak resident set and wall clock, both frontends on the same host:
+`/usr/bin/time -l` reports two sizes and they are not interchangeable here.
+For the JVM they nearly coincide — on `init`, 1.05 GB resident against 1.27 GB
+of peak footprint — and for the native binary they differ by a factor of three,
+because Immix commits a heap region far larger than what stays resident. Both
+are therefore quoted, and a figure without its metric named means nothing.
 
-| corpus | declarations | `cli.jvm` | `cli.native` |
+| corpus | declarations | `cli.jvm` wall / RSS | `cli.native` wall / RSS / peak footprint |
 |---|---|---|---|
-| `case-recursors` | 10 | 0.58s / 0.22 GB | 0.08s / 0.07 GB |
-| `case-quotient` | 20 | 0.63s / 0.24 GB | 0.11s / 0.08 GB |
-| `case-natlit` | 29 | 0.70s / 0.28 GB | 0.19s / 0.15 GB |
-| `mathlib-sample` | 19,020 | 8.8s / 3.18 GB | 47.8s / 7.31 GB |
-| `init` | 59,349 | 47.7s / 1.19 GB | 434.4s / 12.79 GB |
+| `case-recursors` | 10 | 0.58s / 0.22 GB | 0.08s / 0.07 GB / — |
+| `case-quotient` | 20 | 0.63s / 0.24 GB | 0.11s / 0.08 GB / — |
+| `case-natlit` | 29 | 0.70s / 0.28 GB | 0.19s / 0.15 GB / — |
+| `mathlib-sample` | 19,020 | 8.8s / 3.18 GB | 47.8s / 7.31 GB / — |
+| `init` | 59,349 | 47.7s / 1.19 GB | 434.4s / 12.79 GB / 36.69 GB |
+| `std` | 99,619 | 304.5s / — | no verdict: 2,653.8s / 17.95 GB / 51.60 GB |
 
-The conclusion holds and the old figures do not. `init` on native was recorded
-here as 51.6 GB and about 13 minutes, taken before the driver streamed;
-streaming cut it to 12.79 GB and 7.2 minutes, a factor of four in memory and
-nearly two in time. The gap to the JVM did not close: 9.1x the time and 10.7x
-the memory on `init`.
+The conclusion holds, and the old figure was never wrong — it was a peak
+footprint, and comparing it with a resident set is the mistake to avoid. On its
+own metric `init` went from 51.6 GB to 36.69 GB, and the time from about 13
+minutes to 7.2. The gap to the JVM is 9.1x the time and, footprint against
+footprint, 29x the memory.
 
-Growth is sub-linear, which is worth knowing because the obvious estimate is
-wrong in the cautious direction: scaling `mathlib-sample`'s 7.31 GB linearly to
-`init`'s declaration count predicts 22.8 GB against the 12.79 GB measured. The
-interning tables are the floor (F8), and a floor amortises.
+What 51.6 GB actually was is the host: this machine has 51.54 GB of physical
+memory, and `std` now reports a peak footprint of 51.60 GB immediately before
+`[ScalaNative GC|Error] Out of heap space grow heap` and exit 1, after 44.2
+minutes. So a run quoting that number was at the wall rather than demanding
+that much, and the old `init` measurement was a run that reached the wall.
+`init` no longer does; `std` still does, and the mechanism now has a name
+instead of a dead machine.
 
-The crossover is now bracketed rather than guessed. Native is three to seven
-times faster and a third of the memory on the handwritten corpora, and by
-19,020 declarations it is already 5.4x the time and 2.3x the memory. So it lies
+Resident growth is sub-linear, which is worth knowing because the obvious
+estimate errs the cautious way: scaling `mathlib-sample`'s 7.31 GB linearly to
+`init`'s declaration count predicts 22.8 GB against 12.79 GB measured. The
+interning tables are the floor (F8), and a floor amortises. The footprint does
+not behave that way — it grows until the collector stops growing it.
+
+The crossover is bracketed rather than guessed. Native is three to seven times
+faster and a third of the memory on the handwritten corpora, and by 19,020
+declarations it is already 5.4x the time and 2.3x the memory. So it lies
 between tens of declarations and twenty thousand, not between a few thousand
 and sixty thousand.
 
-The likely cause remains the collector — Immix against a generational one, on a
-workload that allocates an `Expr` per node of every term it reads — and remains
-a hypothesis. What streaming removed was the item vector, not the allocation
-rate, and the fourfold drop is consistent with either reading.
-
-`std` has not been retested since the driver streamed. The earlier run reached
-6.5 GB after 43 minutes without finishing and exhausted a 48 GB machine; with
-`init` now at 12.79 GB that is worth redoing, and the figure here will say so
-when it is.
+The cause is now better than a hypothesis on one point: the run does not die of
+resident data, which is 17.95 GB of a 51.54 GB machine when it fails. It dies
+because Immix cannot grow its heap further. Whether a generational collector
+would fit the same work in the same machine is still untested.
 
 What follows for the platform comparison is only that it runs on the committed
 fixtures (F6), which are thousands of declarations rather than tens of

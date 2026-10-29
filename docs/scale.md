@@ -80,20 +80,26 @@ The figures above are `cli.jvm`. The four frontends do not cost the same.
 |---|---|---|
 | `cli.jvm` | `init`, `lean` | 1.19 GB / 47.7s and 3.09 GB / 260.9s |
 | `difftest` (JVM) | `init`, `std`, `lean`, `mathlib-sample` | 2.74-5.09 GB of heap, materialised |
-| `cli.native` | `init`, `mathlib-sample`, the case corpora | 12.79 GB / 434.4s on `init`; 7.31 GB / 47.8s on `mathlib-sample` |
+| `cli.native` | `init`, `std`, `mathlib-sample`, the case corpora | `init` 434.4s, 12.79 GB resident and 36.69 GB of footprint; `std` no verdict |
 | `web` (Node, browser) | handwritten fixtures only | not measured at library scale |
 
 Two of those rows need qualifying rather than quoting.
 
-The `cli.native` row is now measured rather than inferred, and it replaces a
-figure of 51.6 GB and about 13 minutes on `init` that was taken before the
-driver streamed. Streaming cut the peak to 12.79 GB, a factor of four, and the
-time to 7.2 minutes. The prediction that accompanied the old number — better,
-without closing the gap — held: native is still 9.1x the JVM's time and 10.7x
-its memory on `init`. docs/semantics.md F7 has the table and the bracket on
-where the crossover lies. `std` is the one row still carrying its old claim,
-that it exhausted a 48 GB machine without finishing; at `init`'s new figure
-that is worth redoing.
+The `cli.native` row is measured rather than inferred, and it needs its metric
+read carefully. `/usr/bin/time -l` reports a resident set and a peak footprint;
+for the JVM they nearly coincide, and for the native binary they differ by a
+factor of three because Immix commits far more than stays resident. The 51.6 GB
+this file used to quote was a footprint, so comparing it with a resident set
+makes the improvement look four times larger than it is. On its own metric
+`init` went 51.6 GB to 36.69 GB, with the time from about 13 minutes to 7.2.
+
+51.6 GB was also the host rather than the demand: this machine has 51.54 GB,
+and `std` reaches a 51.60 GB footprint and then fails with
+`[ScalaNative GC|Error] Out of heap space grow heap` after 44.2 minutes, at
+17.95 GB resident. So `std` still produces no verdict on native, as it did not
+before, and the reason is the collector refusing to grow rather than the
+machine dying. docs/semantics.md F7 has both metrics for every corpus and the
+bracket on where native stops being the faster frontend.
 
 `web` is not run on a library corpus at all. The browser takes its input
 through a textarea, which is already slow at the 2.2 MB fixture, and a 330 MB
