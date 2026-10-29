@@ -2154,6 +2154,43 @@ results do say is that the hangs belong to the collectors on this workload and
 not to cats-effect. `immix` is the one collector that has not hung, and it
 remains the native default.
 
+The stack shows the heap being grown a step at a time while a large block is
+looked for, so the obvious test is not to make it grow. bdw-gc reads
+`GC_INITIAL_HEAP_SIZE` from the environment, and with `4G` the process
+footprint three seconds in is 4,442 MB against 179 MB without. Ten runs on
+`init`, full pool, same binary as above:
+
+| run | wall | resident | peak footprint | large-block warnings |
+|---|---|---|---|---|
+| 1 | 218.2s | 4.89 GB | 5.31 GB | 820 |
+| 2 | 209.2s | 5.00 GB | 5.26 GB | 0 |
+| 3 | 214.0s | 4.98 GB | 5.22 GB | 0 |
+| 4 | 214.9s | 5.03 GB | 5.34 GB | 861 |
+| 5 | 207.8s | 5.01 GB | 5.22 GB | 0 |
+| 6 | 213.8s | 5.19 GB | 5.42 GB | 1,106 |
+| 7 | 208.6s | 4.93 GB | 5.22 GB | 0 |
+| 8 | 207.9s | 5.05 GB | 5.28 GB | 445 |
+| 9 | 207.7s | 4.93 GB | 5.25 GB | 0 |
+| 10 | 207.8s | 4.98 GB | 5.24 GB | 0 |
+
+All ten accepted 59,349 declarations and rejected none. With the default heap
+`boehm` had hung two runs in fifteen, and ten clean runs at that rate would
+still happen about one time in four. So it is evidence, not proof, that the
+setting removes the hang.
+
+The time is the larger effect and needs no statistics. Every run took 208 to
+218 seconds against 276 to 507 for the default heap, and user time fell from
+roughly 900 seconds to 300. That is the cost of growing a heap from nothing
+through repeated collections, which the runs above were paying. It is also
+half of `immix`'s 434 seconds on the same corpus, at 5.3 GB of footprint
+against 36.69 GB.
+
+The warnings did not go away. Six runs printed none and four printed 445 to
+1,106, so the pressure on large-block placement is still there in some runs.
+What changed is that the allocator has room to satisfy it without the
+expand-and-retry loop the stack caught. Whether that holds on `std`, which
+outgrew `immix` at 51.6 GB of footprint, is the next measurement.
+
 A measurement is only as good as the guard around it, and this one got past
 three guards in turn. A resident-size cap missed a process evicted to 960 KB.
 A no-CPU-progress check missed a process that advanced its CPU for six hours.
