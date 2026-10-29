@@ -2077,9 +2077,37 @@ stack was taken, so where it was is not known.
 
 So the same binary on the same corpus completed once and failed to complete
 once, under a collector that shares no code with Immix. That moves weight off
-`commix` and onto what both builds share, which is the work-stealing pool. It
-does not establish the pool as the cause: the next run should be sampled before
-it is killed, and the one-worker run is still the test that separates them.
+`commix` itself, but not off parallel collection: a stack taken from a `boehm`
+build shows fifteen `GC-marker` threads beside the program's own, so what the
+`boehm` and `commix` builds share is a parallel collector *and* the
+work-stealing pool.
+
+Holding the pool to one worker (`computeWorkerThreadCount = 1` on `IOApp`)
+left the collector's markers in place and took the pool's out. The process then
+had four threads besides the markers rather than about eighteen. Three runs on
+`init`, `boehm`, every one with the watchdog set to sample before killing:
+
+| attempt | wall | resident | peak footprint | result |
+|---|---|---|---|---|
+| first | 368.6s | 7.28 GB | 7.62 GB | 59,349 accepted, 0 rejected |
+| second | 355.4s | 2.90 GB | 2.89 GB | 59,349 accepted, 0 rejected |
+| third | 350.2s | 12.72 GB | 13.28 GB | 59,349 accepted, 0 rejected |
+
+All three completed, and none was slower than the full pool's one completed
+run, so the checker gets nothing from the extra workers on this corpus. The
+spread in resident size, 2.9 to 12.7 GB across identical runs, is a
+conservative collector retaining more or less depending on what it mistakes
+for pointers. Nothing in this frontend needs it to be smaller.
+
+It points at the pool and does not prove it. If the full-pool build fails one
+run in two, three clean runs in a row would still happen one time in eight by
+chance. The hang has also not been shown to be one thing: the `commix` runs had
+every thread blocked and no CPU moving, and the failed `boehm` run kept its CPU
+moving. What it does give is a working configuration. A native build with one
+compute worker has completed `init` every time it was tried, so pinning the
+worker count is the cheap mitigation while the cause is open. More runs of both
+pool sizes, with a stack from any that hang, would settle whether the bug is in
+the cats-effect 3.7 Native pool.
 
 A measurement is only as good as the guard around it, and this one got past
 three guards in turn. A resident-size cap missed a process evicted to 960 KB.
