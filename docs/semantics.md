@@ -2103,11 +2103,56 @@ It points at the pool and does not prove it. If the full-pool build fails one
 run in two, three clean runs in a row would still happen one time in eight by
 chance. The hang has also not been shown to be one thing: the `commix` runs had
 every thread blocked and no CPU moving, and the failed `boehm` run kept its CPU
-moving. What it does give is a working configuration. A native build with one
-compute worker has completed `init` every time it was tried, so pinning the
-worker count is the cheap mitigation while the cause is open. More runs of both
-pool sizes, with a stack from any that hang, would settle whether the bug is in
-the cats-effect 3.7 Native pool.
+moving.
+
+Five more of each, alternating, with both binaries built once and copied aside
+so the two arms differ only in `computeWorkerThreadCount`. A stack taken six
+seconds in shows 21 threads besides the markers with the full pool and 4 with
+one worker.
+
+| run | full pool wall / RSS / footprint | one worker wall / RSS / footprint |
+|---|---|---|
+| 1 | 432s / 1.99 GB / 2.51 GB | killed at 1,529s, sampled |
+| 2 | 390s / 2.09 GB / 2.60 GB | 375s / 2.10 GB / 2.49 GB |
+| 3 | 380s / 2.31 GB / 2.82 GB | 507s / 2.37 GB / 2.85 GB |
+| 4 | 325s / 2.01 GB / 2.54 GB | 299s / 2.22 GB / 2.69 GB |
+| 5 | 307s / 2.09 GB / 2.64 GB | 276s / 2.21 GB / 2.53 GB |
+
+That reverses the reading above. Across every `boehm` run so far, the full
+pool completed six of seven and one worker seven of eight. The
+pool size makes no visible difference, and "pin the worker count" is withdrawn
+as a mitigation.
+
+The one-worker hang was sampled before it was killed, the first `boehm` hang
+with a stack, and it is not a deadlock in the libraries. One thread holds
+the collector's allocation lock and is working:
+
+```
+scalanative_GC_alloc_array -> GC_malloc_kind_global -> GC_generic_malloc
+  -> GC_alloc_large -> GC_allochblk -> GC_allochblk_nth
+       -> GC_is_black_listed               3,911 of 4,209 samples
+  -> GC_alloc_large -> GC_collect_or_expand -> GC_expand_hp_inner    51
+```
+
+Every other thread waits on it: one allocating thread and one exiting thread
+blocked on the allocation lock, the main thread and a pool thread parked, and
+the fifteen markers idle in `GC_wait_marker`. The process is 1.9 GB with no
+peak above that. So the failure is bdw-gc trying to place a large array,
+rejecting candidate blocks that are blacklisted as possible false pointers,
+growing the heap a step and trying again. That explains why the CPU kept moving
+and nothing was printed. It also explains why the run's stderr is full of
+`Repeated allocation of very large block` warnings, which are the collector
+saying the same thing earlier. The Scala frames above the array allocation
+were not unwound, so which array it is remains unknown.
+
+This settles the `boehm` hang and leaves `commix` where it was: its stack had
+every thread blocked and no CPU moving, which is not this state. It also
+weakens the earlier reading of that stack. Nine threads in `sem_wait` with no
+symbol above it were taken to be the work-stealing pool, but commix's own GC
+workers would look the same, and the evidence here now leans that way. What both
+results do say is that the hangs belong to the collectors on this workload and
+not to cats-effect. `immix` is the one collector that has not hung, and it
+remains the native default.
 
 A measurement is only as good as the guard around it, and this one got past
 three guards in turn. A resident-size cap missed a process evicted to 960 KB.
