@@ -2236,8 +2236,8 @@ collections. The resident set followed the setting rather than the corpus,
 since the 8 GB run had already shown `std` fits in 9.16 GB.
 
 One caveat on the comparison: compiling and testing an unrelated prototype on
-the JVM overlapped part of the 16 GB run, a few minutes of multi-core work in
-51. That is too little to account for a thousand extra seconds of system time,
+the JVM overlapped part of the 16 GB run: a few minutes of multi-core work
+within its 51. That is too little to account for a thousand extra seconds of system time,
 but the two runs did not have an equally quiet machine.
 
 So the preset heap is a floor to set near the run's need, not a ceiling to set
