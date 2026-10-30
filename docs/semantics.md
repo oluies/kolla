@@ -2503,6 +2503,32 @@ in any issue found, but their neighbours, #5051 (mutators that never reach a
 safepoint at trap yieldpoints) and #5151 (reaping terminated mutators), were
 being worked on this week.
 
+Then it was checked against `main`, and two things survived. Scala Native at
+eb3f3b8 was published locally (`sbt "publish-local-dev 3.9.0"`; only the sbt 2
+plugin failed to build, on a compiler assertion). The reproduction was built
+against it with sbt 1.11.7 and the `0.5.13-SNAPSHOT` plugin. scala-cli cannot
+link a snapshot without `scala-native-cli`, which lives in another repository.
+
+- The idle-thread effect is unchanged on `main`: it passes at 512 MB, 768 MB
+  and 2 GB with 1,544 MB, the 0.5.12 figures exactly. #5128 helps threads that
+  allocate, not threads that wait. Filed as
+  [scala-native#5168](https://github.com/scala-native/scala-native/issues/5168).
+- `main` no longer fails when the cap is too small. With no idle threads and
+  256 MB it reaches step 950,000 and then collects for as long as it is left
+  running. One run went 35 minutes and used 35 minutes of CPU, with the main
+  thread entirely in mark and sweep. 0.5.12 exits with `Out of heap space` on
+  the same input. That is a regression on `main`, plausibly #5128's retry, and
+  it hides the 0.5.12 segfault rather than fixing it. Filed as
+  [scala-native#5169](https://github.com/scala-native/scala-native/issues/5169).
+
+Fresh large arrays still force a collection each on `main`: 1,293 against 6
+pooled, and 1,577 rather than 4,986 with 16 idle threads. That is noted in
+#5168 rather than filed alone. The freed live objects are #5046. They were not
+rechecked on Linux `main`, since its fix is already merged.
+
+For kolla none of this changes the advice: run a library corpus on the JVM,
+and when a native run is needed, use `boehm` with a preset heap.
+
 A measurement is only as good as the guard around it, and this one got past
 three guards in turn. A resident-size cap missed a process evicted to 960 KB.
 A no-CPU-progress check missed a process that advanced its CPU for six hours.

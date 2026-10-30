@@ -168,6 +168,11 @@ because each collection hands reclaimed blocks to every thread in turn: 2 GB
 with 16 idle threads. A cats-effect program has an idle compute pool by
 default, which is how kolla meets it. Fresh allocations of 8 KiB or more add a
 full collection each time one does not fit.
+Both are reported upstream:
+[scala-native#5168](https://github.com/scala-native/scala-native/issues/5168)
+for the idle threads, which `main` has not fixed, and
+[#5169](https://github.com/scala-native/scala-native/issues/5169) for `main`
+collecting forever, instead of failing, when the heap cap is too small.
 
 ## Finding a slow declaration
 

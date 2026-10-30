@@ -20,7 +20,7 @@ committed heap), collections so far and seconds.
 
 ## Results
 
-Scala Native 0.5.12, immix, multithreading on, debug mode, macOS 26 on an
+Scala Native 0.5.12, immix, multithreading on, debug mode, macOS 27.2 on an
 18-core arm64 machine. 1,000,000 steps, so about 30.5 MB is live at the end.
 Caps tried: 48M, 64M, 128M, 256M, 512M, 768M, 1G, 2G.
 
@@ -112,21 +112,32 @@ Not yet checked: commix, and Scala Native `main`.
 
 ## Status of the report
 
-**Not filed: the main finding is already fixed on `main`.** scala-native#5120
-("Immix GC heap grows without limit when several threads allocate
-concurrently") was fixed by #5128 on 2026-10-26, which addresses reusable space
-left "in another mutator's allocation lists". Ours has idle threads rather
-than allocating ones; whether #5128 covers that needs a run against `main`.
-The freed-live-objects result is #5046. The crash and hang on exhaustion with
-many idle threads are not in any issue found; #5051 and #5151 are nearest.
+**Filed** after testing against Scala Native `main` (eb3f3b8, published
+locally with `sbt "publish-local-dev 3.9.0"`, built with sbt 1.11.7 and the
+`0.5.13-SNAPSHOT` plugin, macOS debug):
 
-The draft below predates finding #5120 and is kept as a record.
+- [scala-native#5168](https://github.com/scala-native/scala-native/issues/5168):
+  the idle-thread effect. `main` passes at exactly the 0.5.12 caps, 512 MB,
+  768 MB and 2 GB with 1,544 MB, so #5128, the fix for #5120 where the threads
+  allocate concurrently, does not cover idle ones.
+- [scala-native#5169](https://github.com/scala-native/scala-native/issues/5169):
+  on `main`, a cap that is too small no longer fails. 256 MB with no idle
+  threads reaches step 950,000 and then collects without end, where 0.5.12
+  exits with `Out of heap space`. A sample shows the main thread entirely in
+  mark and sweep. This looks like a regression from #5128's retry.
+
+On `main`, fresh 64/128 KiB arrays still cost a full collection each: 1,293
+against 6 pooled. With 16 idle threads it is 1,577, down from 4,986.
+
+The freed-live-objects result is #5046, fixed on `main` by #5048; it was not
+rechecked on Linux `main`. The draft below was written before #5120 was found
+and is kept as a record; the filed issues supersede it.
 
 > **immix: heap requirement grows with the number of idle threads, because
 > recycled blocks are distributed to threads that never allocate**
 >
 > Scala Native 0.5.12, immix, multithreading enabled (default). Same figures on
-> macOS 26 arm64 and Ubuntu 24.04 aarch64 (clang 18).
+> macOS 27.2 arm64 and Ubuntu 24.04 aarch64 (clang 18).
 >
 > A single thread builds a long-lived linked list, one 32-byte node per 40
 > short-lived nodes. With 1,000,000 retained nodes (~30 MB live), the smallest
