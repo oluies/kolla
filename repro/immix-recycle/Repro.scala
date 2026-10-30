@@ -115,6 +115,13 @@ object Repro:
       if step % c.logEvery == 0 then log(step, retained)
 
     log(step, retained)
+    // Walk the kept chain, so that an optimising build cannot drop `left`.
+    var n = kept
+    var walked = 0L
+    while n != null do
+      walked += 1
+      n = n.left
+    if walked != retained then sys.error(s"walked $walked, expected $retained")
     release.countDown()
     idlers.foreach(_.join())
     System.err.println(f"done heap_mb=$heapMb%.1f sink=$sink kept=${kept.key}")

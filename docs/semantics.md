@@ -2456,6 +2456,53 @@ All three watch `malloc`, and Scala Native's collectors take their heap with
 inside it is invisible to them by construction. `vmmap --summary` is the macOS
 tool that does see it, as an untagged region the size of the heap.
 
+Release mode turned up three more things, and then the report turned out to
+be mostly filed and fixed already.
+
+The reproduction now walks its kept list at the end and fails if a node is
+missing. A release build had let the list go unread, so the walk keeps the
+optimiser from dropping it. On Linux, `release-fast` with the default trap
+yieldpoints found 825 of 1,000,000 nodes, and 114,153 with no garbage between
+them. The heap stayed at 4.3 MB. So `immix` was freeing live objects. Linked
+with `SCALANATIVE_GC_TRAP_BASED_YIELDPOINTS=false` the same build kept all
+1,000,000. That variable is read by the linker. scala-cli's build server does
+not see a value set after it started, and the cached output survives a
+change, so the binary only differs when built with `--server=false` after
+clearing `.scala-build`. This is scala-native#5046, closed on 2026-09-28. Its
+fix, #5048, which makes the register capture write the buffer the marker
+reads rather than a copy, is on `main` and not in 0.5.12. A pointer held only
+in a register, as the loop's `kept` is, went unseen. kolla's
+native builds are debug mode, which uses conditional yieldpoints, so none of
+the measurements above ran with traps. The macOS release build, which did
+keep the list, gave the debug figures: 512 MB with no idle threads.
+
+Out of heap with 16 idle threads does not exit cleanly. Of 5 macOS release
+runs at a 1 GB cap with traps, 4 hung with the main thread in
+`Synchronizer_yield`, parked in `sigwait`, no CPU used, and every idle thread
+parked. One such run sat for 3 hours 42 minutes before it was found. Without
+traps, and in debug mode in 2 of 3 runs, the process died with
+`Unhandled signal 11`. `lldb` puts that in conservative stack marking:
+`Heap_Collect → Marker_markProgramStack → Marker_markConservative →
+Object_GetUnmarkedObject → BlockMeta_IsSuperblockStart`, `EXC_BAD_ACCESS`. With
+4 or 8 idle threads, or 0 or 1, the same exhaustion prints `Out of heap space`
+and exits 1. On Linux debug mode the 16-thread runs exited 1 cleanly in all 4.
+
+And the idle-thread inflation is scala-native#5120, opened 2026-10-23 for
+threads that allocate concurrently. It was fixed by #5128 on 2026-10-26 ("Immix
+can grow its heap … while reusable runs remain in another mutator's allocation
+lists"), which reserves reusable space while mutators are stopped. Our case
+has idle threads rather than allocating ones, but it is the same mechanism.
+`main` still hands recycled blocks round in turn. Whether #5128's retry covers a
+thread that never allocates is the open question, and only a run against
+`main` answers it. No snapshot of `main` is published, so that means building
+Scala Native from source.
+
+So nothing has been filed. Two of the three findings are known and fixed on
+`main`, and the third may be. The segfault and the hang on exhaustion are not
+in any issue found, but their neighbours, #5051 (mutators that never reach a
+safepoint at trap yieldpoints) and #5151 (reaping terminated mutators), were
+being worked on this week.
+
 A measurement is only as good as the guard around it, and this one got past
 three guards in turn. A resident-size cap missed a process evicted to 960 KB.
 A no-CPU-progress check missed a process that advanced its CPU for six hours.

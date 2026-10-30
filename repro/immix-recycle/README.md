@@ -91,13 +91,37 @@ docker run --rm -v "$PWD":/src:ro sn-repro:linux bash -c \
 These watch `malloc`; the immix heap is `mmap`ed and managed by the collector.
 `vmmap --summary <pid>` on macOS shows it as one large untagged region.
 
-Not yet checked: release mode, and commix.
+### Release mode
 
-## Draft report
+The program walks the kept list at the end and fails if a node is missing.
 
-Not filed. A search of scala-native/scala-native issues for these terms found
-nothing on idle threads or recycling; #4032 and #5052 share the error message
-with different causes.
+- **Linux, `release-fast`, default trap yieldpoints: live objects are freed.**
+  The walk finds 825 of 1,000,000 nodes, and the heap stays at 4.3 MB. Linked
+  with `SCALANATIVE_GC_TRAP_BASED_YIELDPOINTS=false` all 1,000,000 survive. This
+  is scala-native#5046, fixed on `main` by #5048 and not in 0.5.12. The
+  variable is read at link time: with scala-cli use `--server=false` and clear
+  `.scala-build`, or the binary does not change.
+- **macOS, `release-fast`:** the list survives, and the caps match debug mode.
+- **Out of heap with 16 idle threads** (both platforms' debug mode on macOS,
+  and release): instead of `Out of heap space`, either a hang, main thread in
+  `Synchronizer_yield`/`sigwait` with traps (4 of 5 runs), or `Unhandled
+  signal 11` in `Marker_markConservative → Object_GetUnmarkedObject →
+  BlockMeta_IsSuperblockStart` (debug, 2 of 3). With 8 or fewer idle threads it
+  exits cleanly. Linux debug exited cleanly in 4 of 4.
+
+Not yet checked: commix, and Scala Native `main`.
+
+## Status of the report
+
+**Not filed: the main finding is already fixed on `main`.** scala-native#5120
+("Immix GC heap grows without limit when several threads allocate
+concurrently") was fixed by #5128 on 2026-10-26, which addresses reusable space
+left "in another mutator's allocation lists". Ours has idle threads rather
+than allocating ones; whether #5128 covers that needs a run against `main`.
+The freed-live-objects result is #5046. The crash and hang on exhaustion with
+many idle threads are not in any issue found; #5051 and #5151 are nearest.
+
+The draft below predates finding #5120 and is kept as a record.
 
 > **immix: heap requirement grows with the number of idle threads, because
 > recycled blocks are distributed to threads that never allocate**
