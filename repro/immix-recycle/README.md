@@ -102,8 +102,7 @@ The program walks the kept list at the end and fails if a node is missing.
   variable is read at link time: with scala-cli use `--server=false` and clear
   `.scala-build`, or the binary does not change.
 - **macOS, `release-fast`:** the list survives, and the caps match debug mode.
-- **Out of heap with 16 idle threads** (both platforms' debug mode on macOS,
-  and release): instead of `Out of heap space`, either a hang, main thread in
+- **Out of heap with 16 idle threads** (macOS, debug and release): instead of `Out of heap space`, either a hang, main thread in
   `Synchronizer_yield`/`sigwait` with traps (4 of 5 runs), or `Unhandled
   signal 11` in `Marker_markConservative → Object_GetUnmarkedObject →
   BlockMeta_IsSuperblockStart` (debug, 2 of 3). With 8 or fewer idle threads it
