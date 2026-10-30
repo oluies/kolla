@@ -2268,8 +2268,8 @@ full pointers where the JVM compresses them, but nothing suggests it is larger
 by tenfold, let alone a hundredfold. `immix` running out of heap on `std`
 therefore looks like a collector that is not reclaiming, not a program that
 needs 51 GB. That is now the question F7 leaves open, and the cheap next step
-is a native run with `SCALANATIVE_MAX_HEAP_SIZE` set low to see whether
-`immix` collects when it has to.
+is a native run with the heap capped low to see whether `immix` collects when
+it has to.
 
 This also answered whether lazy evaluation could lower the requirement. A
 prototype dropped each theorem's value once checked, and cleared each
@@ -2288,6 +2288,36 @@ theorems: 110 distinct on `init` (2,276 unfolds) and 181 of 68,560 on `std`
 well-founded recursion. Of the handwritten corpora, `case-nested` unfolds
 `Acc.inv` once. So a dropped proof would have to be reloadable from the export
 on demand, not discarded.
+
+Capping it says `immix` does collect and still cannot stay small. Scala Native
+0.5.12 has no `SCALANATIVE_MAX_HEAP_SIZE`; the runtime reads
+`GC_MAXIMUM_HEAP_SIZE` and `GC_INITIAL_HEAP_SIZE`, and the cap is honoured:
+`init` at 64 MB stops within a quarter of a second with `Out of heap space grow
+heap`. `std` at 4 GB:
+
+| | wall | resident | peak footprint | collections | result |
+|---|---|---|---|---|---|
+| `immix`, `GC_MAXIMUM_HEAP_SIZE=4G` | 54.9s | 4.30 GB | 4.31 GB | 47 | `Out of heap space grow heap`, exit 1 |
+
+`GC_STATS_FILE` records each collection's mark and sweep times. Mark time rises
+from 0.7 ms at the first to about 200 ms by the thirtieth and stays there, and
+sweep levels at about 280 ms. So the collector runs and finds work. A second
+capped run failed at the same point. Neither run reached the first
+`--progress` line at 25,000 declarations, so how much of `std` was checked is
+known only as "less than a quarter".
+
+That is a heap of 4 GB filled within a minute by a program whose whole live
+set on the JVM, for the entire corpus, is a few hundred megabytes. A mark phase
+that flattens at 200 ms is not what marking several gigabytes of small
+expression nodes looks like. My reading, which these numbers support but do not
+establish, is that the heap is full of space `immix` cannot reuse rather than
+of live objects. Fragmentation would do it, from allocation sizes `immix`
+handles outside its line-and-block scheme. The same pattern made `boehm` print
+large-block warnings at 68 and 132 KiB. The per-declaration caches in
+`TypeChecker` are a candidate source: eight hash maps, rebuilt for every
+declaration, whose backing arrays reach those sizes. That is a hypothesis
+with a direct test. Reuse the maps and clear them between declarations, and see
+whether either collector's behaviour changes.
 
 A measurement is only as good as the guard around it, and this one got past
 three guards in turn. A resident-size cap missed a process evicted to 960 KB.
