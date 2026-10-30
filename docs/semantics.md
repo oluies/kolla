@@ -2382,6 +2382,41 @@ The JVM side also places the 192 MB failure F8 describes. It is the same
 count, 43,441 declarations, on the same export, so that measurement still
 holds after everything since.
 
+The reproduction now exists, and it splits the factor of a hundred into parts.
+`repro/immix-recycle/Repro.scala` has one thread build a linked list of 32-byte
+nodes, one kept per forty discarded. It optionally allocates fresh 64 KiB and
+128 KiB arrays, and optionally starts idle threads. Its README has the table.
+Over 1,000,000 steps, 30.5 MB live:
+
+- Interleaving alone takes the requirement from 48 MB, with the kept nodes
+  allocated together, to 512 MB. `immix` here does not move objects and
+  reclaims by 256-byte line, so a live node alone in its line keeps the line.
+  An export reader is this shape: every expression it keeps is allocated among
+  the JSON values and strings it threw away.
+- Idle threads multiply it: 768 MB with 4, 2 GB with 16. After a collection
+  `Heap_Recycle` hands each partly free block, and each swept large-object
+  chunk, to the next mutator thread in turn. `Allocator_newBlock` takes only
+  from its own thread's list before falling back to wholly free blocks. So the
+  allocating thread gets a share and the rest waits with threads that never
+  allocate. With the kept nodes contiguous there are no partly free blocks, and
+  16 idle threads cost nothing. kolla's binary had 21 threads besides the
+  collector's, nearly all of them the cats-effect pool waiting for work.
+- Fresh large allocations cost time: 3,178 full collections in 140 seconds
+  against 10 in one with the buffers reused, and 8,488 in 319 seconds with 16
+  idle threads. An allocation of 8 KiB or more that does not fit collects on the
+  spot. fs2's 64 KiB read chunks and the strings decoded from them are this.
+
+Those three compound, and none of them is about data kolla holds. The second
+looks like a defect worth reporting to Scala Native. A draft is in the
+repro's README. It was not filed, and an issue search found nothing on idle
+threads or recycling. The first is a property of a non-moving immix. The
+third is a cost that pooling avoids. Linux and release mode have not been
+checked.
+
+What it suggests for kolla is untested here: one compute worker, which
+`boehm` showed costs nothing on this workload, should remove most of the
+second factor under `immix`.
+
 A measurement is only as good as the guard around it, and this one got past
 three guards in turn. A resident-size cap missed a process evicted to 960 KB.
 A no-CPU-progress check missed a process that advanced its CPU for six hours.

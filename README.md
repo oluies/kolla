@@ -160,6 +160,15 @@ Size the initial heap to the corpus rather than generously: `std` at 16G took
 docs/semantics.md F7 has the measurements, including the `commix` and `immix`
 failures and what was ruled out.
 
+Why `immix` needs so much is reproduced without kolla in
+`repro/immix-recycle/`, a single scala-cli file. A long-lived structure built
+among short-lived garbage pins immix's 256-byte lines: 30 MB of retained nodes
+needs a 512 MB heap rather than 48 MB. Idle threads raise that further,
+because each collection hands reclaimed blocks to every thread in turn: 2 GB
+with 16 idle threads. A cats-effect program has an idle compute pool by
+default, which is how kolla meets it. Fresh allocations of 8 KiB or more add a
+full collection each time one does not fit.
+
 ## Finding a slow declaration
 
 `--trace` names each declaration on stderr before checking it, and reports any
