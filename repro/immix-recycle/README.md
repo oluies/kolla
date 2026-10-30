@@ -136,6 +136,8 @@ hands out partly free blocks, and a recovery collection at the cap that leaves
 less than 2% of the heap free counts as exhaustion. With it, 16 idle threads
 need 512 MB like none, and a 256 MB cap throws `OutOfMemoryError` in about 4 s.
 Its scripted test, `gc-idle-mutator-recycling`, fails on unpatched `main`.
+The PR passed Scala Native's full CI, including both scripted-test jobs on
+Linux, and awaits review.
 
 The freed-live-objects result is #5046, fixed on `main` by #5048; it was not
 rechecked on Linux `main`. The draft below was written before #5120 was found

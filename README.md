@@ -175,6 +175,8 @@ for the idle threads, which `main` has not fixed, and
 collecting forever, instead of failing, when the heap cap is too small. A fix
 for both, with scripted tests, is proposed in
 [scala-native#5170](https://github.com/scala-native/scala-native/pull/5170).
+It has passed Scala Native's full CI and awaits review. Until a release carries
+it, a native build stays on `boehm` with a preset heap.
 
 ## Finding a slow declaration
 
