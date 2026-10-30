@@ -496,6 +496,9 @@ final class TypeChecker(
   private def unfoldDefinitionCore(e: Expr): Option[Expr] = e match
     case c: Expr.Const =>
       isDelta(c).map { d =>
+        if DropProofs.isDropped(d) then
+          throw new IllegalStateException(s"dropped theorem value unfolded: ${c.name}")
+        DropProofs.noteUnfold(d)
         // Attempts and misses are counted apart: an attempt that the cache
         // answers is cheap, and conflating the two would read a working cache
         // as repeated work. See docs/semantics.md K21.

@@ -53,6 +53,10 @@ final class ExportReader(forced: Option[ExportFormat] = None, retainItems: Boole
           dispatch(k, line)
         case Some(k) => dispatch(k, line)
     catch case e: ExportException => throw e.atLine(lineNo)
+    liveness.foreach(_.advance(lineNo)(tables.exprs.release))
+
+  /** PROTOTYPE: when set, expressions leave the index table after their last mention. */
+  var liveness: Option[ExprLiveness] = None
 
   def feedAll(lines: IterableOnce[String]): Unit = lines.iterator.foreach(feed)
 

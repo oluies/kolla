@@ -180,6 +180,10 @@ object Check:
       // the throw happens in fs2's frame where it cannot be caught. The three
       // lines of wiring are the price of being able to report exhaustion.
       val reader = new ExportReader(None, retainItems = false)
+      if kolla.kernel.DropProofs.enabled then
+        val src = scala.io.Source.fromFile(name)
+        try reader.liveness = Some(kolla.leanexport.ExprLiveness.of(src.getLines()))
+        finally src.close()
 
       val lines =
         bytes.chunks

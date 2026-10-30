@@ -39,6 +39,9 @@ final class Table[A <: AnyRef: ClassTag](val what: String, initial: Seq[A], budg
 
   def toVector: Vector[A] = Vector.tabulate(limit)(i => arr(i))
 
+  /** PROTOTYPE: forgets entry `i`, so a later reference to it is an error. */
+  def release(i: Int): Unit = if i >= 0 && i < arr.length then arr(i) = null.asInstanceOf[A]
+
 final class ExportTables(maxIndex: Int = 1 << 28):
   private var lines = 0
 

@@ -100,7 +100,8 @@ final class DeclarationChecker(
       checkNoMetavarNoFvar(cv.name, v.value)
       val valType = tc.check(v.value, cv.levelParams)
       if !tc.isDefEq(valType, cv.tpe) then mismatch(cv.name, valType, cv.tpe, tc)
-    env.addCore(ConstantInfo.ThmInfo(v))
+    val kept = if DropProofs.drops(cv.name) then v.copy(value = DropProofs.placeholder) else v
+    env.addCore(ConstantInfo.ThmInfo(kept))
 
   def addOpaque(env: Environment, v: OpaqueVal, check: Boolean = true): Environment =
     val cv = v.toConstantVal
