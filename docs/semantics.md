@@ -2220,6 +2220,30 @@ JVM. `boehm` with a preset heap is the native configuration to reach for when
 a native run is needed, and `immix` stays the default until it has more runs
 behind it.
 
+A larger preset heap is not better. The same binary and corpus with
+`GC_INITIAL_HEAP_SIZE=16G`:
+
+| initial heap | wall | user / sys | resident | peak footprint | page reclaims | starvation warnings |
+|---|---|---|---|---|---|---|
+| 8 GB | 1,918.6s | 1,936s / 501s | 9.16 GB | 10.10 GB | 75.7 M | 133 |
+| 16 GB | 3,057.7s | 2,230s / 1,613s | 17.66 GB | 18.91 GB | 281.6 M | 261 |
+
+Both accepted all 99,619 declarations. The 16 GB run took 59% longer, almost
+all of it in the kernel: system time more than tripled with 3.7 times the page
+reclaims and no swapping. A conservative collector scans and touches whatever
+heap it has, so a heap twice the size it needs costs pages without saving
+collections. The resident set followed the setting rather than the corpus,
+since the 8 GB run had already shown `std` fits in 9.16 GB.
+
+One caveat on the comparison: compiling and testing an unrelated prototype on
+the JVM overlapped part of the 16 GB run, a few minutes of multi-core work in
+51. That is too little to account for a thousand extra seconds of system time,
+but the two runs did not have an equally quiet machine.
+
+So the preset heap is a floor to set near the run's need, not a ceiling to set
+generously. Eight gigabytes for `std` and four for `init` are both within about
+a gigabyte of what the run ended up resident at.
+
 A measurement is only as good as the guard around it, and this one got past
 three guards in turn. A resident-size cap missed a process evicted to 960 KB.
 A no-CPU-progress check missed a process that advanced its CPU for six hours.
