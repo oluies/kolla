@@ -138,7 +138,7 @@ docs/semantics.md P15.
 
 The checker holds little. On the v4.35.0 `std` export, 99,619 declarations,
 the live heap is about 185 MB, and the JVM build checks it with `-Xmx512m` in
-270 seconds against 254 with an unbounded heap. A large resident figure from
+270 seconds against 254 with `-Xmx28g`. A large resident figure from
 the JVM is headroom it was allowed to take, not what the check requires. A
 larger corpus needs more, so measure before reading a resident figure as the
 requirement.
