@@ -2314,7 +2314,7 @@ establish, is that the heap is full of space `immix` cannot reuse rather than
 of live objects. Fragmentation would do it, from allocation sizes `immix`
 handles outside its line-and-block scheme. The same pattern made `boehm` print
 large-block warnings at 68 and 132 KiB. The per-declaration caches in
-`TypeChecker` are a candidate source: eight hash maps, rebuilt for every
+`TypeChecker` are a candidate source: seven hash maps and sets, rebuilt for every
 declaration, whose backing arrays reach those sizes. That is a hypothesis
 with a direct test. Reuse the maps and clear them between declarations, and see
 whether either collector's behaviour changes.
