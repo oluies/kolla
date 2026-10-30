@@ -2526,6 +2526,16 @@ pooled, and 1,577 rather than 4,986 with 16 idle threads. That is noted in
 #5168 rather than filed alone. The freed live objects are #5046. They were not
 rechecked on Linux `main`, since its fix is already merged.
 
+Both have a proposed fix,
+[scala-native#5170](https://github.com/scala-native/scala-native/pull/5170).
+`Heap_Recycle` skips threads that are blocked in native code when it hands out
+partly free blocks. A recovery collection at the cap that leaves under 2% of
+the heap free counts as exhaustion, with the large allocator's free chunks
+counted as free. The repro's 16 idle threads then need 512 MB, the same as
+none, and a 256 MB cap throws `OutOfMemoryError` in about 4 seconds. Its
+scripted test passes with the fix and fails on unpatched `main` at the
+16-thread case.
+
 For kolla none of this changes the advice: run a library corpus on the JVM,
 and when a native run is needed, use `boehm` with a preset heap.
 

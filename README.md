@@ -172,7 +172,9 @@ Both are reported upstream:
 [scala-native#5168](https://github.com/scala-native/scala-native/issues/5168)
 for the idle threads, which `main` has not fixed, and
 [#5169](https://github.com/scala-native/scala-native/issues/5169) for `main`
-collecting forever, instead of failing, when the heap cap is too small.
+collecting forever, instead of failing, when the heap cap is too small. A fix
+for both, with scripted tests, is proposed in
+[scala-native#5170](https://github.com/scala-native/scala-native/pull/5170).
 
 ## Finding a slow declaration
 

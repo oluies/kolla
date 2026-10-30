@@ -129,6 +129,14 @@ locally with `sbt "publish-local-dev 3.9.0"`, built with sbt 1.11.7 and the
 On `main`, fresh 64/128 KiB arrays still cost a full collection each: 1,293
 against 6 pooled. With 16 idle threads it is 1,577, down from 4,986.
 
+**Fix proposed** in
+[scala-native#5170](https://github.com/scala-native/scala-native/pull/5170):
+`Heap_Recycle` skips threads blocked in native code (`Unmanaged`) when it
+hands out partly free blocks, and a recovery collection at the cap that leaves
+less than 2% of the heap free counts as exhaustion. With it, 16 idle threads
+need 512 MB like none, and a 256 MB cap throws `OutOfMemoryError` in about 4 s.
+Its scripted test, `gc-idle-mutator-recycling`, fails on unpatched `main`.
+
 The freed-live-objects result is #5046, fixed on `main` by #5048; it was not
 rechecked on Linux `main`. The draft below was written before #5120 was found
 and is kept as a record; the filed issues supersede it.
