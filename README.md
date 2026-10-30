@@ -134,8 +134,31 @@ keeps the digests it had already accepted. Reusing an entry is trusting it; the
 file is part of what the verdict rests on, which is why it is opt-in. See
 docs/semantics.md P15.
 
+### Memory, and the native binary
+
+The checker holds little. On the v4.35.0 `std` export, 99,619 declarations,
+the live heap is about 185 MB, and the JVM build checks it with `-Xmx512m` in
+270 seconds against 254 with an unbounded heap. A large resident figure from
+the JVM is headroom it was allowed to take, not what the check requires. A
+larger corpus needs more, so measure before reading a resident figure as the
+requirement.
+
 `mill cli.native.nativeLink` builds a native binary. It is the faster of the two
-on small inputs and much the slower on large ones; see docs/semantics.md F7.
+on small inputs and much the slower on large ones, and with the default `immix`
+collector it does not finish `std`: it runs out of heap at a 51.6 GB footprint.
+Built with `nativeGC = "boehm"` and started with a heap near what the run needs,
+it does:
+
+| corpus | native, `boehm` | wall | resident | JVM |
+|---|---|---|---|---|
+| `init` | `GC_INITIAL_HEAP_SIZE=4G` | 208–218s | 4.9–5.2 GB | 48s |
+| `std` | `GC_INITIAL_HEAP_SIZE=8G` | 1,919s | 9.16 GB | 254s |
+
+Size the initial heap to the corpus rather than generously: `std` at 16G took
+3,058 seconds. `boehm` with its default heap hung on 2 of 15 `init` runs; none of
+10 with a 4 GB start did. For a library corpus the JVM is still the build to use.
+docs/semantics.md F7 has the measurements, including the `commix` and `immix`
+failures and what was ruled out.
 
 ## Finding a slow declaration
 
