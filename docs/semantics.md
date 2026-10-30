@@ -2374,9 +2374,9 @@ rest is `immix` holding space it does not hand back to the program. The two
 capped failures closest to the boundary both died at about 205 seconds, half
 way through a run that otherwise takes 400. So the requirement builds up
 steadily rather than spiking at one declaration. That makes this a reportable
-Scala Native problem rather than a property of this checker. A self-contained
-reproduction is the expression table plus a declaration loop, which is about
-what this program is.
+Scala Native problem rather than a property of this checker, though a report
+would want a reproduction smaller than a Lean library, and none has been
+attempted.
 
 The JVM side also places the 192 MB failure F8 describes. It is the same
 count, 43,441 declarations, on the same export, so that measurement still
