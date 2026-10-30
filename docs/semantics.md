@@ -2244,6 +2244,51 @@ So the preset heap is a floor to set near the run's need, not a ceiling to set
 generously. Eight gigabytes for `std` and four for `init` are both within about
 a gigabyte of what the run ended up resident at.
 
+"The run's need" turns out to be far smaller than any of these figures, and
+that changes how the whole entry reads. Measured on the JVM, where the live set
+can be taken directly with a full collection followed by `jcmd GC.heap_info`
+or `jmap -histo:live`:
+
+| `std` on `cli.jvm` | wall | resident | live heap |
+|---|---|---|---|
+| `-Xmx28g` | 254.1s | 9.61 GB | 0.33–0.54 GB, sampled every 30s |
+| `-Xmx1g` | 266.4s | 1.31 GB | — |
+| `-Xmx512m` | 269.9s | 0.77 GB | — |
+
+All three accepted 99,619 declarations. A histogram 200 seconds in puts the
+live heap at 185 MB, 138 MB of it expression nodes: 4.47 million `Expr.App`
+alone. Everything resident above that is collector headroom. The JVM grows
+into a 28 GB ceiling because it is allowed to, and a 512 MB one costs it 6% of
+the time.
+
+So none of the native footprints in this entry, from 2.5 GB under `boehm` to
+51.6 GB under `immix`, is data the checker holds. The native live set has not
+been measured. It will be larger than the JVM's, since native objects carry
+full pointers where the JVM compresses them, but nothing suggests it is larger
+by tenfold, let alone a hundredfold. `immix` running out of heap on `std`
+therefore looks like a collector that is not reclaiming, not a program that
+needs 51 GB. That is now the question F7 leaves open, and the cheap next step
+is a native run with `SCALANATIVE_MAX_HEAP_SIZE` set low to see whether
+`immix` collects when it has to.
+
+This also answered whether lazy evaluation could lower the requirement. A
+prototype dropped each theorem's value once checked, and cleared each
+expression from the reader's index table after its last mention, found by a
+first pass over the file. It was not committed. On `std`, 78% of expression
+nodes are reachable only through theorem values, and live `Expr.App` nodes fell
+from 4.47 million to 1.15 million. But the first pass's two index arrays cost
+77 MB, and the live heap went from 185 MB to only 158 MB. It cannot help much
+when the live set is already a few hundred megabytes and the footprint is the
+collector's.
+
+The prototype also showed that dropping proofs is not free. The kernel unfolds
+theorems: 110 distinct on `init` (2,276 unfolds) and 181 of 68,560 on `std`
+(7,414 unfolds), led by `Eq.symm`, `Eq.trans`, `eq_true`, `of_eq_true`,
+`congrArg` and `WellFounded.apply`, plus the `_proof_` lemmas of definitions by
+well-founded recursion. Of the handwritten corpora, `case-nested` unfolds
+`Acc.inv` once. So a dropped proof would have to be reloadable from the export
+on demand, not discarded.
+
 A measurement is only as good as the guard around it, and this one got past
 three guards in turn. A resident-size cap missed a process evicted to 960 KB.
 A no-CPU-progress check missed a process that advanced its CPU for six hours.
