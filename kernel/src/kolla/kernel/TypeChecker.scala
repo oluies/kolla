@@ -17,7 +17,9 @@ private final class ExprPair(val a: Expr, val b: Expr):
 /** `lean::type_checker`.
   *
   * One instance per declaration: the caches are plain mutable maps and are never
-  * shared. All recursion runs in `cats.Eval`.
+  * shared between live instances. A caller that builds checkers strictly one
+  * after another may hand each the same `Caches`, which the new checker empties
+  * before use. All recursion runs in `cats.Eval`.
   */
 final class TypeChecker(
     val env: Environment,
@@ -26,8 +28,11 @@ final class TypeChecker(
     initialLocalContext: LocalContext = LocalContext.empty,
     val maxSteps: Long = TypeChecker.defaultMaxSteps,
     /** A wall-clock bound on this declaration, alongside `maxSteps`. */
-    val timeLimit: Option[TypeChecker.TimeLimit] = None
+    val timeLimit: Option[TypeChecker.TimeLimit] = None,
+    caches: TypeChecker.Caches = new TypeChecker.Caches
 ):
+
+  caches.reset()
 
   private val ngen = new NameGenerator()
 
@@ -39,13 +44,13 @@ final class TypeChecker(
 
   private var lparams: Option[List[Name]] = None
 
-  private val inferCacheCheck = mutable.HashMap.empty[Expr, Expr]
-  private val inferCacheOnly  = mutable.HashMap.empty[Expr, Expr]
-  private val whnfCoreCache   = mutable.HashMap.empty[Expr, Expr]
-  private val whnfCache       = mutable.HashMap.empty[Expr, Expr]
-  private val unfoldCache     = mutable.HashMap.empty[Expr, Expr]
-  private val successCache    = mutable.HashSet.empty[ExprPair]
-  private val failureCache    = mutable.HashSet.empty[ExprPair]
+  private val inferCacheCheck = caches.inferCheck
+  private val inferCacheOnly  = caches.inferOnly
+  private val whnfCoreCache   = caches.whnfCore
+  private val whnfCache       = caches.whnf
+  private val unfoldCache     = caches.unfold
+  private val successCache    = caches.success
+  private val failureCache    = caches.failure
 
   private val failedPairs = mutable.ArrayDeque.empty[String]
   private var steps: Long = 0
@@ -1307,6 +1312,42 @@ final class TypeChecker(
 object TypeChecker:
   val defaultMaxSteps: Long = 1L << 32
   val maxTraceEntries: Int  = 32
+
+  /** A checker's caches, kept so that consecutive checkers reuse them.
+    *
+    * Built afresh per declaration they were the run's commonest mid-sized
+    * allocation: backing arrays of 8 and 16 thousand slots, discarded thousands
+    * of times over. Both native collectors handle that pattern badly (F7).
+    * Emptying keeps an array's capacity, so a table that grew past `keepUpTo`
+    * entries is replaced instead, or one large declaration would make every
+    * later clear pay for its size.
+    */
+  final class Caches:
+    var inferCheck = mutable.HashMap.empty[Expr, Expr]
+    var inferOnly  = mutable.HashMap.empty[Expr, Expr]
+    var whnfCore   = mutable.HashMap.empty[Expr, Expr]
+    var whnf       = mutable.HashMap.empty[Expr, Expr]
+    var unfold     = mutable.HashMap.empty[Expr, Expr]
+    var success    = mutable.HashSet.empty[ExprPair]
+    var failure    = mutable.HashSet.empty[ExprPair]
+
+    private def emptied[K, V](m: mutable.HashMap[K, V]): mutable.HashMap[K, V] =
+      if m.size > Caches.keepUpTo then mutable.HashMap.empty else { m.clear(); m }
+
+    private def emptied[A](s: mutable.HashSet[A]): mutable.HashSet[A] =
+      if s.size > Caches.keepUpTo then mutable.HashSet.empty else { s.clear(); s }
+
+    def reset(): Unit =
+      inferCheck = emptied(inferCheck)
+      inferOnly = emptied(inferOnly)
+      whnfCore = emptied(whnfCore)
+      whnf = emptied(whnf)
+      unfold = emptied(unfold)
+      success = emptied(success)
+      failure = emptied(failure)
+
+  object Caches:
+    val keepUpTo: Int = 1 << 16
 
   /** How often the clock is read, in reduction steps.
     *

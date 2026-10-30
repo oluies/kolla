@@ -3,7 +3,8 @@ package kolla.kernel
 /** Declaration checking, mirroring `environment::add_axiom`, `add_definition`,
   * `add_theorem`, `add_opaque` and `add_mutual` in `src/kernel/environment.cpp`.
   *
-  * A fresh `TypeChecker` is created per declaration, so no cache is shared.
+  * A fresh `TypeChecker` is created per declaration. Its caches are reused
+  * from the previous one and emptied first, so nothing cached carries over.
   */
 final class DeclarationChecker(
     val profile: KernelProfile = KernelProfile.default,
@@ -42,12 +43,18 @@ final class DeclarationChecker(
     */
   private def window(): Option[TypeChecker.TimeLimit] = timeLimit.map(_.fresh())
 
+  /** Shared by every checker built here. Each entry point is done with one
+    * checker before it builds the next, so handing them the same caches is
+    * the same as giving each its own.
+    */
+  private val caches = new TypeChecker.Caches
+
   private def checker(
       env: Environment,
       safety: DefinitionSafety,
       window: Option[TypeChecker.TimeLimit]
   ): TypeChecker =
-    new TypeChecker(env, profile, safety, LocalContext.empty, maxSteps, window)
+    new TypeChecker(env, profile, safety, LocalContext.empty, maxSteps, window, caches)
 
   private def mismatch(n: Name, given0: Expr, expected: Expr, tc: TypeChecker): Nothing =
     throw new KernelException(
