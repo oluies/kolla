@@ -2417,6 +2417,45 @@ What it suggests for kolla is untested here: one compute worker, which
 `boehm` showed costs nothing on this workload, should remove most of the
 second factor under `immix`.
 
+Tested, and it does not rescue `std`. `immix` with `computeWorkerThreadCount = 1`,
+4 threads instead of 21, uncapped. Eleven minutes in, `vmmap --summary` showed
+a physical footprint of 24.1 GB, with 6.4 GB resident and 18.6 GB swapped or
+compressed. Malloc zones held 53.8 MB in all, and the rest was one 24.3 GB
+untagged region, the collector's heap. The machine's 19.5 GB of swap was down
+to 1.3 GB free, so the run was sampled and stopped rather than left to exhaust
+it. The uncapped default build had reached 51.6 GB at 44 minutes. A slower
+climb is possible, but nothing here says the run would have finished, so for
+kolla the interleaving factor dominates and the idle-thread factor is the
+smaller part. The `GC_STATS_FILE` was empty: `immix` writes it at exit, and a
+killed run leaves nothing.
+
+The reproduction behaves the same on Linux. In Rancher Desktop's VM (Ubuntu
+24.04, aarch64, 2 CPUs), built there with scala-cli and clang 18, 30.5 MB live
+needs 512 MB with no idle threads, and with 16 idle threads it fails at 1 GB and
+passes at 2 GB with 1,544 MB committed. Fresh large buffers take 1,620
+collections in 200,000 steps against 6 with the buffers pooled. Those are the
+macOS figures to the megabyte, so the effects are in the collector, not the
+platform.
+
+The memory checkers were run on the reproduction, and none of them can see the
+problem:
+
+- AddressSanitizer (`-fsanitize=address` through `--native-compile` and
+  `--native-linking`, Linux) reported no errors in the runtime or the program.
+  With idle threads it ends in its own `failed to deallocate … Failed to munmap`
+  when they exit, which stops LeakSanitizer from running. Without them,
+  LeakSanitizer reports no leaks.
+- Valgrind Memcheck (Linux): 0 bytes definitely or indirectly lost, 2,304
+  possibly lost, and 8 errors from `tryGrowStack` touching below the stack
+  while `setupStackOverflowGuards` probes it. That probing is deliberate.
+- `leaks --atExit` with `MallocStackLogging=1` (macOS): 191 malloc nodes,
+  555 KB, 0 leaks.
+
+All three watch `malloc`, and Scala Native's collectors take their heap with
+`mmap` and manage it themselves. A heap that grows because blocks sit unusable
+inside it is invisible to them by construction. `vmmap --summary` is the macOS
+tool that does see it, as an untagged region the size of the heap.
+
 A measurement is only as good as the guard around it, and this one got past
 three guards in turn. A resident-size cap missed a process evicted to 960 KB.
 A no-CPU-progress check missed a process that advanced its CPU for six hours.

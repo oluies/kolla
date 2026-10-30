@@ -57,7 +57,41 @@ Three separate effects:
    threads raise it to 8,488 and 319 seconds, consistent with freed large
    chunks also being distributed.
 
-Not yet checked: Linux, release mode, and commix.
+### Linux
+
+The same on Linux. Rancher Desktop VM: Ubuntu 24.04, aarch64, 2 CPUs, clang
+18, built inside it with scala-cli 1.18.0:
+
+| configuration | smallest passing cap |
+|---|---|
+| `--no-large`, idle 0 | 512 MB (fails at 256 MB) |
+| `--no-large`, idle 16 | 2 GB, 1,544 MB committed (fails at 1 GB) |
+
+200,000 steps with fresh large arrays: 1,620 collections, 13.6s. Pooled: 6,
+0.3s. Identical to macOS to the megabyte.
+
+```
+docker build -t sn-repro:linux -f Dockerfile.linux .
+docker run --rm -v "$PWD":/src:ro sn-repro:linux bash -c \
+  'cp /src/Repro.scala . && scala-cli --power package --native Repro.scala -o repro -f &&
+   GC_MAXIMUM_HEAP_SIZE=1G ./repro --idle 16 --no-large'
+```
+
+### Memory checkers see nothing, as they should not
+
+- AddressSanitizer, with `--native-compile -fsanitize=address --native-linking
+  -fsanitize=address`: no errors. With idle threads, ASan's own `Failed to
+  munmap` at thread exit ends the process before LeakSanitizer runs; without
+  them, no leaks.
+- Valgrind Memcheck: 0 bytes definitely lost. Its 8 errors are
+  `tryGrowStack` deliberately probing the stack from
+  `setupStackOverflowGuards`.
+- macOS `leaks --atExit` with `MallocStackLogging=1`: 0 leaks, 555 KB malloced.
+
+These watch `malloc`; the immix heap is `mmap`ed and managed by the collector.
+`vmmap --summary <pid>` on macOS shows it as one large untagged region.
+
+Not yet checked: release mode, and commix.
 
 ## Draft report
 
@@ -68,7 +102,8 @@ with different causes.
 > **immix: heap requirement grows with the number of idle threads, because
 > recycled blocks are distributed to threads that never allocate**
 >
-> Scala Native 0.5.12, immix, multithreading enabled (default), macOS arm64.
+> Scala Native 0.5.12, immix, multithreading enabled (default). Same figures on
+> macOS 26 arm64 and Ubuntu 24.04 aarch64 (clang 18).
 >
 > A single thread builds a long-lived linked list, one 32-byte node per 40
 > short-lived nodes. With 1,000,000 retained nodes (~30 MB live), the smallest
