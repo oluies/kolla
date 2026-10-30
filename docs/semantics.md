@@ -2342,6 +2342,46 @@ measurement and is not explained. One plausible cost is clearing tables that
 grew to tens of thousands of slots, on every checker. Either way the change
 fixes nothing it was meant to and costs time, so it stays off `main`.
 
+The size of the gap is now measured rather than inferred. The smallest heap
+each build needs for `init`, built from the same source, a pass meaning all
+59,349 declarations accepted:
+
+| `immix`, `GC_MAXIMUM_HEAP_SIZE` | result |
+|---|---|
+| 512 MB | out of heap at 3s |
+| 16,640 MB | out of heap at 203s |
+| 24,576 MB | out of heap at 209s |
+| **25,088 MB** | **passes, 410s, 14.70 GB resident** |
+| 25,600 MB | passes, 400s, 15.94 GB |
+| 26,624 MB | passes, 372s, 14.96 GB |
+| 28,672 MB | passes, 342s, 17.57 GB |
+| 32,768 MB | passes, 400s, 11.63 GB |
+
+| `cli.jvm`, `-Xmx` | result |
+|---|---|
+| 96 MB | out of memory after 19,952 declarations |
+| 128 MB | out of memory after 28,530 |
+| 192 MB | out of memory after 43,441 |
+| 224 MB | out of memory after 58,425, at 106.9s |
+| **256 MB** | **passes, 54.6s, 0.56 GB resident** |
+| 512 MB | passes, 49.1s, 0.75 GB |
+
+`immix` needs between 24 and 25 GB of heap for a corpus the JVM checks in
+between 224 and 256 MB: a factor of about a hundred. Native objects are
+somewhat larger, since the JVM compresses its pointers and Scala Native does
+not, but a pointer-size difference accounts for less than a factor of two. The
+rest is `immix` holding space it does not hand back to the program. The two
+capped failures closest to the boundary both died at about 205 seconds, half
+way through a run that otherwise takes 400. So the requirement builds up
+steadily rather than spiking at one declaration. That makes this a reportable
+Scala Native problem rather than a property of this checker. A self-contained
+reproduction is the expression table plus a declaration loop, which is about
+what this program is.
+
+The JVM side also places the 192 MB failure F8 describes. It is the same
+count, 43,441 declarations, on the same export, so that measurement still
+holds after everything since.
+
 A measurement is only as good as the guard around it, and this one got past
 three guards in turn. A resident-size cap missed a process evicted to 960 KB.
 A no-CPU-progress check missed a process that advanced its CPU for six hours.
