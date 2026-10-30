@@ -1,5 +1,5 @@
 # arm64 host; on x86_64 use scala-cli-x86_64-pc-linux.gz below.
-FROM eclipse-temurin:21-jdk-noble
+FROM eclipse-temurin:25-jdk-noble
 RUN apt-get update && apt-get install -y --no-install-recommends \
       clang lld libclang-rt-18-dev libstdc++-14-dev valgrind curl ca-certificates gzip time procps \
     && rm -rf /var/lib/apt/lists/*
