@@ -2536,6 +2536,16 @@ none, and a 256 MB cap throws `OutOfMemoryError` in about 4 seconds. Its
 scripted test passes with the fix and fails on unpatched `main` at the
 16-thread case.
 
+Scala Native's CI passed on the PR in full, and the CLA is signed. That is
+every job that ran: the runtime suites for Scala 2.12, 2.13, 3 and 3-next in
+debug and release-fast, Windows ARM64, FreeBSD, NetBSD and Termux. Also the
+cross-compilation jobs for linux-arm64, linux-riscv64 and linux-x86, both
+scripted-test jobs, which run `gc-idle-mutator-recycling` on Linux, the tools,
+lint and docs. The LLVM-version, partest, runtime-extension and no-opt jobs
+were skipped by the workflow's own conditions. The longest job took 1 hour 6
+minutes. At the time of writing the PR awaits a maintainer review, and #5168
+and #5169 have no replies.
+
 For kolla none of this changes the advice: run a library corpus on the JVM,
 and when a native run is needed, use `boehm` with a preset heap.
 
