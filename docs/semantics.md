@@ -2319,6 +2319,29 @@ declaration, whose backing arrays reach those sizes. That is a hypothesis
 with a direct test. Reuse the maps and clear them between declarations, and see
 whether either collector's behaviour changes.
 
+The test was run and the hypothesis is half right. The caches moved into a
+`TypeChecker.Caches` that `DeclarationChecker` keeps and each new checker empties
+before use, with a table past 65,536 entries replaced rather than emptied. The
+inductive paths, which hold several checkers at once, kept their own. All JVM
+tests pass with it. It is on the `cache-reuse` branch and not on `main`:
+
+| | before | with reused caches |
+|---|---|---|
+| `immix` `std`, 4 GB cap | out of heap at 54.9s, 47 collections | out of heap at 64.8s, 47 collections |
+| `boehm` `init`, default heap: large-block warnings | 662–927 a run | 339 and 319 |
+| `boehm` `init`: wall / resident | 276–507s / 2.0–2.4 GB | 487s and 420s / 1.68 and 1.73 GB |
+| `cli.jvm` `std` | 254.1s | 390.4s, one run |
+
+So the caches were about half of what `boehm` warns about, and none of what
+fills `immix`'s heap. The remaining warnings are still at 68 and 132 KiB, so
+something else allocates arrays of those sizes in quantity. `ExprOps` builds a
+fresh `HashMap` for each traversal and is the next candidate. `immix` failing
+at the same point with the same number of collections says its problem is not
+an allocation pattern this change touched. The JVM run being 54% slower is one
+measurement and is not explained. One plausible cost is clearing tables that
+grew to tens of thousands of slots, on every checker. Either way the change
+fixes nothing it was meant to and costs time, so it stays off `main`.
+
 A measurement is only as good as the guard around it, and this one got past
 three guards in turn. A resident-size cap missed a process evicted to 960 KB.
 A no-CPU-progress check missed a process that advanced its CPU for six hours.
