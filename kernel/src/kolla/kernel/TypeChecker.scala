@@ -50,7 +50,12 @@ final class TypeChecker(
   private val successCache    = mutable.HashSet.empty[ExprPair]
   private val failureCache    = mutable.HashSet.empty[ExprPair]
 
-  private val failedPairs = mutable.ArrayDeque.empty[String]
+  /** The last pairs `is_def_eq` rejected, kept as terms and formatted only when
+    * `defeqTrace` is read. A rejected pair is routine in lazy delta reduction,
+    * and formatting each one on the spot was a fifth of all allocation on
+    * `std`, almost always for declarations that were then accepted.
+    */
+  private val failedPairs = mutable.ArrayDeque.empty[(Expr, Expr)]
   private var steps: Long = 0
 
   /** What the reduction spent itself on, for when it does not terminate.
@@ -113,7 +118,8 @@ final class TypeChecker(
     sb.result()
 
   /** The pairs `is_def_eq` rejected, most recent last. */
-  def defeqTrace: List[String] = failedPairs.toList
+  def defeqTrace: List[String] =
+    failedPairs.toList.map((t, s) => s"${Pretty.expr(t, 200)}  =?=  ${Pretty.expr(s, 200)}")
 
   def localContext: LocalContext = lctx
 
@@ -134,7 +140,7 @@ final class TypeChecker(
 
   private def recordFailure(t: Expr, s: Expr): Unit =
     if failedPairs.length >= TypeChecker.maxTraceEntries then failedPairs.removeHead()
-    failedPairs.append(s"${Pretty.expr(t, 200)}  =?=  ${Pretty.expr(s, 200)}")
+    failedPairs.append((t, s))
 
   private def fail(kind: ExceptionKind, detail: String): Nothing =
     throw new KernelException(kind, None, detail, defeqTrace)
