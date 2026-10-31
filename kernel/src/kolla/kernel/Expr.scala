@@ -255,53 +255,122 @@ object Expr:
   private def eqCore(a0: Expr, b0: Expr, compareBinderInfo: Boolean): Boolean =
     if a0.asInstanceOf[AnyRef] eq b0.asInstanceOf[AnyRef] then return true
     if a0.data != b0.data then return false
-    val stack = mutable.ArrayDeque.empty[(Expr, Expr)]
-    var seen: mutable.HashSet[IdPair] = null
-    stack.append((a0, b0))
-    var ok = true
-    while ok && stack.nonEmpty do
-      val (x, y) = stack.removeLast()
-      if x.asInstanceOf[AnyRef] eq y.asInstanceOf[AnyRef] then ()
-      else if x.hash != y.hash || x.kindOrd != y.kindOrd then ok = false
+    new EqFn(compareBinderInfo).eq(a0, b0, 0)
+
+  /** How deep `EqFn` recurses on the call stack before it hands a pair to the
+    * iterative comparison, as `ExprOps.replace` does.
+    */
+  private final val EqDirectDepth = 256
+
+  /** Inner nodes compared before pairs are recorded in `seen`. The set exists so
+    * that shared subterms are not compared once per path to them; a small
+    * comparison never needs it, and most comparisons are small.
+    */
+  private final val EqSeenAfter = 32
+
+  /** One structural comparison. Most pairs are settled on `data`, which holds
+    * the hash and the flags and is equal whenever the terms are: it is built from
+    * the same fields this compares, binder names and `MData` entries excluded
+    * from both.
+    */
+  private final class EqFn(compareBinderInfo: Boolean):
+    private var seen: mutable.HashSet[IdPair] = null
+    private var inner                         = 0
+
+    /** False if the pair was compared before on another path. */
+    private def firstVisit(x: Expr, y: Expr): Boolean =
+      inner += 1
+      if inner <= EqSeenAfter then true
       else
-        var skip = false
+        if seen == null then seen = mutable.HashSet.empty[IdPair]
+        seen.add(new IdPair(x, y))
+
+    def eq(x: Expr, y: Expr, depth: Int): Boolean =
+      if x.asInstanceOf[AnyRef] eq y.asInstanceOf[AnyRef] then true
+      else if x.data != y.data || x.kindOrd != y.kindOrd then false
+      else if depth >= EqDirectDepth then loop(x, y)
+      else
+        val d = depth + 1
         x match
-          case _: BVar | _: FVar | _: MVar | _: Sort | _: Lit => ()
-          case _ =>
-            if seen == null then seen = mutable.HashSet.empty[IdPair]
-            if !seen.add(new IdPair(x, y)) then skip = true
-        if !skip then
+          case p: BVar  => p.idx == y.asInstanceOf[BVar].idx
+          case p: FVar  => p.id == y.asInstanceOf[FVar].id
+          case p: MVar  => p.id == y.asInstanceOf[MVar].id
+          case p: Sort  => p.level == y.asInstanceOf[Sort].level
+          case p: Lit   => p.value == y.asInstanceOf[Lit].value
+          case _ if !firstVisit(x, y) => true
+          case p: Const =>
+            val q = y.asInstanceOf[Const]
+            p.name == q.name && p.levels.length == q.levels.length && p.levels.corresponds(q.levels)(_ == _)
+          case p: App =>
+            val q = y.asInstanceOf[App]
+            eq(p.fn, q.fn, d) && eq(p.arg, q.arg, d)
+          case p: Lam =>
+            val q = y.asInstanceOf[Lam]
+            !(compareBinderInfo && (p.binderName != q.binderName || p.binderInfo != q.binderInfo)) &&
+              eq(p.binderType, q.binderType, d) && eq(p.body, q.body, d)
+          case p: ForallE =>
+            val q = y.asInstanceOf[ForallE]
+            !(compareBinderInfo && (p.binderName != q.binderName || p.binderInfo != q.binderInfo)) &&
+              eq(p.binderType, q.binderType, d) && eq(p.body, q.body, d)
+          case p: LetE =>
+            val q = y.asInstanceOf[LetE]
+            p.nondep == q.nondep && !(compareBinderInfo && p.declName != q.declName) &&
+              eq(p.tpe, q.tpe, d) && eq(p.value, q.value, d) && eq(p.body, q.body, d)
+          case p: MData =>
+            val q = y.asInstanceOf[MData]
+            p.kv == q.kv && eq(p.expr, q.expr, d)
+          case p: Proj =>
+            val q = y.asInstanceOf[Proj]
+            p.typeName == q.typeName && p.idx == q.idx && eq(p.struct, q.struct, d)
+
+    /** The iterative comparison, for pairs below `EqDirectDepth`. */
+    private def loop(a0: Expr, b0: Expr): Boolean =
+      val stack = mutable.ArrayDeque.empty[(Expr, Expr)]
+      stack.append((a0, b0))
+      var ok = true
+      while ok && stack.nonEmpty do
+        val (x, y) = stack.removeLast()
+        if x.asInstanceOf[AnyRef] eq y.asInstanceOf[AnyRef] then ()
+        else if x.hash != y.hash || x.kindOrd != y.kindOrd then ok = false
+        else
+          var skip = false
           x match
-            case p: BVar => if p.idx != y.asInstanceOf[BVar].idx then ok = false
-            case p: FVar => if p.id != y.asInstanceOf[FVar].id then ok = false
-            case p: MVar => if p.id != y.asInstanceOf[MVar].id then ok = false
-            case p: Sort => if p.level != y.asInstanceOf[Sort].level then ok = false
-            case p: Lit  => if p.value != y.asInstanceOf[Lit].value then ok = false
-            case p: Const =>
-              val q = y.asInstanceOf[Const]
-              if p.name != q.name || p.levels.length != q.levels.length || !p.levels.corresponds(q.levels)(_ == _) then ok = false
-            case p: App =>
-              val q = y.asInstanceOf[App]
-              stack.append((p.fn, q.fn))
-              stack.append((p.arg, q.arg))
-            case p: Lam =>
-              val q = y.asInstanceOf[Lam]
-              if compareBinderInfo && (p.binderName != q.binderName || p.binderInfo != q.binderInfo) then ok = false
-              else { stack.append((p.binderType, q.binderType)); stack.append((p.body, q.body)) }
-            case p: ForallE =>
-              val q = y.asInstanceOf[ForallE]
-              if compareBinderInfo && (p.binderName != q.binderName || p.binderInfo != q.binderInfo) then ok = false
-              else { stack.append((p.binderType, q.binderType)); stack.append((p.body, q.body)) }
-            case p: LetE =>
-              val q = y.asInstanceOf[LetE]
-              if p.nondep != q.nondep || (compareBinderInfo && p.declName != q.declName) then ok = false
-              else
-                stack.append((p.tpe, q.tpe)); stack.append((p.value, q.value)); stack.append((p.body, q.body))
-            case p: MData =>
-              val q = y.asInstanceOf[MData]
-              if p.kv != q.kv then ok = false else stack.append((p.expr, q.expr))
-            case p: Proj =>
-              val q = y.asInstanceOf[Proj]
-              if p.typeName != q.typeName || p.idx != q.idx then ok = false
-              else stack.append((p.struct, q.struct))
-    ok
+            case _: BVar | _: FVar | _: MVar | _: Sort | _: Lit => ()
+            case _ =>
+              if seen == null then seen = mutable.HashSet.empty[IdPair]
+              if !seen.add(new IdPair(x, y)) then skip = true
+          if !skip then
+            x match
+              case p: BVar => if p.idx != y.asInstanceOf[BVar].idx then ok = false
+              case p: FVar => if p.id != y.asInstanceOf[FVar].id then ok = false
+              case p: MVar => if p.id != y.asInstanceOf[MVar].id then ok = false
+              case p: Sort => if p.level != y.asInstanceOf[Sort].level then ok = false
+              case p: Lit  => if p.value != y.asInstanceOf[Lit].value then ok = false
+              case p: Const =>
+                val q = y.asInstanceOf[Const]
+                if p.name != q.name || p.levels.length != q.levels.length || !p.levels.corresponds(q.levels)(_ == _) then ok = false
+              case p: App =>
+                val q = y.asInstanceOf[App]
+                stack.append((p.fn, q.fn))
+                stack.append((p.arg, q.arg))
+              case p: Lam =>
+                val q = y.asInstanceOf[Lam]
+                if compareBinderInfo && (p.binderName != q.binderName || p.binderInfo != q.binderInfo) then ok = false
+                else { stack.append((p.binderType, q.binderType)); stack.append((p.body, q.body)) }
+              case p: ForallE =>
+                val q = y.asInstanceOf[ForallE]
+                if compareBinderInfo && (p.binderName != q.binderName || p.binderInfo != q.binderInfo) then ok = false
+                else { stack.append((p.binderType, q.binderType)); stack.append((p.body, q.body)) }
+              case p: LetE =>
+                val q = y.asInstanceOf[LetE]
+                if p.nondep != q.nondep || (compareBinderInfo && p.declName != q.declName) then ok = false
+                else
+                  stack.append((p.tpe, q.tpe)); stack.append((p.value, q.value)); stack.append((p.body, q.body))
+              case p: MData =>
+                val q = y.asInstanceOf[MData]
+                if p.kv != q.kv then ok = false else stack.append((p.expr, q.expr))
+              case p: Proj =>
+                val q = y.asInstanceOf[Proj]
+                if p.typeName != q.typeName || p.idx != q.idx then ok = false
+                else stack.append((p.struct, q.struct))
+      ok

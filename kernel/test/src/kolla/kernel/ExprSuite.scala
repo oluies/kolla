@@ -94,6 +94,27 @@ class ExprSuite extends munit.ScalaCheckSuite:
     assertEquals(deep, deep2)
   }
 
+  test("equal terms with heavy sharing compare in linear time") {
+    // t(n+1) = App(t(n), t(n)): 2^60 paths, 61 distinct subterms. Two copies
+    // built apart share nothing with each other, so only the comparison's own
+    // record of compared pairs keeps this from taking 2^60 steps.
+    def tower(n: Int, leaf: Expr): Expr = (0 until n).foldLeft(leaf)((t, _) => Expr.App(t, t))
+    val a = tower(60, Expr.const("Nat"))
+    val b = tower(60, Expr.const("Nat"))
+    assert(!(a eq b))
+    assertEquals(a, b)
+    assert(a != tower(60, Expr.const("Int")))
+  }
+
+  test("bi-equality still compares binder names below the depth cut-over") {
+    val a = (0 until 1000).foldLeft(nat)((e, _) => Expr.Lam(x, nat, e, BinderInfo.Default))
+    // 1000 binders each; only the innermost one's name differs.
+    val b = (0 until 999).foldLeft(Expr.Lam(y, nat, nat, BinderInfo.Default): Expr)((e, _) =>
+      Expr.Lam(x, nat, e, BinderInfo.Default))
+    assertEquals(a, b)
+    assert(!Expr.isBiEqual(a, b))
+  }
+
   test("too many loose bvars is rejected") {
     intercept[KernelException](Expr.BVar(Expr.maxLooseBVarRange))
   }
