@@ -18,12 +18,73 @@ object ExprOps:
       case k: Key => (k.e eq e) && k.offset == offset
       case _      => false
 
+  /** How deep `replace` recurses on the call stack before it hands a subterm to
+    * the trampolined traversal. On the v4.35 `init` export 99.9% of visits are
+    * under 64 deep and the deepest is 319, so nearly all work stays direct while
+    * a pathological term still cannot overflow the stack.
+    */
+  private final val DirectDepth = 256
+
   /** `lean::replace_fn`: `f` is applied to each subterm with its binder depth; a
     * `Some` result replaces the subterm and stops the descent.
     */
   def replace(e: Expr)(f: (Expr, Int) => Option[Expr]): Expr =
+    replace(e, (_, _) => false)(f)
+
+  /** As `replace`, with `keep` tested first: where it holds, the subterm is
+    * returned as it is, without touching the cache or calling `f`. Callers pass
+    * the O(1) test their `f` begins with (no loose bound variable in range, no
+    * free variable, no level parameter), which on library corpora settles about
+    * four visits in ten. An unchanged result needs no cache entry.
+    */
+  def replace(e: Expr, keep: (Expr, Int) => Boolean)(f: (Expr, Int) => Option[Expr]): Expr =
     val cache = mutable.HashMap.empty[Key, Expr]
+
+    def visit(e: Expr, offset: Int, depth: Int): Expr =
+      if depth >= DirectDepth then go(e, offset).value
+      else if keep(e, offset) then e
+      else
+        val k   = new Key(e, offset)
+        val hit = cache.getOrElse(k, null)
+        if hit != null then hit
+        else
+          val r = f(e, offset) match
+            case Some(r) => r
+            case None    => children(e, offset, depth + 1)
+          cache(k) = r
+          r
+
+    def children(e: Expr, offset: Int, depth: Int): Expr = e match
+      case a: Expr.App =>
+        val fn  = visit(a.fn, offset, depth)
+        val arg = visit(a.arg, offset, depth)
+        if (fn eq a.fn) && (arg eq a.arg) then a else Expr.App(fn, arg)
+      case l: Expr.Lam =>
+        val t = visit(l.binderType, offset, depth)
+        val b = visit(l.body, offset + 1, depth)
+        if (t eq l.binderType) && (b eq l.body) then l else Expr.Lam(l.binderName, t, b, l.binderInfo)
+      case p: Expr.ForallE =>
+        val t = visit(p.binderType, offset, depth)
+        val b = visit(p.body, offset + 1, depth)
+        if (t eq p.binderType) && (b eq p.body) then p
+        else Expr.ForallE(p.binderName, t, b, p.binderInfo)
+      case l: Expr.LetE =>
+        val t = visit(l.tpe, offset, depth)
+        val v = visit(l.value, offset, depth)
+        val b = visit(l.body, offset + 1, depth)
+        if (t eq l.tpe) && (v eq l.value) && (b eq l.body) then l
+        else Expr.LetE(l.declName, t, v, b, l.nondep)
+      case p: Expr.Proj =>
+        val s = visit(p.struct, offset, depth)
+        if s eq p.struct then p else Expr.Proj(p.typeName, p.idx, s)
+      case m: Expr.MData =>
+        val x = visit(m.expr, offset, depth)
+        if x eq m.expr then m else Expr.MData(m.kv, x)
+      case other => other
+
+    // The trampolined traversal, for subterms below `DirectDepth`.
     def go(e: Expr, offset: Int): Eval[Expr] =
+      if keep(e, offset) then return Eval.now(e)
       val k = new Key(e, offset)
       cache.get(k) match
         case Some(r) => Eval.now(r)
@@ -74,7 +135,7 @@ object ExprOps:
                 cache(k) = r
                 r
               }
-    go(e, 0).value
+    visit(e, 0, 0)
 
   /** `lean::for_each_fn`, stopping the descent where `f` returns false.
     *
@@ -122,7 +183,7 @@ object ExprOps:
   def liftLooseBVars(e: Expr, s: Int, d: Int): Expr =
     if d == 0 || e.looseBVarRange <= s then e
     else
-      replace(e) { (m, offset) =>
+      replace(e, (m, offset) => m.looseBVarRange <= offset + s) { (m, offset) =>
         if m.looseBVarRange <= offset + s then Some(m)
         else
           m match
@@ -134,7 +195,7 @@ object ExprOps:
   def lowerLooseBVars(e: Expr, s: Int, d: Int): Expr =
     if d == 0 || e.looseBVarRange == 0 then e
     else
-      replace(e) { (m, offset) =>
+      replace(e, (m, offset) => m.looseBVarRange <= offset + s) { (m, offset) =>
         if m.looseBVarRange <= offset + s then Some(m)
         else
           m match
@@ -154,7 +215,7 @@ object ExprOps:
     val n = subst.length
     if s >= e.looseBVarRange || n == 0 then e
     else
-      replace(e) { (m, offset) =>
+      replace(e, (m, offset) => s + offset >= m.looseBVarRange) { (m, offset) =>
         val s1 = s + offset
         if s1 >= m.looseBVarRange then Some(m)
         else
@@ -176,7 +237,7 @@ object ExprOps:
     val n = subst.length
     if !e.hasLooseBVars || n == 0 then e
     else
-      replace(e) { (m, offset) =>
+      replace(e, (m, offset) => offset >= m.looseBVarRange) { (m, offset) =>
         if offset >= m.looseBVarRange then Some(m)
         else
           m match
@@ -197,7 +258,7 @@ object ExprOps:
         case f: Expr.FVar => f.id
         case other        => throw KernelException(ExceptionKind.Other, s"abstract expects free variables, got $other")
       }
-      replace(e) { (m, offset) =>
+      replace(e, (m, _) => !m.hasFVar) { (m, offset) =>
         if !m.hasFVar then Some(m)
         else
           m match
@@ -219,7 +280,7 @@ object ExprOps:
   def instantiateLevelParams(e: Expr, ps: List[Name], ls: List[Level]): Expr =
     if !e.hasLevelParam || ps.isEmpty then e
     else
-      replace(e) { (m, _) =>
+      replace(e, (m, _) => !m.hasLevelParam) { (m, _) =>
         if !m.hasLevelParam then Some(m)
         else
           m match
