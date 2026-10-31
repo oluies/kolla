@@ -2721,6 +2721,47 @@ and #5169 have no replies.
 For kolla none of this changes the advice: run a library corpus on the JVM,
 and when a native run is needed, use `boehm` with a preset heap.
 
+The kernel changes of K23–K26 were then measured natively, with `boehm`. The
+original kernel's binary was run against the current one, interleaved,
+because other programs held the machine's load average between 5 and 13 and
+it moved native times by more than any change. One binary took 1,014 s at a
+load of 12.8 and 393 s at 8.7 on the same declaration.
+
+| `boehm`, interleaved | original kernel | K26 |
+|---|---|---|
+| `init`, 4 GB start, two pairs | 323 s, 320 s | 202 s, 177 s |
+| `init` user CPU | 403 s, 399 s | 223 s, 208 s |
+| `blastAdd.go_denote_eq._unary` alone, 8 GB start, two pairs | 1,014 s, 393 s | 212 s, 137 s |
+| that declaration's user CPU | 990 s, 409 s | 219 s, 160 s |
+
+Natively `init` is 37–45% faster and the second-heaviest `std` declaration
+2.9–4.8 times faster, with every result unchanged. The heaviest,
+`BVDecide.BVExpr.Cache.Inv_insert`, took over 25 minutes alone with either
+kernel. On the JVM it went from 139 s to 44 s.
+
+One run went the other way, and it is recorded here because it was the first
+seen. The whole of `std` with the K26 binary was stopped after 3,861 s, still
+computing, where the original kernel had finished in 2,176 s. The original ran
+first at a load near 7 and K26 after it at 9 to 11. A stack sample at one
+moment showed K26 mostly in `boehm`'s allocator and collection, and another
+mostly in the kernel. Single samples taken 90 seconds into the heaviest
+declaration on five binaries, from the original kernel through K26, showed no
+trend. `boehm` collects in bursts, so a single moment says only which phase it
+caught. On the JVM no `std` declaration got slower, by more than 0.01 s, under
+the same changes. The heavy declaration's interleaved pairs above then
+put K26 ahead natively. The likeliest reading is load: `boehm` runs fifteen
+parallel markers, and they degrade badly when other processes hold the cores.
+A full `std` pair on a quieter machine is the measurement that settles it.
+
+The tools that found what is in this entry, and the ones that could not:
+`/usr/bin/time -l`, `vmmap --summary` and `footprint` for what a process holds,
+`sample` and `lldb` for where it is, and `GC_STATS_FILE` for `immix`'s
+collections. On the JVM side, `jcmd GC.heap_info`, `jmap -histo:live` and Java
+Flight Recorder gave the true live set and every allocation hotspot, and
+`-XX:+CITime` gave JIT time. AddressSanitizer, LeakSanitizer, Valgrind Memcheck
+and macOS `leaks` with `MallocStackLogging` were all clean. They watch
+`malloc`, and Scala Native's collectors manage their own `mmap`ed heap.
+
 A measurement is only as good as the guard around it, and this one got past
 three guards in turn. A resident-size cap missed a process evicted to 960 KB.
 A no-CPU-progress check missed a process that advanced its CPU for six hours.
