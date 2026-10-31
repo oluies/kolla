@@ -1,3 +1,4 @@
 repro
+repro-*
 .scala-build/
 .bsp/
