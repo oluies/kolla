@@ -955,6 +955,32 @@ included, is byte for byte the same as before the change.
 `init` is unchanged within noise: its declarations reject few pairs. Every
 verdict on `init` and `std` is identical to the original baseline's.
 
+### K26 — remembering less: small subterms in `replace`, compared pairs in `eqCore`
+
+After K25 the largest allocation sites on `std` were two caches whose job is
+to keep shared terms linear: `replace`'s cache of rebuilt subterms (about 23%
+of allocation) and `eqCore`'s record of compared pairs (about 10%). Both are
+only useful for large shared subterms, and both were paying for small ones.
+
+`replace` now rebuilds a subterm at most two deep instead of caching it. Such
+a subterm is a handful of nodes, and the key, lookup and store cost more than
+rebuilding it. Lean's `replace_rec_fn` likewise caches only shared nodes.
+`eqCore` now records compared pairs only after 512 inner nodes rather than 32.
+Comparing a shared term without the record repeats work at most 512 visits'
+worth before the record takes over, and the type checker's cache lookups
+compare many terms of a few hundred nodes. The 2^60-path test still passes.
+Neither change can change an answer, only how much is remembered.
+
+| JVM, `-Xmx2g`, rotated | K25 | + `replace` | + `eqCore` |
+|---|---|---|---|
+| `std`, two rounds | 110.2 s, 106.4 s | 107.0 s, 102.7 s | 98.6 s, 97.7 s |
+| `init`, three rounds | 24.4, 25.7, 25.0 s | 22.8, 23.7, 23.4 s | 22.8, 22.7, 22.7 s |
+
+Every verdict on `init` and `std` is identical to the original baseline's, and
+the `case-natlit` rejection of K25 prints the same, trace included. With
+K23–K26 the JVM checks `std` in under 100 s and `init` in under 23 s, against
+267 s and 51–55 s at the start.
+
 ## DSL
 
 ### D5 — binders are Scala functions
