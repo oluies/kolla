@@ -1,6 +1,5 @@
 package kolla.kernel
 
-import cats.Eval
 import scala.annotation.tailrec
 import scala.collection.immutable.ArraySeq
 import scala.collection.mutable
@@ -17,7 +16,8 @@ private final class ExprPair(val a: Expr, val b: Expr):
 /** `lean::type_checker`.
   *
   * One instance per declaration: the caches are plain mutable maps and are never
-  * shared. All recursion runs in `cats.Eval`.
+  * shared. All recursion runs in `Step`, which is direct while the stack is
+  * shallow and trampolined through `cats.Eval` below that.
   */
 final class TypeChecker(
     val env: Environment,
@@ -30,6 +30,9 @@ final class TypeChecker(
 ):
 
   private val ngen = new NameGenerator()
+
+  /** Nesting of direct steps; see `Step`. */
+  private given depth: Step.Depth = new Step.Depth
 
   /** `local_ctx`, append-only. Lean scopes it with `flet`, but free variable
     * identifiers are globally unique and each one keeps its type for the whole
@@ -171,10 +174,10 @@ final class TypeChecker(
 
   // -------------------------------------------------------------- ensure/sort
 
-  private def ensureSortE(e: Expr, s: Expr): Eval[Expr] =
-    if e.isInstanceOf[Expr.Sort] then Eval.now(e)
+  private def ensureSortE(e: Expr, s: Expr): Step[Expr] =
+    if e.isInstanceOf[Expr.Sort] then Step.now(e)
     else
-      Eval.defer(whnfE(e)).map {
+      Step.defer(whnfE(e)).map {
         case r: Expr.Sort => r
         case _ =>
           throw new KernelException(
@@ -182,10 +185,10 @@ final class TypeChecker(
           )
       }
 
-  private def ensurePiE(e: Expr, s: Expr): Eval[Expr] =
-    if e.isInstanceOf[Expr.ForallE] then Eval.now(e)
+  private def ensurePiE(e: Expr, s: Expr): Step[Expr] =
+    if e.isInstanceOf[Expr.ForallE] then Step.now(e)
     else
-      Eval.defer(whnfE(e)).map {
+      Step.defer(whnfE(e)).map {
         case r: Expr.ForallE => r
         case _ =>
           throw new KernelException(
@@ -203,17 +206,17 @@ final class TypeChecker(
   /** `is_prop`. v4.35 tests the level up to normalization because `imax 1 0`
     * denotes `Prop` without being syntactically `zero`.
     */
-  private def isPropE(e: Expr): Eval[Boolean] =
+  private def isPropE(e: Expr): Step[Boolean] =
     for
-      t <- Eval.defer(inferTypeE(e, inferOnly = true))
-      s <- Eval.defer(ensureSortE(t, t))
+      t <- Step.defer(inferTypeE(e, inferOnly = true))
+      s <- Step.defer(ensureSortE(t, t))
     yield
       val l = s.asInstanceOf[Expr.Sort].level
       if profile.propByNormalization then Level.normalizesToZero(l) else l.isZero
 
   // ----------------------------------------------------------------- inferType
 
-  private def inferTypeE(e: Expr, inferOnly: Boolean): Eval[Expr] =
+  private def inferTypeE(e: Expr, inferOnly: Boolean): Step[Expr] =
     if e.hasLooseBVars then
       fail(
         ExceptionKind.Other,
@@ -222,23 +225,23 @@ final class TypeChecker(
     step()
     val cache = if inferOnly then inferCacheOnly else inferCacheCheck
     cache.get(e) match
-      case Some(r) => Eval.now(r)
+      case Some(r) => Step.now(r)
       case None =>
-        val computed: Eval[Expr] = e match
-          case l: Expr.Lit     => Eval.now(inferLit(l))
-          case m: Expr.MData   => Eval.defer(inferTypeE(m.expr, inferOnly))
-          case p: Expr.Proj    => Eval.defer(inferProj(p, inferOnly))
-          case f: Expr.FVar    => Eval.now(inferFVar(f))
+        val computed: Step[Expr] = e match
+          case l: Expr.Lit     => Step.now(inferLit(l))
+          case m: Expr.MData   => Step.defer(inferTypeE(m.expr, inferOnly))
+          case p: Expr.Proj    => Step.defer(inferProj(p, inferOnly))
+          case f: Expr.FVar    => Step.now(inferFVar(f))
           case _: Expr.MVar    => fail(ExceptionKind.DeclarationHasMetavars, "metavariables are not supported")
           case _: Expr.BVar    => fail(ExceptionKind.Other, "unexpected bound variable")
           case s: Expr.Sort =>
             if !inferOnly then checkLevel(s.level)
-            Eval.now(Expr.Sort(Level.Succ(s.level)))
-          case c: Expr.Const   => Eval.now(inferConstant(c, inferOnly))
-          case l: Expr.Lam     => Eval.defer(inferLambda(l, inferOnly))
-          case p: Expr.ForallE => Eval.defer(inferPi(p, inferOnly))
-          case a: Expr.App     => Eval.defer(inferApp(a, inferOnly))
-          case l: Expr.LetE    => Eval.defer(inferLet(l, inferOnly))
+            Step.now(Expr.Sort(Level.Succ(s.level)))
+          case c: Expr.Const   => Step.now(inferConstant(c, inferOnly))
+          case l: Expr.Lam     => Step.defer(inferLambda(l, inferOnly))
+          case p: Expr.ForallE => Step.defer(inferPi(p, inferOnly))
+          case a: Expr.App     => Step.defer(inferApp(a, inferOnly))
+          case l: Expr.LetE    => Step.defer(inferLet(l, inferOnly))
         computed.map { r =>
           cache(e) = r
           r
@@ -276,47 +279,47 @@ final class TypeChecker(
       c.levels.foreach(checkLevel)
     ExprOps.instantiateLevelParams(info.tpe, ps, c.levels)
 
-  private def inferLambda(e0: Expr.Lam, inferOnly: Boolean): Eval[Expr] =
+  private def inferLambda(e0: Expr.Lam, inferOnly: Boolean): Step[Expr] =
     val fvars = mutable.ArrayBuffer.empty[Expr]
-    def loop(e: Expr): Eval[Expr] = e match
+    def loop(e: Expr): Step[Expr] = e match
       case l: Expr.Lam =>
         val d = ExprOps.instantiateRev(l.binderType, fvars.toIndexedSeq)
         val checked =
-          if inferOnly then Eval.Unit
-          else Eval.defer(inferTypeE(d, inferOnly)).flatMap(t => Eval.defer(ensureSortE(t, d))).map(_ => ())
+          if inferOnly then Step.Unit
+          else Step.defer(inferTypeE(d, inferOnly)).flatMap(t => Step.defer(ensureSortE(t, d))).map(_ => ())
         checked.flatMap { _ =>
           val (next, fvar) = lctx.mkLocalDecl(ngen, l.binderName, d, l.binderInfo)
           lctx = next
           fvars += fvar
-          Eval.defer(loop(l.body))
+          Step.defer(loop(l.body))
         }
       case other =>
-        Eval.defer(inferTypeE(ExprOps.instantiateRev(other, fvars.toIndexedSeq), inferOnly))
+        Step.defer(inferTypeE(ExprOps.instantiateRev(other, fvars.toIndexedSeq), inferOnly))
     // `infer_lambda` returns `mk_pi`: the type of a lambda is a Pi.
     loop(e0).map(r => lctx.mkPi(fvars.toIndexedSeq, ExprOps.cheapBetaReduce(r)))
 
-  private def inferPi(e0: Expr.ForallE, inferOnly: Boolean): Eval[Expr] =
+  private def inferPi(e0: Expr.ForallE, inferOnly: Boolean): Step[Expr] =
     val fvars = mutable.ArrayBuffer.empty[Expr]
     val us    = mutable.ArrayBuffer.empty[Level]
-    def loop(e: Expr): Eval[Expr] = e match
+    def loop(e: Expr): Step[Expr] = e match
       case p: Expr.ForallE =>
         val d = ExprOps.instantiateRev(p.binderType, fvars.toIndexedSeq)
         for
-          t1 <- Eval.defer(inferTypeE(d, inferOnly))
-          s1 <- Eval.defer(ensureSortE(t1, d))
+          t1 <- Step.defer(inferTypeE(d, inferOnly))
+          s1 <- Step.defer(ensureSortE(t1, d))
           r <- {
             us += s1.asInstanceOf[Expr.Sort].level
             val (next, fvar) = lctx.mkLocalDecl(ngen, p.binderName, d, p.binderInfo)
             lctx = next
             fvars += fvar
-            Eval.defer(loop(p.body))
+            Step.defer(loop(p.body))
           }
         yield r
       case other =>
         val body = ExprOps.instantiateRev(other, fvars.toIndexedSeq)
         for
-          t <- Eval.defer(inferTypeE(body, inferOnly))
-          s <- Eval.defer(ensureSortE(t, body))
+          t <- Step.defer(inferTypeE(body, inferOnly))
+          s <- Step.defer(ensureSortE(t, body))
         yield
           var r = s.asInstanceOf[Expr.Sort].level
           var i = fvars.length
@@ -329,14 +332,14 @@ final class TypeChecker(
   private def isEagerReduce(e: Expr): Boolean =
     Expr.isConstOf(Expr.getAppFn(e), Names.eagerReduce) && Expr.getAppNumArgs(e) == 2
 
-  private def inferApp(e: Expr.App, inferOnly: Boolean): Eval[Expr] =
+  private def inferApp(e: Expr.App, inferOnly: Boolean): Step[Expr] =
     if !inferOnly then
       for
-        ft0    <- Eval.defer(inferTypeE(e.fn, inferOnly))
-        fType  <- Eval.defer(ensurePiE(ft0, e))
-        aType  <- Eval.defer(inferTypeE(e.arg, inferOnly))
+        ft0    <- Step.defer(inferTypeE(e.fn, inferOnly))
+        fType  <- Step.defer(ensurePiE(ft0, e))
+        aType  <- Step.defer(inferTypeE(e.arg, inferOnly))
         dType   = fType.asInstanceOf[Expr.ForallE].binderType
-        ok     <- Eval.defer(isDefEqE(aType, dType, eager = isEagerReduce(e.arg)))
+        ok     <- Step.defer(isDefEqE(aType, dType, eager = isEagerReduce(e.arg)))
       yield
         if !ok then
           recordFailure(aType, dType)
@@ -350,34 +353,34 @@ final class TypeChecker(
     else
       val args = Expr.getAppArgs(e)
       val f    = Expr.getAppFn(e)
-      Eval.defer(inferTypeE(f, true)).flatMap { ft0 =>
-        def loop(i: Int, j: Int, fType: Expr): Eval[Expr] =
-          if i >= args.length then Eval.now(ExprOps.instantiateRev(fType, args.slice(j, args.length)))
+      Step.defer(inferTypeE(f, true)).flatMap { ft0 =>
+        def loop(i: Int, j: Int, fType: Expr): Step[Expr] =
+          if i >= args.length then Step.now(ExprOps.instantiateRev(fType, args.slice(j, args.length)))
           else
             fType match
-              case p: Expr.ForallE => Eval.defer(loop(i + 1, j, p.body))
+              case p: Expr.ForallE => Step.defer(loop(i + 1, j, p.body))
               case _ =>
                 val t = ExprOps.instantiateRev(fType, args.slice(j, i))
-                Eval.defer(ensurePiE(t, e)).flatMap { p =>
-                  Eval.defer(loop(i + 1, i, p.asInstanceOf[Expr.ForallE].body))
+                Step.defer(ensurePiE(t, e)).flatMap { p =>
+                  Step.defer(loop(i + 1, i, p.asInstanceOf[Expr.ForallE].body))
                 }
         loop(0, 0, ft0)
       }
 
-  private def inferLet(e0: Expr.LetE, inferOnly: Boolean): Eval[Expr] =
+  private def inferLet(e0: Expr.LetE, inferOnly: Boolean): Step[Expr] =
     val fvars = mutable.ArrayBuffer.empty[Expr]
-    def loop(e: Expr): Eval[Expr] = e match
+    def loop(e: Expr): Step[Expr] = e match
       case l: Expr.LetE =>
         val tpe = ExprOps.instantiateRev(l.tpe, fvars.toIndexedSeq)
         val v   = ExprOps.instantiateRev(l.value, fvars.toIndexedSeq)
-        val checked: Eval[Unit] =
-          if inferOnly then Eval.Unit
+        val checked: Step[Unit] =
+          if inferOnly then Step.Unit
           else
             for
-              tt <- Eval.defer(inferTypeE(tpe, inferOnly))
-              _  <- Eval.defer(ensureSortE(tt, tpe))
-              vt <- Eval.defer(inferTypeE(v, inferOnly))
-              ok <- Eval.defer(isDefEqE(vt, tpe, eager = false))
+              tt <- Step.defer(inferTypeE(tpe, inferOnly))
+              _  <- Step.defer(ensureSortE(tt, tpe))
+              vt <- Step.defer(inferTypeE(v, inferOnly))
+              ok <- Step.defer(isDefEqE(vt, tpe, eager = false))
             yield
               if !ok then
                 recordFailure(vt, tpe)
@@ -392,10 +395,10 @@ final class TypeChecker(
           val (next, fvar) = lctx.mkLetDecl(ngen, l.declName, tpe, v)
           lctx = next
           fvars += fvar
-          Eval.defer(loop(l.body))
+          Step.defer(loop(l.body))
         }
       case other =>
-        Eval.defer(inferTypeE(ExprOps.instantiateRev(other, fvars.toIndexedSeq), inferOnly))
+        Step.defer(inferTypeE(ExprOps.instantiateRev(other, fvars.toIndexedSeq), inferOnly))
     loop(e0).map(r => lctx.mkPi(fvars.toIndexedSeq, ExprOps.cheapBetaReduce(r), removeDeadLet = true))
 
   private def projIdx(p: Expr.Proj): Int =
@@ -403,12 +406,12 @@ final class TypeChecker(
       throw new KernelException(ExceptionKind.InvalidProj, None, Pretty.expr(p), defeqTrace)
     p.idx
 
-  private def inferProj(p: Expr.Proj, inferOnly: Boolean): Eval[Expr] =
+  private def inferProj(p: Expr.Proj, inferOnly: Boolean): Step[Expr] =
     def invalid: Nothing =
       throw new KernelException(ExceptionKind.InvalidProj, None, Pretty.expr(p), defeqTrace)
     for
-      t0   <- Eval.defer(inferTypeE(p.struct, inferOnly))
-      tpe  <- Eval.defer(whnfE(t0))
+      t0   <- Step.defer(inferTypeE(p.struct, inferOnly))
+      tpe  <- Step.defer(whnfE(t0))
       args  = Expr.getAppArgs(tpe)
       iName = Expr.constName(Expr.getAppFn(tpe)).getOrElse(invalid)
       _     = if iName != p.typeName then invalid
@@ -420,41 +423,41 @@ final class TypeChecker(
       cInfo = env.get(iVal.ctors.head)
       levels = Expr.getAppFn(tpe).asInstanceOf[Expr.Const].levels
       r0    = ExprOps.instantiateLevelParams(cInfo.tpe, cInfo.levelParams, levels)
-      prop <- Eval.defer(isPropE(tpe))
+      prop <- Step.defer(isPropE(tpe))
       res  <- {
         val idx = projIdx(p)
-        def params(i: Int, r: Expr): Eval[Expr] =
-          if i >= iVal.numParams then Eval.now(r)
+        def params(i: Int, r: Expr): Step[Expr] =
+          if i >= iVal.numParams then Step.now(r)
           else
-            Eval.defer(whnfE(r)).flatMap {
-              case pi: Expr.ForallE => Eval.defer(params(i + 1, ExprOps.instantiate1(pi.body, args(i))))
+            Step.defer(whnfE(r)).flatMap {
+              case pi: Expr.ForallE => Step.defer(params(i + 1, ExprOps.instantiate1(pi.body, args(i))))
               case _                => invalid
             }
-        def fields(i: Int, r: Expr): Eval[Expr] =
-          if i >= idx then Eval.now(r)
+        def fields(i: Int, r: Expr): Step[Expr] =
+          if i >= idx then Step.now(r)
           else
-            Eval.defer(whnfE(r)).flatMap {
+            Step.defer(whnfE(r)).flatMap {
               case pi: Expr.ForallE =>
                 if ExprOps.hasLooseBVar(pi.body, 0) then
                   val dom = pi.binderType
-                  Eval.defer(if prop then isPropE(dom) else Eval.True).flatMap { domProp =>
+                  Step.defer(if prop then isPropE(dom) else Step.True).flatMap { domProp =>
                     if prop && !domProp then invalid
                     else
-                      Eval.defer(
+                      Step.defer(
                         fields(i + 1, ExprOps.instantiate1(pi.body, Expr.Proj(iName, i, p.struct)))
                       )
                   }
-                else Eval.defer(fields(i + 1, pi.body))
+                else Step.defer(fields(i + 1, pi.body))
               case _ => invalid
             }
         for
           afterParams <- params(0, r0)
           afterFields <- fields(0, afterParams)
-          last        <- Eval.defer(whnfE(afterFields))
+          last        <- Step.defer(whnfE(afterFields))
           dom = last match
                   case pi: Expr.ForallE => pi.binderType
                   case _                => invalid
-          domProp <- Eval.defer(if prop then isPropE(dom) else Eval.True)
+          domProp <- Step.defer(if prop then isPropE(dom) else Step.True)
         yield
           if prop && !domProp then invalid
           dom
@@ -523,13 +526,13 @@ final class TypeChecker(
     case _ => unfoldDefinitionCore(e)
 
   /** `reduce_proj_core`. */
-  private def reduceProjCore(c0: Expr, sname: Name, idx: Int): Eval[Option[Expr]] =
-    val prepared: Eval[Expr] = c0 match
+  private def reduceProjCore(c0: Expr, sname: Name, idx: Int): Step[Option[Expr]] =
+    val prepared: Step[Expr] = c0 match
       case l: Expr.Lit =>
         l.value match
-          case Literal.StrVal(v) => Eval.defer(whnfE(ExprOps.stringLitToConstructor(v, profile)))
-          case _                 => Eval.now(c0)
-      case _ => Eval.now(c0)
+          case Literal.StrVal(v) => Step.defer(whnfE(ExprOps.stringLitToConstructor(v, profile)))
+          case _                 => Step.now(c0)
+      case _ => Step.now(c0)
     prepared.map { c =>
       val args = Expr.getAppArgs(c)
       Expr.constName(Expr.getAppFn(c)).flatMap(env.find).flatMap {
@@ -543,23 +546,23 @@ final class TypeChecker(
       }
     }
 
-  private def reduceProj(p: Expr.Proj, cheapRec: Boolean, cheapProj: Boolean): Eval[Option[Expr]] =
+  private def reduceProj(p: Expr.Proj, cheapRec: Boolean, cheapProj: Boolean): Step[Option[Expr]] =
     val idx = projIdx(p)
     val c =
-      if cheapProj then Eval.defer(whnfCoreE(p.struct, cheapRec, cheapProj))
-      else Eval.defer(whnfE(p.struct))
-    c.flatMap(cv => Eval.defer(reduceProjCore(cv, p.typeName, idx)))
+      if cheapProj then Step.defer(whnfCoreE(p.struct, cheapRec, cheapProj))
+      else Step.defer(whnfE(p.struct))
+    c.flatMap(cv => Step.defer(reduceProjCore(cv, p.typeName, idx)))
 
   /** `quot_reduce_rec`. */
-  private def quotReduceRec(e: Expr): Eval[Option[Expr]] =
+  private def quotReduceRec(e: Expr): Step[Option[Expr]] =
     Expr.constName(Expr.getAppFn(e)) match
       case Some(n) if n == Names.quotLift || n == Names.quotInd =>
         val mkPos  = if n == Names.quotLift then 5 else 4
         val argPos = 3
         val args   = Expr.getAppArgs(e)
-        if args.length <= mkPos then Eval.now(None)
+        if args.length <= mkPos then Step.now(None)
         else
-          Eval.defer(whnfE(args(mkPos))).map { mk =>
+          Step.defer(whnfE(args(mkPos))).map { mk =>
             if !Expr.isConstOf(Expr.getAppFn(mk), Names.quotMk) || Expr.getAppNumArgs(mk) != 3 then None
             else
               val f = args(argPos)
@@ -568,7 +571,7 @@ final class TypeChecker(
               if args.length > elimArity then r = Expr.mkAppRange(r, args, elimArity, args.length)
               Some(r)
           }
-      case _ => Eval.now(None)
+      case _ => Step.now(None)
 
   private def firstCtor(n: Name): Option[Name] =
     env.find(n).collect { case ConstantInfo.InductInfo(v) => v }.flatMap(_.ctors.headOption)
@@ -600,13 +603,13 @@ final class TypeChecker(
       case _ => e
 
   /** `to_cnstr_when_structure`. */
-  private def toCtorWhenStructure(inductName: Name, e: Expr): Eval[Expr] =
-    if !isNonRecStructure(inductName) || isCtorApp(e) then Eval.now(e)
+  private def toCtorWhenStructure(inductName: Name, e: Expr): Step[Expr] =
+    if !isNonRecStructure(inductName) || isCtorApp(e) then Step.now(e)
     else
-      Eval.defer(inferTypeE(e, inferOnly = true)).flatMap(t => Eval.defer(whnfE(t))).flatMap { eType =>
-        if !Expr.isConstOf(Expr.getAppFn(eType), inductName) then Eval.now(e)
+      Step.defer(inferTypeE(e, inferOnly = true)).flatMap(t => Step.defer(whnfE(t))).flatMap { eType =>
+        if !Expr.isConstOf(Expr.getAppFn(eType), inductName) then Step.now(e)
         else
-          Eval.defer(isPropE(eType)).map { p =>
+          Step.defer(isPropE(eType)).map { p =>
             if p then e else expandEtaStruct(eType, e)
           }
       }
@@ -622,19 +625,19 @@ final class TypeChecker(
       case _ => None
 
   /** `to_cnstr_when_K`: K-like reduction. */
-  private def toCtorWhenK(rval: RecursorVal, e: Expr): Eval[Expr] =
+  private def toCtorWhenK(rval: RecursorVal, e: Expr): Step[Expr] =
     for
-      t0      <- Eval.defer(inferTypeE(e, inferOnly = true))
-      appType <- Eval.defer(whnfE(t0))
+      t0      <- Step.defer(inferTypeE(e, inferOnly = true))
+      appType <- Step.defer(whnfE(t0))
       r <-
-        if !Expr.isConstOf(Expr.getAppFn(appType), rval.majorInduct) then Eval.now(e)
+        if !Expr.isConstOf(Expr.getAppFn(appType), rval.majorInduct) then Step.now(e)
         else
           mkNullaryCtor(appType, rval.numParams) match
-            case None => Eval.now(e)
+            case None => Step.now(e)
             case Some(newCtorApp) =>
               for
-                newType <- Eval.defer(inferTypeE(newCtorApp, inferOnly = true))
-                ok      <- Eval.defer(isDefEqE(appType, newType, eager = false))
+                newType <- Step.defer(inferTypeE(newCtorApp, inferOnly = true))
+                ok      <- Step.defer(isDefEqE(appType, newType, eager = false))
               yield if ok then newCtorApp else e
     yield r
 
@@ -642,27 +645,27 @@ final class TypeChecker(
     Expr.constName(Expr.getAppFn(major)).flatMap(n => rval.rules.find(_.ctor == n))
 
   /** `inductive_reduce_rec`: iota reduction. */
-  private def inductiveReduceRec(e: Expr, cheapRec: Boolean, cheapProj: Boolean): Eval[Option[Expr]] =
+  private def inductiveReduceRec(e: Expr, cheapRec: Boolean, cheapProj: Boolean): Step[Option[Expr]] =
     val recFn = Expr.getAppFn(e)
     Expr.constName(recFn).flatMap(env.find) match
       case Some(ConstantInfo.RecInfo(rval)) =>
         val recArgs  = Expr.getAppArgs(e)
         val majorIdx = rval.majorIdx
-        if majorIdx >= recArgs.length then Eval.now(None)
+        if majorIdx >= recArgs.length then Step.now(None)
         else
-          val reduceMajor: Expr => Eval[Expr] =
+          val reduceMajor: Expr => Step[Expr] =
             if cheapRec then x => whnfCoreE(x, cheapRec, cheapProj) else x => whnfE(x)
           val major0 = recArgs(majorIdx)
           for
-            afterK <- if rval.k then Eval.defer(toCtorWhenK(rval, major0)) else Eval.now(major0)
-            w      <- Eval.defer(reduceMajor(afterK))
+            afterK <- if rval.k then Step.defer(toCtorWhenK(rval, major0)) else Step.now(major0)
+            w      <- Step.defer(reduceMajor(afterK))
             major <- w match
                        case l: Expr.Lit =>
                          l.value match
-                           case Literal.NatVal(v) => Eval.now(ExprOps.natLitToConstructor(v))
+                           case Literal.NatVal(v) => Step.now(ExprOps.natLitToConstructor(v))
                            case Literal.StrVal(v) =>
-                             Eval.defer(whnfE(ExprOps.stringLitToConstructor(v, profile)))
-                       case other => Eval.defer(toCtorWhenStructure(rval.majorInduct, other))
+                             Step.defer(whnfE(ExprOps.stringLitToConstructor(v, profile)))
+                       case other => Step.defer(toCtorWhenStructure(rval.majorInduct, other))
           yield
             recRuleFor(rval, major) match
               case None => None
@@ -683,82 +686,82 @@ final class TypeChecker(
                     if recArgs.length > majorIdx + 1 then
                       rhs = Expr.mkAppRange(rhs, recArgs, majorIdx + 1, recArgs.length)
                     Some(rhs)
-      case _ => Eval.now(None)
+      case _ => Step.now(None)
 
-  private def reduceRecursor(e: Expr, cheapRec: Boolean, cheapProj: Boolean): Eval[Option[Expr]] =
-    val quot: Eval[Option[Expr]] =
-      if env.quotInitialized then Eval.defer(quotReduceRec(e)) else Eval.now(None)
+  private def reduceRecursor(e: Expr, cheapRec: Boolean, cheapProj: Boolean): Step[Option[Expr]] =
+    val quot: Step[Option[Expr]] =
+      if env.quotInitialized then Step.defer(quotReduceRec(e)) else Step.now(None)
     quot.flatMap {
-      case Some(r) => Eval.now(Some(r))
-      case None    => Eval.defer(inductiveReduceRec(e, cheapRec, cheapProj))
+      case Some(r) => Step.now(Some(r))
+      case None    => Step.defer(inductiveReduceRec(e, cheapRec, cheapProj))
     }
 
-  private def whnfFVar(e: Expr, cheapRec: Boolean, cheapProj: Boolean): Eval[Expr] =
+  private def whnfFVar(e: Expr, cheapRec: Boolean, cheapProj: Boolean): Step[Expr] =
     lctx.find(e).flatMap(_.value) match
-      case Some(v) => Eval.defer(whnfCoreE(v, cheapRec, cheapProj)) // zeta
-      case None    => Eval.now(e)
+      case Some(v) => Step.defer(whnfCoreE(v, cheapRec, cheapProj)) // zeta
+      case None    => Step.now(e)
 
   /** `whnf_core`: every reduction except delta and the normalizer extensions. */
-  private def whnfCoreE(e: Expr, cheapRec: Boolean, cheapProj: Boolean): Eval[Expr] =
+  private def whnfCoreE(e: Expr, cheapRec: Boolean, cheapProj: Boolean): Step[Expr] =
     step()
     e match
       case _: Expr.BVar | _: Expr.Sort | _: Expr.MVar | _: Expr.ForallE | _: Expr.Const | _: Expr.Lam |
           _: Expr.Lit =>
-        Eval.now(e)
-      case m: Expr.MData => Eval.defer(whnfCoreE(m.expr, cheapRec, cheapProj))
+        Step.now(e)
+      case m: Expr.MData => Step.defer(whnfCoreE(m.expr, cheapRec, cheapProj))
       case f: Expr.FVar =>
-        if lctx.isLetFVar(f) then Eval.defer(whnfFVar(f, cheapRec, cheapProj)) else Eval.now(e)
+        if lctx.isLetFVar(f) then Step.defer(whnfFVar(f, cheapRec, cheapProj)) else Step.now(e)
       case _ =>
         val cacheable = !cheapRec && !cheapProj
         if cacheable then
           whnfCoreCache.get(e) match
-            case Some(r) => return Eval.now(r)
+            case Some(r) => return Step.now(r)
             case None    => ()
-        val computed: Eval[Expr] = e match
+        val computed: Step[Expr] = e match
           case p: Expr.Proj =>
-            Eval.defer(reduceProj(p, cheapRec, cheapProj)).flatMap {
-              case Some(m) => Eval.defer(whnfCoreE(m, cheapRec, cheapProj))
-              case None    => Eval.now(e)
+            Step.defer(reduceProj(p, cheapRec, cheapProj)).flatMap {
+              case Some(m) => Step.defer(whnfCoreE(m, cheapRec, cheapProj))
+              case None    => Step.now(e)
             }
           case a: Expr.App =>
             val args = Expr.getAppArgs(a)
             val f0   = Expr.getAppFn(a)
-            Eval.defer(whnfCoreE(f0, cheapRec, cheapProj)).flatMap { f =>
+            Step.defer(whnfCoreE(f0, cheapRec, cheapProj)).flatMap { f =>
               if f.isInstanceOf[Expr.Lam] then
-                Eval.defer(whnfCoreE(ExprOps.betaReduce(f, args), cheapRec, cheapProj))
+                Step.defer(whnfCoreE(ExprOps.betaReduce(f, args), cheapRec, cheapProj))
               else if f == f0 then
-                Eval.defer(reduceRecursor(a, cheapRec, cheapProj)).flatMap {
-                  case Some(r) => Eval.defer(whnfCoreE(r, cheapRec, cheapProj))
-                  case None    => Eval.now(e)
+                Step.defer(reduceRecursor(a, cheapRec, cheapProj)).flatMap {
+                  case Some(r) => Step.defer(whnfCoreE(r, cheapRec, cheapProj))
+                  case None    => Step.now(e)
                 }
-              else Eval.defer(whnfCoreE(Expr.mkAppN(f, args), cheapRec, cheapProj))
+              else Step.defer(whnfCoreE(Expr.mkAppN(f, args), cheapRec, cheapProj))
             }
           case l: Expr.LetE =>
-            Eval.defer(whnfCoreE(ExprOps.instantiate1(l.body, l.value), cheapRec, cheapProj))
-          case other => Eval.now(other)
+            Step.defer(whnfCoreE(ExprOps.instantiate1(l.body, l.value), cheapRec, cheapProj))
+          case other => Step.now(other)
         computed.map { r =>
           if cacheable then whnfCoreCache(e) = r
           r
         }
 
   /** `whnf`. */
-  private def whnfE(e: Expr): Eval[Expr] =
+  private def whnfE(e: Expr): Step[Expr] =
     e match
-      case _: Expr.BVar | _: Expr.Sort | _: Expr.MVar | _: Expr.ForallE | _: Expr.Lit => Eval.now(e)
-      case m: Expr.MData => Eval.defer(whnfE(m.expr))
-      case f: Expr.FVar if !lctx.isLetFVar(f) => Eval.now(e)
+      case _: Expr.BVar | _: Expr.Sort | _: Expr.MVar | _: Expr.ForallE | _: Expr.Lit => Step.now(e)
+      case m: Expr.MData => Step.defer(whnfE(m.expr))
+      case f: Expr.FVar if !lctx.isLetFVar(f) => Step.now(e)
       case _ =>
         whnfCache.get(e) match
-          case Some(r) => Eval.now(r)
+          case Some(r) => Step.now(r)
           case None =>
-            def loop(t: Expr): Eval[Expr] =
-              Eval.defer(whnfCoreE(t, false, false)).flatMap { t1 =>
-                Eval.defer(reduceNat(t1)).flatMap {
-                  case Some(v) => Eval.now(v)
+            def loop(t: Expr): Step[Expr] =
+              Step.defer(whnfCoreE(t, false, false)).flatMap { t1 =>
+                Step.defer(reduceNat(t1)).flatMap {
+                  case Some(v) => Step.now(v)
                   case None =>
                     unfoldDefinition(t1) match
-                      case Some(next) => Eval.defer(loop(next))
-                      case None       => Eval.now(t1)
+                      case Some(next) => Step.defer(loop(next))
+                      case None       => Step.now(t1)
                 }
               }
             loop(e).map { r =>
@@ -780,19 +783,19 @@ final class TypeChecker(
         case _                 => BigInt(0)
     case _ => BigInt(0)
 
-  private def binNatArgs(e: Expr): Eval[Option[(BigInt, BigInt)]] =
+  private def binNatArgs(e: Expr): Step[Option[(BigInt, BigInt)]] =
     val fn = e.asInstanceOf[Expr.App]
     for
-      a1 <- Eval.defer(whnfE(fn.fn.asInstanceOf[Expr.App].arg))
+      a1 <- Step.defer(whnfE(fn.fn.asInstanceOf[Expr.App].arg))
       r <-
-        if !isNatLitExt(a1) then Eval.now(None)
+        if !isNatLitExt(a1) then Step.now(None)
         else
-          Eval.defer(whnfE(fn.arg)).map { a2 =>
+          Step.defer(whnfE(fn.arg)).map { a2 =>
             if !isNatLitExt(a2) then None else Some((natVal(a1), natVal(a2)))
           }
     yield r
 
-  private def binNatOp(e: Expr, checkSize: Boolean)(f: (BigInt, BigInt) => BigInt): Eval[Option[Expr]] =
+  private def binNatOp(e: Expr, checkSize: Boolean)(f: (BigInt, BigInt) => BigInt): Step[Option[Expr]] =
     binNatArgs(e).map {
       case None => None
       case Some((v1, v2)) =>
@@ -801,13 +804,13 @@ final class TypeChecker(
         Some(Expr.natLit(r))
     }
 
-  private def binNatPred(e: Expr)(f: (BigInt, BigInt) => Boolean): Eval[Option[Expr]] =
+  private def binNatPred(e: Expr)(f: (BigInt, BigInt) => Boolean): Step[Option[Expr]] =
     binNatArgs(e).map {
       case None           => None
       case Some((v1, v2)) => Some(Expr.const(if f(v1, v2) then Names.boolTrue else Names.boolFalse))
     }
 
-  private def reducePow(e: Expr): Eval[Option[Expr]] =
+  private def reducePow(e: Expr): Step[Option[Expr]] =
     binNatArgs(e).map {
       case None => None
       case Some((base, exp)) =>
@@ -822,7 +825,7 @@ final class TypeChecker(
         Some(Expr.natLit(base.pow(k)))
     }
 
-  private def reduceShiftLeft(e: Expr): Eval[Option[Expr]] =
+  private def reduceShiftLeft(e: Expr): Step[Option[Expr]] =
     binNatArgs(e).map {
       case None => None
       case Some((v, shift)) =>
@@ -834,19 +837,19 @@ final class TypeChecker(
     }
 
   /** `reduce_nat`: the `Nat` literal extensions. */
-  private def reduceNat(e: Expr): Eval[Option[Expr]] =
+  private def reduceNat(e: Expr): Step[Option[Expr]] =
     val nargs = Expr.getAppNumArgs(e)
     if nargs == 1 then
       val a = e.asInstanceOf[Expr.App]
       if Expr.isConstOf(a.fn, Names.natSucc) then
-        Eval.defer(whnfE(a.arg)).map { arg =>
+        Step.defer(whnfE(a.arg)).map { arg =>
           if !isNatLitExt(arg) then None
           else
             val v = natVal(arg) + 1
             checkNatSize(natSizeInBytes(v))
             Some(Expr.natLit(v))
         }
-      else Eval.now(None)
+      else Step.now(None)
     else if nargs == 2 then
       Expr.constName(Expr.getAppFn(e)) match
         case Some(n) if n == Names.natAdd   => binNatOp(e, true)(_ + _)
@@ -864,8 +867,8 @@ final class TypeChecker(
         case Some(n) if n == Names.natShiftLeft  => reduceShiftLeft(e)
         case Some(n) if n == Names.natShiftRight =>
           binNatOp(e, false)((v, s) => if s > BigInt(Int.MaxValue) then BigInt(0) else v >> s.toInt)
-        case _ => Eval.now(None)
-    else Eval.now(None)
+        case _ => Step.now(None)
+    else Step.now(None)
 
   // ------------------------------------------------------------- is_def_eq
 
@@ -884,29 +887,29 @@ final class TypeChecker(
     ls1.length == ls2.length && ls1.corresponds(ls2)(Level.isEquiv)
 
   /** `is_def_eq_binding`. */
-  private def isDefEqBinding(t0: Expr, s0: Expr, eager: Boolean): Eval[Boolean] =
+  private def isDefEqBinding(t0: Expr, s0: Expr, eager: Boolean): Step[Boolean] =
     val subst = mutable.ArrayBuffer.empty[Expr]
-    def loop(t: Expr, s: Expr): Eval[Boolean] =
+    def loop(t: Expr, s: Expr): Step[Boolean] =
       val (td, tb, sd, sb, bn, bi) = (t, s) match
         case (a: Expr.Lam, b: Expr.Lam) =>
           (a.binderType, a.body, b.binderType, b.body, b.binderName, b.binderInfo)
         case (a: Expr.ForallE, b: Expr.ForallE) =>
           (a.binderType, a.body, b.binderType, b.body, b.binderName, b.binderInfo)
-        case _ => return Eval.defer(
+        case _ => return Step.defer(
             isDefEqE(
               ExprOps.instantiateRev(t, subst.toIndexedSeq),
               ExprOps.instantiateRev(s, subst.toIndexedSeq),
               eager
             )
           )
-      val domainsEqual: Eval[Boolean] =
-        if td == sd then Eval.True
+      val domainsEqual: Step[Boolean] =
+        if td == sd then Step.True
         else
           val vs = ExprOps.instantiateRev(sd, subst.toIndexedSeq)
           val vt = ExprOps.instantiateRev(td, subst.toIndexedSeq)
-          Eval.defer(isDefEqE(vt, vs, eager))
+          Step.defer(isDefEqE(vt, vs, eager))
       domainsEqual.flatMap { ok =>
-        if !ok then Eval.False
+        if !ok then Step.False
         else
           if tb.hasLooseBVars || sb.hasLooseBVars then
             val vs           = ExprOps.instantiateRev(sd, subst.toIndexedSeq)
@@ -914,9 +917,9 @@ final class TypeChecker(
             lctx = next
             subst += fvar
           else subst += TypeChecker.dontCare
-          if tb.getClass == t.getClass && sb.getClass == s.getClass then Eval.defer(loop(tb, sb))
+          if tb.getClass == t.getClass && sb.getClass == s.getClass then Step.defer(loop(tb, sb))
           else
-            Eval.defer(
+            Step.defer(
               isDefEqE(
                 ExprOps.instantiateRev(tb, subst.toIndexedSeq),
                 ExprOps.instantiateRev(sb, subst.toIndexedSeq),
@@ -927,215 +930,215 @@ final class TypeChecker(
     loop(t0, s0)
 
   /** `quick_is_def_eq`: `None` means "not an easy case". */
-  private def quickIsDefEq(t: Expr, s: Expr, eager: Boolean): Eval[Option[Boolean]] =
+  private def quickIsDefEq(t: Expr, s: Expr, eager: Boolean): Step[Option[Boolean]] =
     if t == s then
       defEqIdentical += 1
-      Eval.now(Some(true))
+      Step.now(Some(true))
     else if succeededBefore(t, s) then
       defEqCacheHit += 1
-      Eval.now(Some(true))
+      Step.now(Some(true))
     else if t.kindOrd == s.kindOrd then
       (t, s) match
         case (_: Expr.Lam, _: Expr.Lam) | (_: Expr.ForallE, _: Expr.ForallE) =>
-          Eval.defer(isDefEqBinding(t, s, eager)).map(Some(_))
-        case (a: Expr.Sort, b: Expr.Sort) => Eval.now(Some(Level.isEquiv(a.level, b.level)))
-        case (a: Expr.MData, b: Expr.MData) => Eval.defer(isDefEqE(a.expr, b.expr, eager)).map(Some(_))
-        case (a: Expr.Lit, b: Expr.Lit)   => Eval.now(Some(a.value == b.value))
-        case _                            => Eval.now(None)
-    else Eval.now(None)
+          Step.defer(isDefEqBinding(t, s, eager)).map(Some(_))
+        case (a: Expr.Sort, b: Expr.Sort) => Step.now(Some(Level.isEquiv(a.level, b.level)))
+        case (a: Expr.MData, b: Expr.MData) => Step.defer(isDefEqE(a.expr, b.expr, eager)).map(Some(_))
+        case (a: Expr.Lit, b: Expr.Lit)   => Step.now(Some(a.value == b.value))
+        case _                            => Step.now(None)
+    else Step.now(None)
 
   /** `is_def_eq_args`. */
-  private def isDefEqArgs(t0: Expr, s0: Expr, eager: Boolean): Eval[Boolean] =
-    def loop(t: Expr, s: Expr): Eval[Boolean] = (t, s) match
+  private def isDefEqArgs(t0: Expr, s0: Expr, eager: Boolean): Step[Boolean] =
+    def loop(t: Expr, s: Expr): Step[Boolean] = (t, s) match
       case (a: Expr.App, b: Expr.App) =>
-        Eval.defer(isDefEqE(a.arg, b.arg, eager)).flatMap { ok =>
-          if !ok then Eval.False else Eval.defer(loop(a.fn, b.fn))
+        Step.defer(isDefEqE(a.arg, b.arg, eager)).flatMap { ok =>
+          if !ok then Step.False else Step.defer(loop(a.fn, b.fn))
         }
-      case _ => Eval.now(!t.isInstanceOf[Expr.App] && !s.isInstanceOf[Expr.App])
+      case _ => Step.now(!t.isInstanceOf[Expr.App] && !s.isInstanceOf[Expr.App])
     loop(t0, s0)
 
   /** `try_eta_expansion_core`. */
-  private def tryEtaExpansionCore(t: Expr, s: Expr, eager: Boolean): Eval[Boolean] =
+  private def tryEtaExpansionCore(t: Expr, s: Expr, eager: Boolean): Step[Boolean] =
     if t.isInstanceOf[Expr.Lam] && !s.isInstanceOf[Expr.Lam] then
       for
-        st0 <- Eval.defer(inferTypeE(s, inferOnly = true))
-        st  <- Eval.defer(whnfE(st0))
+        st0 <- Step.defer(inferTypeE(s, inferOnly = true))
+        st  <- Step.defer(whnfE(st0))
         r <- st match
                case pi: Expr.ForallE =>
                  val newS = Expr.Lam(pi.binderName, pi.binderType, Expr.App(s, Expr.BVar(0)), pi.binderInfo)
-                 Eval.defer(isDefEqE(t, newS, eager))
-               case _ => Eval.False
+                 Step.defer(isDefEqE(t, newS, eager))
+               case _ => Step.False
       yield r
-    else Eval.False
+    else Step.False
 
-  private def tryEtaExpansion(t: Expr, s: Expr, eager: Boolean): Eval[Boolean] =
-    Eval.defer(tryEtaExpansionCore(t, s, eager)).flatMap { ok =>
-      if ok then Eval.True else Eval.defer(tryEtaExpansionCore(s, t, eager))
+  private def tryEtaExpansion(t: Expr, s: Expr, eager: Boolean): Step[Boolean] =
+    Step.defer(tryEtaExpansionCore(t, s, eager)).flatMap { ok =>
+      if ok then Step.True else Step.defer(tryEtaExpansionCore(s, t, eager))
     }
 
   /** `try_eta_struct_core`: is `s` of the form `mk t.1 ... t.n`? */
-  private def tryEtaStructCore(t: Expr, s: Expr, eager: Boolean): Eval[Boolean] =
+  private def tryEtaStructCore(t: Expr, s: Expr, eager: Boolean): Step[Boolean] =
     Expr.constName(Expr.getAppFn(s)).flatMap(env.find) match
       case Some(ConstantInfo.CtorInfo(fv)) =>
-        if Expr.getAppNumArgs(s) != fv.numParams + fv.numFields then Eval.False
-        else if !isNonRecStructure(fv.induct) then Eval.False
+        if Expr.getAppNumArgs(s) != fv.numParams + fv.numFields then Step.False
+        else if !isNonRecStructure(fv.induct) then Step.False
         else
           for
-            tt <- Eval.defer(inferTypeE(t, inferOnly = true))
-            st <- Eval.defer(inferTypeE(s, inferOnly = true))
-            ok <- Eval.defer(isDefEqE(tt, st, eager))
+            tt <- Step.defer(inferTypeE(t, inferOnly = true))
+            st <- Step.defer(inferTypeE(s, inferOnly = true))
+            ok <- Step.defer(isDefEqE(tt, st, eager))
             r <-
-              if !ok then Eval.False
+              if !ok then Step.False
               else
                 val sArgs = Expr.getAppArgs(s)
-                def loop(i: Int): Eval[Boolean] =
-                  if i >= sArgs.length then Eval.True
+                def loop(i: Int): Step[Boolean] =
+                  if i >= sArgs.length then Step.True
                   else
                     val proj = Expr.Proj(fv.induct, i - fv.numParams, t)
-                    Eval.defer(isDefEqE(proj, sArgs(i), eager)).flatMap { o =>
-                      if !o then Eval.False else Eval.defer(loop(i + 1))
+                    Step.defer(isDefEqE(proj, sArgs(i), eager)).flatMap { o =>
+                      if !o then Step.False else Step.defer(loop(i + 1))
                     }
                 loop(fv.numParams)
           yield r
-      case _ => Eval.False
+      case _ => Step.False
 
-  private def tryEtaStruct(t: Expr, s: Expr, eager: Boolean): Eval[Boolean] =
-    Eval.defer(tryEtaStructCore(t, s, eager)).flatMap { ok =>
-      if ok then Eval.True else Eval.defer(tryEtaStructCore(s, t, eager))
+  private def tryEtaStruct(t: Expr, s: Expr, eager: Boolean): Step[Boolean] =
+    Step.defer(tryEtaStructCore(t, s, eager)).flatMap { ok =>
+      if ok then Step.True else Step.defer(tryEtaStructCore(s, t, eager))
     }
 
   /** `is_def_eq_app`. */
-  private def isDefEqApp(t: Expr, s: Expr, eager: Boolean): Eval[Boolean] =
+  private def isDefEqApp(t: Expr, s: Expr, eager: Boolean): Step[Boolean] =
     if t.isInstanceOf[Expr.App] && s.isInstanceOf[Expr.App] then
       val tArgs = Expr.getAppArgs(t)
       val sArgs = Expr.getAppArgs(s)
-      if tArgs.length != sArgs.length then Eval.False
+      if tArgs.length != sArgs.length then Step.False
       else
-        Eval.defer(isDefEqE(Expr.getAppFn(t), Expr.getAppFn(s), eager)).flatMap { ok =>
-          if !ok then Eval.False
+        Step.defer(isDefEqE(Expr.getAppFn(t), Expr.getAppFn(s), eager)).flatMap { ok =>
+          if !ok then Step.False
           else
-            def loop(i: Int): Eval[Boolean] =
-              if i >= tArgs.length then Eval.True
+            def loop(i: Int): Step[Boolean] =
+              if i >= tArgs.length then Step.True
               else
-                Eval.defer(isDefEqE(tArgs(i), sArgs(i), eager)).flatMap { o =>
-                  if !o then Eval.False else Eval.defer(loop(i + 1))
+                Step.defer(isDefEqE(tArgs(i), sArgs(i), eager)).flatMap { o =>
+                  if !o then Step.False else Step.defer(loop(i + 1))
                 }
             loop(0)
         }
-    else Eval.False
+    else Step.False
 
   /** `is_def_eq_proof_irrel`. */
-  private def isDefEqProofIrrel(t: Expr, s: Expr, eager: Boolean): Eval[Option[Boolean]] =
+  private def isDefEqProofIrrel(t: Expr, s: Expr, eager: Boolean): Step[Option[Boolean]] =
     for
-      tType <- Eval.defer(inferTypeE(t, inferOnly = true))
-      p     <- Eval.defer(isPropE(tType))
+      tType <- Step.defer(inferTypeE(t, inferOnly = true))
+      p     <- Step.defer(isPropE(tType))
       r <-
-        if !p then Eval.now(None)
+        if !p then Step.now(None)
         else
           for
-            sType <- Eval.defer(inferTypeE(s, inferOnly = true))
-            ok    <- Eval.defer(isDefEqE(tType, sType, eager))
+            sType <- Step.defer(inferTypeE(s, inferOnly = true))
+            ok    <- Step.defer(isDefEqE(tType, sType, eager))
           yield Some(ok)
     yield r
 
   /** `is_def_eq_unit_like`. */
-  private def isDefEqUnitLike(t: Expr, s: Expr, eager: Boolean): Eval[Boolean] =
+  private def isDefEqUnitLike(t: Expr, s: Expr, eager: Boolean): Step[Boolean] =
     for
-      t0    <- Eval.defer(inferTypeE(t, inferOnly = true))
-      tType <- Eval.defer(whnfE(t0))
+      t0    <- Step.defer(inferTypeE(t, inferOnly = true))
+      tType <- Step.defer(whnfE(t0))
       r <- Expr.constName(Expr.getAppFn(tType)) match
              case Some(i) if isNonRecStructure(i) =>
                val ctorName = env.get(i).asInstanceOf[ConstantInfo.InductInfo].value.ctors.head
                val ctorVal  = env.get(ctorName).asInstanceOf[ConstantInfo.CtorInfo].value
-               if ctorVal.numFields != 0 then Eval.False
+               if ctorVal.numFields != 0 then Step.False
                else
-                 Eval.defer(inferTypeE(s, inferOnly = true)).flatMap(st =>
-                   Eval.defer(isDefEqE(tType, st, eager))
+                 Step.defer(inferTypeE(s, inferOnly = true)).flatMap(st =>
+                   Step.defer(isDefEqE(tType, st, eager))
                  )
-             case _ => Eval.False
+             case _ => Step.False
     yield r
 
   /** `try_string_lit_expansion_core`. */
-  private def tryStringLitExpansionCore(t: Expr, s: Expr, eager: Boolean): Eval[Option[Boolean]] =
+  private def tryStringLitExpansionCore(t: Expr, s: Expr, eager: Boolean): Step[Option[Boolean]] =
     t match
       case l: Expr.Lit =>
         l.value match
           case Literal.StrVal(v)
               if s.isInstanceOf[Expr.App] &&
                 Expr.isConstOf(s.asInstanceOf[Expr.App].fn, profile.stringLiteralCtor) =>
-            Eval
+            Step
               .defer(whnfE(ExprOps.stringLitToConstructor(v, profile)))
-              .flatMap(x => Eval.defer(isDefEqE(x, s, eager)))
+              .flatMap(x => Step.defer(isDefEqE(x, s, eager)))
               .map(Some(_))
-          case _ => Eval.now(None)
-      case _ => Eval.now(None)
+          case _ => Step.now(None)
+      case _ => Step.now(None)
 
-  private def tryStringLitExpansion(t: Expr, s: Expr, eager: Boolean): Eval[Option[Boolean]] =
-    Eval.defer(tryStringLitExpansionCore(t, s, eager)).flatMap {
-      case Some(r) => Eval.now(Some(r))
-      case None    => Eval.defer(tryStringLitExpansionCore(s, t, eager))
+  private def tryStringLitExpansion(t: Expr, s: Expr, eager: Boolean): Step[Option[Boolean]] =
+    Step.defer(tryStringLitExpansionCore(t, s, eager)).flatMap {
+      case Some(r) => Step.now(Some(r))
+      case None    => Step.defer(tryStringLitExpansionCore(s, t, eager))
     }
 
-  private def tryUnfoldProjApp(e: Expr): Eval[Option[Expr]] =
+  private def tryUnfoldProjApp(e: Expr): Step[Option[Expr]] =
     if Expr.getAppFn(e).isInstanceOf[Expr.Proj] then
-      Eval.defer(whnfCoreE(e, false, false)).map(n => if n != e then Some(n) else None)
-    else Eval.now(None)
+      Step.defer(whnfCoreE(e, false, false)).map(n => if n != e then Some(n) else None)
+    else Step.now(None)
 
   private enum ReductionStatus:
     case Continue, DefUnknown, DefEqual, DefDiff
 
   /** `lazy_delta_reduction_step`. */
-  private def lazyDeltaReductionStep(t: Expr, s: Expr, eager: Boolean): Eval[(ReductionStatus, Expr, Expr)] =
+  private def lazyDeltaReductionStep(t: Expr, s: Expr, eager: Boolean): Step[(ReductionStatus, Expr, Expr)] =
     val dt = isDelta(t)
     val ds = isDelta(s)
     // `Left` is a status the step reached on its own, `Right` the pair to retry
     // `quick_is_def_eq` on. The two cannot be collapsed into a non-local return:
-    // `Eval` runs its continuations after this method's frame is gone.
-    val stepped: Eval[Either[(ReductionStatus, Expr, Expr), (Expr, Expr)]] =
+    // a suspended `Step` runs its continuations after this method's frame is gone.
+    val stepped: Step[Either[(ReductionStatus, Expr, Expr), (Expr, Expr)]] =
       (dt, ds) match
-        case (None, None) => Eval.now(Left((ReductionStatus.DefUnknown, t, s)))
+        case (None, None) => Step.now(Left((ReductionStatus.DefUnknown, t, s)))
         case (Some(_), None) =>
-          Eval.defer(tryUnfoldProjApp(s)).flatMap {
-            case Some(sNew) => Eval.now(Right((t, sNew)))
+          Step.defer(tryUnfoldProjApp(s)).flatMap {
+            case Some(sNew) => Step.now(Right((t, sNew)))
             case None =>
-              Eval.defer(whnfCoreE(unfoldDefinition(t).get, false, true)).map(tn => Right((tn, s)))
+              Step.defer(whnfCoreE(unfoldDefinition(t).get, false, true)).map(tn => Right((tn, s)))
           }
         case (None, Some(_)) =>
-          Eval.defer(tryUnfoldProjApp(t)).flatMap {
-            case Some(tNew) => Eval.now(Right((tNew, s)))
+          Step.defer(tryUnfoldProjApp(t)).flatMap {
+            case Some(tNew) => Step.now(Right((tNew, s)))
             case None =>
-              Eval.defer(whnfCoreE(unfoldDefinition(s).get, false, true)).map(sn => Right((t, sn)))
+              Step.defer(whnfCoreE(unfoldDefinition(s).get, false, true)).map(sn => Right((t, sn)))
           }
         case (Some(a), Some(b)) =>
           val c = ReducibilityHints.compare(a.hints, b.hints)
-          if c < 0 then Eval.defer(whnfCoreE(unfoldDefinition(t).get, false, true)).map(tn => Right((tn, s)))
-          else if c > 0 then Eval.defer(whnfCoreE(unfoldDefinition(s).get, false, true)).map(sn => Right((t, sn)))
+          if c < 0 then Step.defer(whnfCoreE(unfoldDefinition(t).get, false, true)).map(tn => Right((tn, s)))
+          else if c > 0 then Step.defer(whnfCoreE(unfoldDefinition(s).get, false, true)).map(sn => Right((t, sn)))
           else
             val sameAndRegular =
               t.isInstanceOf[Expr.App] && s.isInstanceOf[Expr.App] && a.name == b.name && a.hints.isRegular
-            val shortcut: Eval[Boolean] =
+            val shortcut: Step[Boolean] =
               if sameAndRegular && !failedBefore(t, s) then
                 val tl = Expr.getAppFn(t).asInstanceOf[Expr.Const].levels
                 val sl = Expr.getAppFn(s).asInstanceOf[Expr.Const].levels
                 if isDefEqLevels(tl, sl) then
-                  Eval.defer(isDefEqArgs(t, s, eager)).map { ok =>
+                  Step.defer(isDefEqArgs(t, s, eager)).map { ok =>
                     if !ok then cacheFailure(t, s)
                     ok
                   }
-                else { cacheFailure(t, s); Eval.False }
-              else Eval.False
+                else { cacheFailure(t, s); Step.False }
+              else Step.False
             shortcut.flatMap { hit =>
-              if hit then Eval.now(Left((ReductionStatus.DefEqual, t, s)))
+              if hit then Step.now(Left((ReductionStatus.DefEqual, t, s)))
               else
                 for
-                  tn <- Eval.defer(whnfCoreE(unfoldDefinition(t).get, false, true))
-                  sn <- Eval.defer(whnfCoreE(unfoldDefinition(s).get, false, true))
+                  tn <- Step.defer(whnfCoreE(unfoldDefinition(t).get, false, true))
+                  sn <- Step.defer(whnfCoreE(unfoldDefinition(s).get, false, true))
                 yield Right((tn, sn))
             }
     stepped.flatMap {
-      case Left(done) => Eval.now(done)
+      case Left(done) => Step.now(done)
       case Right((tn, sn)) =>
-        Eval.defer(quickIsDefEq(tn, sn, eager)).map {
+        Step.defer(quickIsDefEq(tn, sn, eager)).map {
           case Some(true)  => (ReductionStatus.DefEqual, tn, sn)
           case Some(false) => (ReductionStatus.DefDiff, tn, sn)
           case None        => (ReductionStatus.Continue, tn, sn)
@@ -1161,95 +1164,95 @@ final class TypeChecker(
       else None
 
   /** `is_def_eq_offset`. */
-  private def isDefEqOffset(t: Expr, s: Expr, eager: Boolean): Eval[Option[Boolean]] =
-    if isNatZero(t) && isNatZero(s) then Eval.now(Some(true))
+  private def isDefEqOffset(t: Expr, s: Expr, eager: Boolean): Step[Option[Boolean]] =
+    if isNatZero(t) && isNatZero(s) then Step.now(Some(true))
     else
       (isNatSucc(t), isNatSucc(s)) match
-        case (Some(pt), Some(ps)) => Eval.defer(isDefEqCoreE(pt, ps, eager)).map(Some(_))
-        case _                    => Eval.now(None)
+        case (Some(pt), Some(ps)) => Step.defer(isDefEqCoreE(pt, ps, eager)).map(Some(_))
+        case _                    => Step.now(None)
 
   /** `lazy_delta_reduction`. */
-  private def lazyDeltaReduction(t0: Expr, s0: Expr, eager: Boolean): Eval[(Option[Boolean], Expr, Expr)] =
-    def loop(t: Expr, s: Expr): Eval[(Option[Boolean], Expr, Expr)] =
-      Eval.defer(isDefEqOffset(t, s, eager)).flatMap {
-        case Some(r) => Eval.now((Some(r), t, s))
+  private def lazyDeltaReduction(t0: Expr, s0: Expr, eager: Boolean): Step[(Option[Boolean], Expr, Expr)] =
+    def loop(t: Expr, s: Expr): Step[(Option[Boolean], Expr, Expr)] =
+      Step.defer(isDefEqOffset(t, s, eager)).flatMap {
+        case Some(r) => Step.now((Some(r), t, s))
         case None =>
-          val natPath: Eval[Option[Boolean]] =
+          val natPath: Step[Option[Boolean]] =
             if (!t.hasFVar && !s.hasFVar) || eager then
-              Eval.defer(reduceNat(t)).flatMap {
-                case Some(tv) => Eval.defer(isDefEqCoreE(tv, s, eager)).map(Some(_))
+              Step.defer(reduceNat(t)).flatMap {
+                case Some(tv) => Step.defer(isDefEqCoreE(tv, s, eager)).map(Some(_))
                 case None =>
-                  Eval.defer(reduceNat(s)).flatMap {
-                    case Some(sv) => Eval.defer(isDefEqCoreE(t, sv, eager)).map(Some(_))
-                    case None     => Eval.now(None)
+                  Step.defer(reduceNat(s)).flatMap {
+                    case Some(sv) => Step.defer(isDefEqCoreE(t, sv, eager)).map(Some(_))
+                    case None     => Step.now(None)
                   }
               }
-            else Eval.now(None)
+            else Step.now(None)
           natPath.flatMap {
-            case Some(r) => Eval.now((Some(r), t, s))
+            case Some(r) => Step.now((Some(r), t, s))
             case None =>
-              Eval.defer(lazyDeltaReductionStep(t, s, eager)).flatMap { (status, tn, sn) =>
+              Step.defer(lazyDeltaReductionStep(t, s, eager)).flatMap { (status, tn, sn) =>
                 status match
-                  case ReductionStatus.Continue   => Eval.defer(loop(tn, sn))
-                  case ReductionStatus.DefUnknown => Eval.now((None, tn, sn))
-                  case ReductionStatus.DefEqual   => Eval.now((Some(true), tn, sn))
-                  case ReductionStatus.DefDiff    => Eval.now((Some(false), tn, sn))
+                  case ReductionStatus.Continue   => Step.defer(loop(tn, sn))
+                  case ReductionStatus.DefUnknown => Step.now((None, tn, sn))
+                  case ReductionStatus.DefEqual   => Step.now((Some(true), tn, sn))
+                  case ReductionStatus.DefDiff    => Step.now((Some(false), tn, sn))
               }
           }
       }
     loop(t0, s0)
 
   /** `lazy_delta_proj_reduction`. */
-  private def lazyDeltaProjReduction(t0: Expr, s0: Expr, sname: Name, idx: Int, eager: Boolean): Eval[Boolean] =
-    def loop(t: Expr, s: Expr): Eval[Boolean] =
-      Eval.defer(lazyDeltaReductionStep(t, s, eager)).flatMap { (status, tn, sn) =>
+  private def lazyDeltaProjReduction(t0: Expr, s0: Expr, sname: Name, idx: Int, eager: Boolean): Step[Boolean] =
+    def loop(t: Expr, s: Expr): Step[Boolean] =
+      Step.defer(lazyDeltaReductionStep(t, s, eager)).flatMap { (status, tn, sn) =>
         status match
-          case ReductionStatus.Continue => Eval.defer(loop(tn, sn))
-          case ReductionStatus.DefEqual => Eval.True
+          case ReductionStatus.Continue => Step.defer(loop(tn, sn))
+          case ReductionStatus.DefEqual => Step.True
           case _ =>
-            Eval.defer(reduceProjCore(tn, sname, idx)).flatMap {
+            Step.defer(reduceProjCore(tn, sname, idx)).flatMap {
               case Some(a) =>
-                Eval.defer(reduceProjCore(sn, sname, idx)).flatMap {
-                  case Some(b) => Eval.defer(isDefEqCoreE(a, b, eager))
-                  case None    => Eval.defer(isDefEqCoreE(tn, sn, eager))
+                Step.defer(reduceProjCore(sn, sname, idx)).flatMap {
+                  case Some(b) => Step.defer(isDefEqCoreE(a, b, eager))
+                  case None    => Step.defer(isDefEqCoreE(tn, sn, eager))
                 }
-              case None => Eval.defer(isDefEqCoreE(tn, sn, eager))
+              case None => Step.defer(isDefEqCoreE(tn, sn, eager))
             }
       }
     loop(t0, s0)
 
   /** `is_def_eq_core`. */
-  private def isDefEqCoreE(t: Expr, s: Expr, eager: Boolean): Eval[Boolean] =
+  private def isDefEqCoreE(t: Expr, s: Expr, eager: Boolean): Step[Boolean] =
     defEqCalls += 1
     step()
-    Eval.defer(quickIsDefEq(t, s, eager)).flatMap {
-      case Some(r) => Eval.now(r)
+    Step.defer(quickIsDefEq(t, s, eager)).flatMap {
+      case Some(r) => Step.now(r)
       case None =>
         // Proofs by reflection: `decide` produces `Eq.refl true : decide p = true`.
-        val reflection: Eval[Boolean] =
+        val reflection: Step[Boolean] =
           if (!t.hasFVar || eager) && Expr.isConstOf(s, Names.boolTrue) then
-            Eval.defer(whnfE(t)).map(w => Expr.isConstOf(w, Names.boolTrue))
-          else Eval.False
+            Step.defer(whnfE(t)).map(w => Expr.isConstOf(w, Names.boolTrue))
+          else Step.False
         reflection.flatMap { hit =>
-          if hit then Eval.True
+          if hit then Step.True
           else
             for
-              tn0 <- Eval.defer(whnfCoreE(t, false, true))
-              sn0 <- Eval.defer(whnfCoreE(s, false, true))
+              tn0 <- Step.defer(whnfCoreE(t, false, true))
+              sn0 <- Step.defer(whnfCoreE(s, false, true))
               r <- {
                 val changed = (tn0 ne t) || (sn0 ne s)
-                val quick: Eval[Option[Boolean]] =
-                  if changed then Eval.defer(quickIsDefEq(tn0, sn0, eager)) else Eval.now(None)
+                val quick: Step[Option[Boolean]] =
+                  if changed then Step.defer(quickIsDefEq(tn0, sn0, eager)) else Step.now(None)
                 quick.flatMap {
-                  case Some(q) => Eval.now(q)
+                  case Some(q) => Step.now(q)
                   case None =>
-                    Eval.defer(isDefEqProofIrrel(tn0, sn0, eager)).flatMap {
-                      case Some(pi) => Eval.now(pi)
+                    Step.defer(isDefEqProofIrrel(tn0, sn0, eager)).flatMap {
+                      case Some(pi) => Step.now(pi)
                       case None =>
-                        Eval.defer(lazyDeltaReduction(tn0, sn0, eager)).flatMap { (ld, tn, sn) =>
+                        Step.defer(lazyDeltaReduction(tn0, sn0, eager)).flatMap { (ld, tn, sn) =>
                           ld match
-                            case Some(r) => Eval.now(r)
-                            case None    => Eval.defer(isDefEqFinal(tn, sn, eager))
+                            case Some(r) => Step.now(r)
+                            case None    => Step.defer(isDefEqFinal(tn, sn, eager))
                         }
                     }
                 }
@@ -1258,37 +1261,37 @@ final class TypeChecker(
         }
     }
 
-  private def isDefEqFinal(tn: Expr, sn: Expr, eager: Boolean): Eval[Boolean] =
+  private def isDefEqFinal(tn: Expr, sn: Expr, eager: Boolean): Step[Boolean] =
     (tn, sn) match
       case (a: Expr.Const, b: Expr.Const) if a.name == b.name && isDefEqLevels(a.levels, b.levels) =>
-        Eval.True
-      case (a: Expr.FVar, b: Expr.FVar) if a.id == b.id => Eval.True
+        Step.True
+      case (a: Expr.FVar, b: Expr.FVar) if a.id == b.id => Step.True
       case _ =>
-        val projPath: Eval[Boolean] = (tn, sn) match
+        val projPath: Step[Boolean] = (tn, sn) match
           case (a: Expr.Proj, b: Expr.Proj) if a.typeName == b.typeName && a.idx == b.idx =>
-            Eval.defer(lazyDeltaProjReduction(a.struct, b.struct, a.typeName, a.idx, eager))
-          case _ => Eval.False
+            Step.defer(lazyDeltaProjReduction(a.struct, b.struct, a.typeName, a.idx, eager))
+          case _ => Step.False
         projPath.flatMap { hit =>
-          if hit then Eval.True
+          if hit then Step.True
           else
             for
-              tnn <- Eval.defer(whnfCoreE(tn, false, false))
-              snn <- Eval.defer(whnfCoreE(sn, false, false))
+              tnn <- Step.defer(whnfCoreE(tn, false, false))
+              snn <- Step.defer(whnfCoreE(sn, false, false))
               r <-
-                if (tnn ne tn) || (snn ne sn) then Eval.defer(isDefEqCoreE(tnn, snn, eager))
+                if (tnn ne tn) || (snn ne sn) then Step.defer(isDefEqCoreE(tnn, snn, eager))
                 else
-                  Eval.defer(isDefEqApp(tn, sn, eager)).flatMap { ok =>
-                    if ok then Eval.True
+                  Step.defer(isDefEqApp(tn, sn, eager)).flatMap { ok =>
+                    if ok then Step.True
                     else
-                      Eval.defer(tryEtaExpansion(tn, sn, eager)).flatMap { ok2 =>
-                        if ok2 then Eval.True
+                      Step.defer(tryEtaExpansion(tn, sn, eager)).flatMap { ok2 =>
+                        if ok2 then Step.True
                         else
-                          Eval.defer(tryEtaStruct(tn, sn, eager)).flatMap { ok3 =>
-                            if ok3 then Eval.True
+                          Step.defer(tryEtaStruct(tn, sn, eager)).flatMap { ok3 =>
+                            if ok3 then Step.True
                             else
-                              Eval.defer(tryStringLitExpansion(tn, sn, eager)).flatMap {
-                                case Some(r) => Eval.now(r)
-                                case None    => Eval.defer(isDefEqUnitLike(tn, sn, eager))
+                              Step.defer(tryStringLitExpansion(tn, sn, eager)).flatMap {
+                                case Some(r) => Step.now(r)
+                                case None    => Step.defer(isDefEqUnitLike(tn, sn, eager))
                               }
                           }
                       }
@@ -1296,8 +1299,8 @@ final class TypeChecker(
             yield r
         }
 
-  private def isDefEqE(t: Expr, s: Expr, eager: Boolean): Eval[Boolean] =
-    Eval.defer(isDefEqCoreE(t, s, eager)).map { r
+  private def isDefEqE(t: Expr, s: Expr, eager: Boolean): Step[Boolean] =
+    Step.defer(isDefEqCoreE(t, s, eager)).map { r
       =>
       if r then { if profile.cacheDefEqSuccess then cacheSuccess(t, s) }
       else recordFailure(t, s)
