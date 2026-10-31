@@ -932,6 +932,29 @@ six-pair medians above were taken on a quieter machine.
 Taken with K23, the JVM checks `std` in 128–155 s against 267 s before, and
 `init` in about 24 s against 51–55 s.
 
+### K25 — a rejected defeq pair is formatted when the trace is read
+
+`TypeChecker.recordFailure` kept the last 32 pairs `is_def_eq` rejected, for
+the trace attached to a rejected declaration. It formatted both terms into a
+string as each pair was rejected. A rejected pair is routine: lazy delta
+reduction tries and discards comparisons all the time, and nearly every
+declaration is then accepted, so the strings were almost never read. On `std`
+that formatting was 21% of all allocation. Every `Name.toString` and
+`Name.components` in the profile came from it. The pairs are now kept as
+terms and formatted in `defeqTrace`, with the same format. Terms are immutable
+and printing is deterministic, so a trace reads exactly as before. On
+`case-natlit` with one theorem given another theorem's proof, `bigLit` is
+rejected with a two-entry trace, and the whole `--json` output, trace text
+included, is byte for byte the same as before the change.
+
+| JVM, `-Xmx2g` | K24 | lazy trace |
+|---|---|---|
+| `std`, two back-to-back pairs | 131.9 s, 144.7 s | 109.8 s, 108.5 s |
+| `init`, four interleaved pairs | 25.1–26.1 s | 24.8–27.3 s |
+
+`init` is unchanged within noise: its declarations reject few pairs. Every
+verdict on `init` and `std` is identical to the original baseline's.
+
 ## DSL
 
 ### D5 — binders are Scala functions
