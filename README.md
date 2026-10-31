@@ -138,7 +138,7 @@ docs/semantics.md P15.
 
 The checker holds little. On the v4.35.0 `std` export, 99,619 declarations,
 the live heap is about 185 MB, and the JVM build checks it with `-Xmx512m` at
-0.74 GB resident, in 161 seconds on a busy machine. A large resident figure from
+0.67 GB resident, in 107 seconds on a busy machine. A large resident figure from
 the JVM is headroom it was allowed to take, not what the check requires. A
 larger corpus needs more, so measure before reading a resident figure as the
 requirement.
@@ -151,15 +151,15 @@ it does:
 
 | corpus | native, `boehm` | wall | resident | JVM |
 |---|---|---|---|---|
-| `init` | `GC_INITIAL_HEAP_SIZE=4G` | 208–218s | 4.9–5.2 GB | 23s |
-| `std` | `GC_INITIAL_HEAP_SIZE=8G` | 1,919s | 9.16 GB | 98–110s |
+| `init` | `GC_INITIAL_HEAP_SIZE=4G` | 177–202s | 4.3–4.5 GB | 23s |
+| `std` | `GC_INITIAL_HEAP_SIZE=8G` | 1,504s | 8.50 GB | 98–110s |
 
-The native figures were measured before the kernel changes in
-docs/semantics.md K23–K26, the JVM's after. Those changes cut the JVM's
-`std` from 267 to under 100 seconds. Natively, run against the old kernel
-interleaved on a loaded machine, `boehm` checks `init` 37–45% faster and the
-second-heaviest `std` declaration 2.9–4.8 times faster. It checks the whole of
-`std` in 1,504 s against the old kernel's best of 1,919 s; see F7.
+All on the current kernel (docs/semantics.md K23–K26), and the native runs
+under a load average between 5 and 10 from other programs, which slows `boehm`
+far more than it slows the JVM. Against the old kernel, interleaved, `boehm`
+is 37–45% faster on `init`, 2.9–4.8 times faster on the second-heaviest `std`
+declaration, and 22–31% faster on the whole of `std` than the old kernel's
+best quiet runs (1,919 s and 2,176 s). See F7.
 
 Size the initial heap to the corpus rather than generously: `std` at 16G took
 3,058 seconds. `boehm` with its default heap hung on 2 of 15 `init` runs; none of
