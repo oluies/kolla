@@ -886,6 +886,52 @@ construction. So a step type that runs directly while shallow and falls back
 to `Eval` when deep would keep the order of evaluation, the step counts and the
 `maxSteps` cut-off as they are. That is the next change.
 
+### K24 — the type checker steps directly while the stack is shallow
+
+`Step` replaces `cats.Eval` in `TypeChecker`. It is either a computed value or
+a suspended `Eval`. `Step.defer` and `flatMap` run their argument immediately
+while a depth counter, one per type checker, is under 128, and suspend into
+`Eval` at or past it, so a deep term is trampolined exactly as before. The
+counter can only overstate how deep the stack is. A `.value` reached while
+deep starts from a high count, so everything under it is suspended. The
+type checker's 158 `defer`s, 57 `flatMap`s and 72 `now`s kept their shape;
+only the names changed. K23's audit is why that is enough. Every `Eval` the
+type checker built was run, in the order written, with no `try` around
+construction and no `memoize`, so running a step early cannot run anything
+that would not have run, or run it out of order. The 20,000-deep `whnf`,
+`infer` and `isDefEq` tests, which go through the suspended path, pass on the
+JVM, Scala.js and Scala Native. So does the step-budget test, which shows the
+`maxSteps` cut-off falls where it did.
+
+A first version made `defer`'s and `flatMap`'s arguments `inline` as well, to
+remove the closures too. That copied each lambda body into both branches,
+run now and suspend, at every nesting level. Nested for-comprehensions grew
+it exponentially, and the JVM rejected the class ("Class too large"). `defer`
+now takes a by-name argument, which Scala binds once, and `flatMap` and `map`
+are ordinary methods. The closures remain, as they did with `Eval`, but the
+`Eval` nodes and the trampoline's run loop are gone from the direct path.
+
+| JVM, `-Xmx2g` | `main` (K23) | `Step` |
+|---|---|---|
+| `std` wall, two back-to-back pairs | 182.5 s, 154.0 s | 155.3 s, 128.2 s |
+| `std` user CPU | 203.6 s, 174.0 s | 181.4 s, 153.5 s |
+| `init` wall, median of 6 interleaved pairs | 26.6 s | 24.4 s, faster in every pair |
+| `init` user CPU, median | 38.4 s | 39.6 s |
+| `init` JIT compile time | 7.4–7.9 s | 10.9–12.6 s |
+| `std` allocation | 465.8 GB | 339.3 GB |
+| `Eval` share of `std` CPU | 22.9% | 2.3%, plus 6.4% in `Step` |
+
+Every per-declaration verdict on `init` (three runs) and `std` is identical
+to the original baseline's. The extra user CPU on `init` is compilation: about
+four seconds more JIT work, on background compiler threads, for the larger
+inlined code. It weighs on a 25-second run and is not on the critical path;
+wall time fell on both corpora. The first `init` comparison, run while other
+programs held the load average between 5 and 12, was too noisy to read. The
+six-pair medians above were taken on a quieter machine.
+
+Taken with K23, the JVM checks `std` in 128–155 s against 267 s before, and
+`init` in about 24 s against 51–55 s.
+
 ## DSL
 
 ### D5 — binders are Scala functions
