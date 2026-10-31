@@ -4,8 +4,11 @@ import scala.annotation.tailrec
 import scala.collection.immutable.ArraySeq
 import scala.collection.mutable
 
-sealed abstract class Expr:
-  val data: Long
+/** `data` is a constructor field rather than an abstract `val`, so reading it
+  * is one field load the JIT can inline; as an abstract member it was a
+  * call dispatched over eleven subclasses on every metadata query.
+  */
+sealed abstract class Expr(val data: Long):
 
   private[kernel] def kindOrd: Int
 
@@ -28,76 +31,76 @@ sealed abstract class Expr:
 
 object Expr:
 
-  final case class BVar(idx: Int) extends Expr:
-    val data: Long = mkData(mix(7L, idx.toLong), idx + 1)
+  final case class BVar(idx: Int) extends Expr(mkData(mix(7L, idx.toLong), idx + 1)):
     private[kernel] def kindOrd = 0
 
-  final case class FVar(id: Name) extends Expr:
-    val data: Long = mkData(mix(13L, id.hash), 0, 0, hasFVar = true)
+  final case class FVar(id: Name) extends Expr(mkData(mix(13L, id.hash), 0, 0, hasFVar = true)):
     private[kernel] def kindOrd = 1
 
-  final case class MVar(id: Name) extends Expr:
-    val data: Long = mkData(mix(17L, id.hash), 0, 0, hasExprMVar = true)
+  final case class MVar(id: Name) extends Expr(mkData(mix(17L, id.hash), 0, 0, hasExprMVar = true)):
     private[kernel] def kindOrd = 2
 
-  final case class Sort(level: Level) extends Expr:
-    val data: Long =
-      mkData(mix(11L, level.hash), 0, 0,
-        hasLevelMVar = level.hasMVar, hasLevelParam = level.hasParam)
+  final case class Sort(level: Level)
+      extends Expr(
+        mkData(mix(11L, level.hash), 0, 0, hasLevelMVar = level.hasMVar, hasLevelParam = level.hasParam)
+      ):
     private[kernel] def kindOrd = 3
 
-  final case class Const(name: Name, levels: List[Level]) extends Expr:
-    val data: Long =
-      mkData(mix(5L, mix(name.hash, hashLevels(levels))), 0, 0,
-        hasLevelMVar = levels.exists(_.hasMVar), hasLevelParam = levels.exists(_.hasParam))
+  final case class Const(name: Name, levels: List[Level])
+      extends Expr(
+        mkData(mix(5L, mix(name.hash, hashLevels(levels))), 0, 0,
+          hasLevelMVar = levels.exists(_.hasMVar), hasLevelParam = levels.exists(_.hasParam))
+      ):
     private[kernel] def kindOrd = 4
 
-  final case class App(fn: Expr, arg: Expr) extends Expr:
-    val data: Long = mkAppData(fn.data, arg.data)
+  final case class App(fn: Expr, arg: Expr) extends Expr(mkAppData(fn.data, arg.data)):
     private[kernel] def kindOrd = 5
 
-  final case class Lam(binderName: Name, binderType: Expr, body: Expr, binderInfo: BinderInfo) extends Expr:
-    val data: Long = mkBinderData(binderType, body)
+  final case class Lam(binderName: Name, binderType: Expr, body: Expr, binderInfo: BinderInfo)
+      extends Expr(mkBinderData(binderType, body)):
     private[kernel] def kindOrd = 6
 
-  final case class ForallE(binderName: Name, binderType: Expr, body: Expr, binderInfo: BinderInfo) extends Expr:
-    val data: Long = mkBinderData(binderType, body)
+  final case class ForallE(binderName: Name, binderType: Expr, body: Expr, binderInfo: BinderInfo)
+      extends Expr(mkBinderData(binderType, body)):
     private[kernel] def kindOrd = 7
 
-  final case class LetE(declName: Name, tpe: Expr, value: Expr, body: Expr, nondep: Boolean) extends Expr:
-    val data: Long =
-      val d = math.max(math.max(tpe.approxDepth, value.approxDepth), body.approxDepth) + 1
-      mkData(
-        mix(d.toLong, mix(tpe.hash, mix(value.hash, body.hash))),
-        math.max(math.max(tpe.looseBVarRange, value.looseBVarRange), math.max(body.looseBVarRange - 1, 0)),
-        d,
-        tpe.hasFVar || value.hasFVar || body.hasFVar,
-        tpe.hasExprMVar || value.hasExprMVar || body.hasExprMVar,
-        tpe.hasLevelMVar || value.hasLevelMVar || body.hasLevelMVar,
-        tpe.hasLevelParam || value.hasLevelParam || body.hasLevelParam
-      )
+  final case class LetE(declName: Name, tpe: Expr, value: Expr, body: Expr, nondep: Boolean)
+      extends Expr(letData(tpe, value, body)):
     private[kernel] def kindOrd = 8
 
-  final case class Lit(value: Literal) extends Expr:
-    val data: Long = mkData(Literal.hashOf(value))
+  final case class Lit(value: Literal) extends Expr(mkData(Literal.hashOf(value))):
     private[kernel] def kindOrd = 9
 
-  final case class MData(kv: KVMap, expr: Expr) extends Expr:
-    val data: Long =
-      val d = expr.approxDepth + 1
-      mkData(mix(d.toLong, expr.hash), expr.looseBVarRange, d,
-        expr.hasFVar, expr.hasExprMVar, expr.hasLevelMVar, expr.hasLevelParam)
+  final case class MData(kv: KVMap, expr: Expr) extends Expr(mdataData(expr)):
     private[kernel] def kindOrd = 10
 
-  final case class Proj(typeName: Name, idx: Int, struct: Expr) extends Expr:
-    val data: Long =
-      val d = struct.approxDepth + 1
-      mkData(mix(d.toLong, mix(typeName.hash, mix(idx.toLong, struct.hash))),
-        struct.looseBVarRange, d,
-        struct.hasFVar, struct.hasExprMVar, struct.hasLevelMVar, struct.hasLevelParam)
+  final case class Proj(typeName: Name, idx: Int, struct: Expr) extends Expr(projData(typeName, idx, struct)):
     private[kernel] def kindOrd = 11
 
   // ------------------------------------------------------------------- data
+
+  private def letData(tpe: Expr, value: Expr, body: Expr): Long =
+    val d = math.max(math.max(tpe.approxDepth, value.approxDepth), body.approxDepth) + 1
+    mkData(
+      mix(d.toLong, mix(tpe.hash, mix(value.hash, body.hash))),
+      math.max(math.max(tpe.looseBVarRange, value.looseBVarRange), math.max(body.looseBVarRange - 1, 0)),
+      d,
+      tpe.hasFVar || value.hasFVar || body.hasFVar,
+      tpe.hasExprMVar || value.hasExprMVar || body.hasExprMVar,
+      tpe.hasLevelMVar || value.hasLevelMVar || body.hasLevelMVar,
+      tpe.hasLevelParam || value.hasLevelParam || body.hasLevelParam
+    )
+
+  private def mdataData(expr: Expr): Long =
+    val d = expr.approxDepth + 1
+    mkData(mix(d.toLong, expr.hash), expr.looseBVarRange, d,
+      expr.hasFVar, expr.hasExprMVar, expr.hasLevelMVar, expr.hasLevelParam)
+
+  private def projData(typeName: Name, idx: Int, struct: Expr): Long =
+    val d = struct.approxDepth + 1
+    mkData(mix(d.toLong, mix(typeName.hash, mix(idx.toLong, struct.hash))),
+      struct.looseBVarRange, d,
+      struct.hasFVar, struct.hasExprMVar, struct.hasLevelMVar, struct.hasLevelParam)
 
   val maxLooseBVarRange: Int = 1048575
 

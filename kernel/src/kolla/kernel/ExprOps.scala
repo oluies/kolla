@@ -38,20 +38,26 @@ object ExprOps:
     * four visits in ten. An unchanged result needs no cache entry.
     */
   def replace(e: Expr, keep: (Expr, Int) => Boolean)(f: (Expr, Int) => Option[Expr]): Expr =
-    val cache = mutable.HashMap.empty[Key, Expr]
+    // Created on the first store: a call whose visits all end at `keep` makes
+    // no cache at all.
+    var cache: mutable.HashMap[Key, Expr] = null
+    def cached(k: Key): Expr = if cache == null then null else cache.getOrElse(k, null)
+    def store(k: Key, r: Expr): Unit =
+      if cache == null then cache = mutable.HashMap.empty
+      cache(k) = r
 
     def visit(e: Expr, offset: Int, depth: Int): Expr =
       if depth >= DirectDepth then go(e, offset).value
       else if keep(e, offset) then e
       else
         val k   = new Key(e, offset)
-        val hit = cache.getOrElse(k, null)
+        val hit = cached(k)
         if hit != null then hit
         else
           val r = f(e, offset) match
             case Some(r) => r
             case None    => children(e, offset, depth + 1)
-          cache(k) = r
+          store(k, r)
           r
 
     def children(e: Expr, offset: Int, depth: Int): Expr = e match
@@ -85,13 +91,13 @@ object ExprOps:
     // The trampolined traversal, for subterms below `DirectDepth`.
     def go(e: Expr, offset: Int): Eval[Expr] =
       if keep(e, offset) then return Eval.now(e)
-      val k = new Key(e, offset)
-      cache.get(k) match
-        case Some(r) => Eval.now(r)
-        case None =>
+      val k   = new Key(e, offset)
+      val hit = cached(k)
+      if hit != null then Eval.now(hit)
+      else
           f(e, offset) match
             case Some(r) =>
-              cache(k) = r
+              store(k, r)
               Eval.now(r)
             case None =>
               val next: Eval[Expr] = e match
@@ -132,7 +138,7 @@ object ExprOps:
                   }
                 case other => Eval.now(other)
               next.map { r =>
-                cache(k) = r
+                store(k, r)
                 r
               }
     visit(e, 0, 0)
