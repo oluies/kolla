@@ -158,8 +158,8 @@ The native figures were measured before the kernel changes in
 docs/semantics.md K23–K26, the JVM's after. Those changes cut the JVM's
 `std` from 267 to under 100 seconds. Natively, run against the old kernel
 interleaved on a loaded machine, `boehm` checks `init` 37–45% faster and the
-second-heaviest `std` declaration 2.9–4.8 times faster. A full native `std`
-comparison is still to be made on a quiet machine; see F7.
+second-heaviest `std` declaration 2.9–4.8 times faster. It checks the whole of
+`std` in 1,504 s against the old kernel's best of 1,919 s; see F7.
 
 Size the initial heap to the corpus rather than generously: `std` at 16G took
 3,058 seconds. `boehm` with its default heap hung on 2 of 15 `init` runs; none of

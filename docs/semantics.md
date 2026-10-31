@@ -2751,7 +2751,15 @@ caught. On the JVM no `std` declaration got slower, by more than 0.01 s, under
 the same changes. The heavy declaration's interleaved pairs above then
 put K26 ahead natively. The likeliest reading is load: `boehm` runs fifteen
 parallel markers, and they degrade badly when other processes hold the cores.
-A full `std` pair on a quieter machine is the measurement that settles it.
+
+A second full `std` pair settled it. K26 checked all 99,619 declarations in
+1,504 s, with 1,478 s of user and 199 s of system time, while the load rose
+from 5.2 to 10.0. The original kernel ran next, as the load rose from 10.0 to
+26.5, and took 4,381 s with 2,496 s of system time. That is a machine
+thrashing, not a comparison. The fair comparison is against the original
+kernel's own best `std` runs on quieter machines: 1,919 s, and 2,176 s at a
+load near 7. K26 is 22–31% faster than both, under more load than either. The
+run that did not finish was load.
 
 The tools that found what is in this entry, and the ones that could not:
 `/usr/bin/time -l`, `vmmap --summary` and `footprint` for what a process holds,
