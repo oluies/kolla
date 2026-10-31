@@ -809,6 +809,83 @@ explanations — a key mismatch, or writing without reading — are both ruled
 out. Answering it needs counters on the nested descent rather than on the
 entry.
 
+### K23 — where the kernel's time went, and three changes that do not change an answer
+
+The question started as one about the native build. F7 found that `immix`
+needs far more heap than the program holds, because long-lived expression
+nodes are allocated among short-lived garbage. The obvious suspect for that
+garbage was the export reader, which parses each NDJSON line into a `Json`
+tree and throws it away. Java Flight Recorder on the v4.35 `init` export said
+otherwise. Of 143 GB allocated, the reader accounted for 0.4%. `cats.Eval` was
+37.9%, `ExprOps` traversals 17.5%, and the type checker's cache maps 13.3%.
+The kernel was allocating about 2.5 GB a second.
+
+Three changes followed, each found by profiling the one before. None changes
+an answer: every per-declaration verdict on `init` (59,349) and `std`
+(99,619) is identical to `main`'s, compared line by line with timings
+stripped.
+
+**`ExprOps.replace`.** It was the single largest source of garbage. For every
+node it visited, leaves included, it allocated a `Key`, a cache entry, an
+`Option` and two or three `Eval` steps. Counters on `init` showed 21.3 million
+calls and 384 million visits. 42% of the visits ended at once, at the O(1)
+check each caller's function begins with (no loose bound variable in range, no
+free variable, no level parameter). The deepest visit was 319, and 99.9% were
+under 64. Callers now pass that check as `keep`, tested before the cache is
+touched, since an unchanged result needs no entry. The traversal recurses on
+the stack to depth 256 and hands anything deeper to the `Eval` traversal it
+used before, so a 200,000-deep term still cannot overflow. Allocation on
+`init` fell from 143 GB to 75 GB.
+
+**`Expr.data`.** The profile then had `looseBVarRange` alone at 10% of CPU,
+though it is a shift on a field. The field was an abstract `val` defined in
+each of eleven subclasses, so each read was a call dispatched over eleven
+classes, which the JIT cannot inline at a call site that sees them all. `data`
+is now a constructor field of `Expr` itself, with the same values and layout.
+In the same commit `replace` creates its cache on the first store, so a call
+settled by `keep` allocates no map.
+
+**`Expr.eqCore`.** On `std` the next hotspot was structural equality, at 19% of
+CPU. Its callers were the type checker's cache lookups (`whnfCore`, `infer`,
+`whnf` and the definitional-equality caches). Those are keyed by structural
+equality, as Lean's are, so a hit on an equal but separate term walks both
+terms. The walk allocated a deque, a tuple per child pair and an `IdPair` per
+inner node. It now recurses directly to depth 256, with the loop kept below
+that. It rejects any pair whose `data` differs: equal terms have equal data,
+which the property "equal expressions have equal data" checks. The record of
+compared pairs, which keeps heavily shared terms linear, starts after 32 inner
+nodes. A test compares two separately built 2^60-path terms.
+
+| JVM, `-Xmx2g` | `main` | `replace` | + `data`, lazy cache | + `eqCore` |
+|---|---|---|---|---|
+| `init` wall | 51–63 s | 36.7–37.0 s | 29.2–29.5 s | 30.5–31.5 s |
+| `std` wall | 267.3 s | 259.1 s | 174.8–184.4 s | 151.3 s |
+| `std` user CPU | 293.6 s | 279.4 s | 196.0–205.7 s | 172.3 s |
+| `std` allocation | — | — | 580.7 GB | 465.8 GB |
+
+Each change was measured against the step before it, run interleaved or
+back to back on the same machine. The machine's load varied between rounds
+(`main` took 51–55 s on `init` in one and 59–63 s in another), so only
+same-round comparisons are quoted as gains. In the `eqCore` round the previous
+step itself took 31.5–39.1 s on `init`, so `eqCore`'s effect on `init` is
+within that noise and not claimed. `init` gained most from `replace` and `std`
+from the other two: its time is in cache lookups and metadata queries more
+than in substitution.
+
+Native, `boehm` on `std` with an 8 GB start, measured after the first change
+only: 1,763 s against 1,919 s, with system time down from 501 s to 291 s.
+`immix` still needs more than 16 GB for `init`. Halving the garbage did not
+halve its requirement, and probing between 16 and 25 GB was not attempted on a
+machine whose swap was nearly full.
+
+What remains on `std` after all three is `cats.Eval`, at 22.9% of CPU and 28%
+of allocation, in the type checker's own recursion. An audit of its 45
+`Eval`-returning functions found no `Eval` built but not run, none passed to a
+helper or held in a collection, no `memoize`, and no `try` around
+construction. So a step type that runs directly while shallow and falls back
+to `Eval` when deep would keep the order of evaluation, the step counts and the
+`maxSteps` cut-off as they are. That is the next change.
+
 ## DSL
 
 ### D5 — binders are Scala functions
