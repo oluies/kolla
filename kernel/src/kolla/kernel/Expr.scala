@@ -264,9 +264,11 @@ object Expr:
 
   /** Inner nodes compared before pairs are recorded in `seen`. The set exists so
     * that shared subterms are not compared once per path to them; a small
-    * comparison never needs it, and most comparisons are small.
+    * comparison never needs it, and most comparisons are small. Starting it
+    * later bounds the extra work at this many visits per comparison, while the
+    * type checker's cache lookups compare many terms of a few hundred nodes.
     */
-  private final val EqSeenAfter = 32
+  private final val EqSeenAfter = 512
 
   /** One structural comparison. Most pairs are settled on `data`, which holds
     * the hash and the flags and is equal whenever the terms are: it is built from
