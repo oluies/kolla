@@ -25,6 +25,13 @@ object ExprOps:
     */
   private final val DirectDepth = 256
 
+  /** Subterms at most this deep are rebuilt rather than cached. The cache keeps
+    * a shared subterm from being rebuilt once per path to it, which only pays
+    * for large ones; for a handful of nodes the key, lookup and store cost more
+    * than the work. Lean's `replace_rec_fn` likewise caches only shared nodes.
+    */
+  private final val UncachedDepth = 2
+
   /** `lean::replace_fn`: `f` is applied to each subterm with its binder depth; a
     * `Some` result replaces the subterm and stops the descent.
     */
@@ -49,6 +56,10 @@ object ExprOps:
     def visit(e: Expr, offset: Int, depth: Int): Expr =
       if depth >= DirectDepth then go(e, offset).value
       else if keep(e, offset) then e
+      else if e.approxDepth <= UncachedDepth then
+        f(e, offset) match
+          case Some(r) => r
+          case None    => children(e, offset, depth + 1)
       else
         val k   = new Key(e, offset)
         val hit = cached(k)
