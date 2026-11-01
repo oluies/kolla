@@ -2857,7 +2857,16 @@ Three comparisons against the PR, same source and flags:
   compiled against 0.5.12, then fails to link with `Unknown extern symbol
   scala.scalanative.posix.time.clock_gettime`. For these runs only, the
   locally published posixlib declares both names. Filed as
-  [scala-native#5183](https://github.com/scala-native/scala-native/issues/5183).
+  [scala-native#5183](https://github.com/scala-native/scala-native/issues/5183),
+  and fixed in
+  [scala-native#5184](https://github.com/scala-native/scala-native/pull/5184):
+  the old externs are declared again under new Scala names
+  (`clock_gettime_unglued`, `nanosleep_unglued`), deprecated since 0.5.13 for
+  removal in 0.6, with a `TimeTest` case that fails to link if the names go
+  missing. MiMa does not catch this kind of break, since it compares JVM
+  class signatures, not NIR extern names. `TimeTest` passes on Scala 2.12,
+  2.13 and 3, and the five-line cats-effect reproduction links and runs.
+  Its CI was still running at the time of writing.
 
 The prototype is local and not proposed. If the depot is worth proposing it is
 as a follow-up after #5170, which it builds on.
