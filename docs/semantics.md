@@ -2856,7 +2856,8 @@ Three comparisons against the PR, same source and flags:
   gives `posix.time.clock_gettime` an `@name` (#5123), and cats-effect 3.7.1,
   compiled against 0.5.12, then fails to link with `Unknown extern symbol
   scala.scalanative.posix.time.clock_gettime`. For these runs only, the
-  locally published posixlib declares both names.
+  locally published posixlib declares both names. Filed as
+  [scala-native#5183](https://github.com/scala-native/scala-native/issues/5183).
 
 The prototype is local and not proposed. If the depot is worth proposing it is
 as a follow-up after #5170, which it builds on.
