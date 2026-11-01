@@ -2866,7 +2866,18 @@ Three comparisons against the PR, same source and flags:
   missing. MiMa does not catch this kind of break, since it compares JVM
   class signatures, not NIR extern names. `TimeTest` passes on Scala 2.12,
   2.13 and 3, and the five-line cats-effect reproduction links and runs.
-  Its CI was still running at the time of writing.
+  A CodeRabbit review asked for the test to accept an interrupted `nanosleep`
+  (`EINTR`), as the neighbouring `clock_nanosleep` test does, and that was
+  fixed. It also suggested a consumer compiled against 0.5.12 rather than
+  calls to the new members, which would catch a changed `@name` as well as
+  a removed one. That was left to the maintainers. On the final head,
+  3874ca4c3, 37 checks pass and 8 are skipped. One fails twice on this PR:
+  macOS `Test runtime (3, release-fast)`, an abort in the continuations
+  runtime (`handler_pop: expected id=…`) during the virtual-thread tests,
+  with `TimeTest` passing in the same run. The scheduled `main` run at the
+  same base, 4e8508c1d, aborted the same way in its macOS LLVM 21 job, and
+  the PR runs that passed that job were all on older bases. So the abort is
+  most likely from `main` (#5173 or #5174), not from this change.
 
 The prototype is local and not proposed. If the depot is worth proposing it is
 as a follow-up after #5170, which it builds on.
