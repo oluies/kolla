@@ -2725,23 +2725,141 @@ rechecked on Linux `main`, since its fix is already merged.
 
 Both have a proposed fix,
 [scala-native#5170](https://github.com/scala-native/scala-native/pull/5170).
-`Heap_Recycle` skips threads that are blocked in native code when it hands out
-partly free blocks. A recovery collection at the cap that leaves under 2% of
-the heap free counts as exhaustion, with the large allocator's free chunks
-counted as free. The repro's 16 idle threads then need 512 MB, the same as
-none, and a 256 MB cap throws `OutOfMemoryError` in about 4 seconds. Its
-scripted test passes with the fix and fails on unpatched `main` at the
-16-thread case.
+The first version skipped threads blocked in native code when `Heap_Recycle`
+handed out partly free blocks, and counted a recovery collection at the cap
+that left under 2% of the heap free as exhaustion. Its CI passed in full: the
+runtime suites for Scala 2.12, 2.13, 3 and 3-next in debug and release-fast,
+Windows ARM64, FreeBSD, NetBSD, Termux, cross-compilation for linux-arm64,
+linux-riscv64 and linux-x86, and both scripted-test jobs.
 
-Scala Native's CI passed on the PR in full, and the CLA is signed. That is
-every job that ran: the runtime suites for Scala 2.12, 2.13, 3 and 3-next in
-debug and release-fast, Windows ARM64, FreeBSD, NetBSD and Termux. Also the
-cross-compilation jobs for linux-arm64, linux-riscv64 and linux-x86, both
-scripted-test jobs, which run `gc-idle-mutator-recycling` on Linux, the tools,
-lint and docs. The LLVM-version, partest, runtime-extension and no-opt jobs
-were skipped by the workflow's own conditions. The longest job took 1 hour 6
-minutes. At the time of writing the PR awaits a maintainer review, and #5168
-and #5169 have no replies.
+The maintainer's review asked for changes on both points, and both objections
+held up. Thread state cannot pick out idle threads: `Synchronizer_yield` marks
+every stopped thread as in native code, so during `Heap_Recycle` they all look
+alike. A rule on free space alone throws `OutOfMemoryError` on a heap that is
+full but valid. 118 MB of live 1 MiB arrays in a 128 MB cap, with 20 million
+small short-lived allocations, failed 3 runs in 3 under it.
+
+The reworked PR replaces both:
+
+- Each allocator counts the space it took, or failed to get, since the last
+  collection. Once per collection the collecting thread and every thread that
+  took or asked for space are listed, and partly free blocks go round that
+  list, O(1) per block. A thread waiting on another thread's recovery
+  collection counts, since it asked.
+- A GC overhead limit after the JVM's `UseGCOverheadLimit`. An allocation
+  fails only after 5 recovery collections in a row each leave under 2% of the
+  heap free at its cap *and* take at least 98% of the time since the previous
+  collection. Free space counts free blocks, free lines in recycled blocks and
+  the large allocator's free chunks. Any other collection, explicit ones
+  included, resets the count.
+
+With the rework the repro's 16 idle threads need 512 MB, the same as none
+(`main` needs 2 GB), 4 idle threads need 512 MB rather than 768 MB, and a
+256 MB cap throws `OutOfMemoryError` after 8–10 s with 0 or 16 idle threads.
+The full-but-valid case completes 3 runs in 3. Its scripted test runs that case
+with debug logging and requires a `low-yield recovery collection` line, so a
+pass shows the limit was approached and held rather than never reached. About
+16,000 such collections are logged, all of them not GC-bound.
+
+CodeRabbit and roborev reviews of the rework found five more things, all
+fixed: an explicit collection did not reset the count; the overhead timing left
+out the reservation after a collection; a failed allocation did not count as
+demand; the round-robin was O(threads) per block; and the yield was judged
+after the reservation had taken a superblock. Two suggestions were declined
+with evidence: failing only when reservation fails reintroduces #5169, and a
+126 MiB live set cannot be placed at all in a 128 MB cap.
+
+On the latest head, 972222390, 37 checks pass and 8 are skipped by the
+workflow's conditions. One fails: `Test runtime (3, debug)` on Windows, a
+`StackOverflowError` in `ForkJoinTask9Test.testPollSubmission`, with a stack
+that repeats `WindowsThread.unpark` and `ObjectMonitor.exitMonitor` and has no
+GC frame in it. The previous head passed that job, and the same Windows
+workflow fails intermittently on `main`, so it is most likely unrelated, but
+that is not shown. The review still requests changes, pending the
+maintainer's second look.
+
+#### Commix
+
+The same question was asked of `commix`. Its sweep is concurrent, and
+`Allocator_claimRecycled` already takes recycled blocks from other threads'
+lists, so the heap does not grow with idle threads. They cost collections
+instead: 80 rather than 10 at 512 MB with 16 idle threads. At a 256 MB cap,
+with 16 idle threads `commix` collects without end (364 collections in 60 s),
+where with none it throws `OutOfMemoryError` after 12 s. A prototype of the
+same allocation-activity rule for `commix` made no measurable difference, and
+is not proposed.
+
+#### A magazine depot for `immix`
+
+[libumem](https://github.com/gburd/libumem) gives each CPU a small magazine of
+free objects and refills it from a shared depot under a lock. The same shape
+was prototyped for `immix` as `immixmagazine`, on top of the PR: `Heap_Recycle`
+puts every partly free block into one global depot, and a thread whose own list
+is empty takes up to 16 blocks from it under a lock. An atomic count lets it
+skip the lock when the depot is empty. Large-object chunks keep the PR's
+target list. Nothing is handed to a thread before it asks, so idle threads
+hold nothing, and no thread has to be identified as idle.
+
+CodeRabbit found a data race (an unlocked read of the depot's list head,
+replaced by the atomic count). A roborev design review found that a child
+process forked while another thread held the depot lock would deadlock, and the
+lock is now reset and the depot cleared after `fork`. The three GC scripted
+tests pass on the final commit.
+
+Three comparisons against the PR, same source and flags:
+
+- The repro, `--no-large`, debug, 512 MB, three runs each: both do 10
+  collections and 1.3–1.4 s of GC, and with no idle threads both take 1.5 s.
+  With 16 idle threads the PR takes 6.3–7.1 s and the magazine 1.5 s. The PR's
+  extra time is spent after the work loop ends, when the 16 threads wake and
+  exit: it does 30 collections in all against the magazine's 10, and at a 1 GB
+  cap both do 10. A thread that was idle owns no recycled blocks, so on a full
+  heap each one that wakes forces a collection of its own. The magazine's
+  depot gives it blocks without one. This is a weakness of the PR, small at
+  shutdown, and larger in a program whose idle threads wake often.
+- Scala Native's own allocation benchmark, release-fast, 5 s per run, three
+  alternating pairs. Throughput, median of three, millions of allocations a
+  second:
+
+  | scenario | 1 worker, PR | magazine | 16 workers, PR | magazine |
+  |---|---|---|---|---|
+  | objects | 171.7 | 154.1 | 594.4 | 671.9 |
+  | small (64 B) | 112.1 | 120.4 | 256.2 | 215.8 |
+  | medium (544 B) | 39.5 | 41.2 | 46.1 | 50.7 |
+  | large (8 KiB) | 1.89 | 1.72 | 1.70 | 1.79 |
+  | blocks (96 KiB) | 0.73 | 0.78 | 0.57 | 0.58 |
+
+  One difference falls outside the run-to-run range: the magazine is 13%
+  faster on 16-worker `objects` (668–687 against 511–600). It is 16% slower on
+  16-worker `small`, where the ranges just overlap (213–236 against 231–262).
+  The rest is noise, and GC time agrees within 10% everywhere.
+  The benchmark is bound by the allocation fast path, which neither change
+  touches.
+- kolla's `init`, debug, `immix`, interleaved PR, magazine, magazine, PR,
+  at a load average between 5 and 10 from other programs:
+
+  | `init`, `immix` | PR | magazine |
+  |---|---|---|
+  | 32 GB cap, wall | 295 s, 272 s | 260 s, 258 s |
+  | user / system CPU | 232 / 55 s, 229 / 37 s | 225 / 30 s, 224 / 30 s |
+  | collections | 24, 25 | 23, 23 |
+  | peak footprint | 34.4 GB, 34.4 GB | 33.9 GB, 33.7 GB |
+  | 16 GB cap | out of memory at 165 s, 150 s | out of memory at 172 s, 159 s |
+
+  At 32 GB every run accepts all 59,349 declarations, the magazine 5–12%
+  faster, most of it system time. At 16 GB both run out of memory with 23–24
+  collections, one PR run after 37,379 declarations, as 0.5.12 did at 16.6 GB.
+  Neither change moves kolla's heap requirement: what fills it is the
+  fragmentation described above, not the idle-thread effect.
+
+  Building kolla against Scala Native `main` needed a local change. `main`
+  gives `posix.time.clock_gettime` an `@name` (#5123), and cats-effect 3.7.1,
+  compiled against 0.5.12, then fails to link with `Unknown extern symbol
+  scala.scalanative.posix.time.clock_gettime`. For these runs only, the
+  locally published posixlib declares both names.
+
+The prototype is local and not proposed. If the depot is worth proposing it is
+as a follow-up after #5170, which it builds on.
 
 For kolla none of this changes the advice: run a library corpus on the JVM,
 and when a native run is needed, use `boehm` with a preset heap.
