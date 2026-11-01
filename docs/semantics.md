@@ -981,6 +981,31 @@ the `case-natlit` rejection of K25 prints the same, trace included. With
 K23–K26 the JVM checks `std` in under 100 s and `init` in under 23 s, against
 267 s and 51–55 s at the start.
 
+**K23–K26 at a glance.** Every step was measured against the step before it in
+the same round, back to back or interleaved. The machine's load varied a lot
+between rounds, so times in different rows are not strictly comparable: in the
+K24 round, for one, the K23 baseline itself took 154–182 s on `std`, not the
+151 s it took in its own round. The overall movement is what the rows are for.
+Every verdict is identical throughout. A dash is a configuration not measured.
+
+| step | change | JVM `std` | JVM `init` | `std` allocation |
+|---|---|---|---|---|
+| start | — | 267.3 s | 51–55 s | — |
+| K23, 1 | `replace` tests `keep` first, recurses directly | 259.1 s | 36.7–37.0 s | — (`init`: 143 → 75 GB) |
+| K23, 2 | `Expr.data` a field; `replace` cache made lazily | 174.8–184.4 s | 29.2–29.5 s | 580.7 GB |
+| K23, 3 | `eqCore` direct, rejects on `data`, lazy `seen` | 151.3 s | 30.5–31.5 s | 465.8 GB |
+| K24 | `Step` in place of `cats.Eval` in the type checker | 128.2–155.3 s | 24.4 s, median of six | 339.3 GB |
+| K25 | the defeq trace is formatted when read | 108.5–109.8 s | about 25 s, unchanged | — |
+| K26 | small subterms rebuilt; `seen` after 512 nodes | 97.7–98.6 s | 22.7–22.8 s | — |
+
+JVM figures are with `-Xmx2g`. Natively, with `boehm` (F7):
+
+| | old kernel | after K23, 1 | K26 |
+|---|---|---|---|
+| `std`, 8 GB start | 1,919 s, quiet | 1,763 s | 1,504 s, load 5–10 |
+| `init`, 4 GB start | 208–218 s quiet; 320–323 s loaded, paired | — | 177–202 s, loaded, paired |
+| the second-heaviest `std` declaration, paired | 393–1,014 s | — | 137–212 s |
+
 ## DSL
 
 ### D5 — binders are Scala functions

@@ -349,7 +349,8 @@ difference between slow and unfinishable:
 
 These were measured before the kernel changes in docs/semantics.md K23–K26,
 which do not change a verdict. On the current kernel `std` at v4.35.0 takes
-98–110 seconds with `-Xmx2g`.
+98–110 seconds with `-Xmx2g`; the end of K26 tabulates each step's effect on
+the JVM and natively.
 
 `--defeq-cache` keeps the cache on a profile that predates it, and on `std` it
 is the difference between a verdict and none. It is an optimisation and not a
