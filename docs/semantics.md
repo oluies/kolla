@@ -2839,21 +2839,26 @@ Three comparisons against the PR, same source and flags:
   The benchmark is bound by the allocation fast path, which neither change
   touches.
 - kolla's `init`, debug, `immix`, interleaved PR, magazine, magazine, PR,
-  at a load average between 5 and 10 from other programs:
+  twice, a day apart. Other programs held the load average between 4 and 11,
+  and it is given per run because it moved the times more than the collector
+  did:
 
-  | `init`, `immix` | PR | magazine |
+  | `init`, `immix`, 32 GB cap | PR | magazine |
   |---|---|---|
-  | 32 GB cap, wall | 295 s, 272 s | 260 s, 258 s |
-  | user / system CPU | 232 / 55 s, 229 / 37 s | 225 / 30 s, 224 / 30 s |
-  | collections | 24, 25 | 23, 23 |
-  | peak footprint | 34.4 GB, 34.4 GB | 33.9 GB, 33.7 GB |
-  | 16 GB cap | out of memory at 165 s, 150 s | out of memory at 172 s, 159 s |
+  | first round, wall (load) | 295 s (10.4), 272 s (8.2) | 260 s (7.0), 258 s (8.3) |
+  | second round, wall (load) | 257 s (5.5), 257 s (5.1) | 260 s (10.5), 331 s (8.8) |
+  | collections | 24–25 | 23 |
+  | peak footprint | 34.4 GB | 33.7–34.4 GB |
 
-  At 32 GB every run accepts all 59,349 declarations, the magazine 5–12%
-  faster, most of it system time. At 16 GB both run out of memory with 23–24
-  collections, one PR run after 37,379 declarations, as 0.5.12 did at 16.6 GB.
-  Neither change moves kolla's heap requirement: what fills it is the
-  fragmentation described above, not the idle-thread effect.
+  At 16 GB all eight runs ran out of memory after 150–172 s, with 23–25
+  collections, one PR run after 37,379 declarations, as 0.5.12 did at
+  16.6 GB. At 32 GB every run accepts all 59,349 declarations. The first
+  round had the magazine 5–12% faster. The second, with the PR runs at the
+  lower load, had the PR as fast or faster: 257 s against 260 s and 331 s.
+  Taken together there is no difference beyond the load. The magazine does
+  one or two fewer collections, and neither change moves kolla's heap
+  requirement: what fills it is the fragmentation described above, not the
+  idle-thread effect.
 
   Building kolla against Scala Native `main` needed a local change. `main`
   gives `posix.time.clock_gettime` an `@name` (#5123), and cats-effect 3.7.1,
