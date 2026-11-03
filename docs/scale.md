@@ -141,6 +141,15 @@ finishing one being 133 seconds. The run then stops making progress on
 with resident near 4 GB of a 20 GB ceiling, so it is time rather than memory.
 
 So kolla reads a Mathlib export comfortably and does not finish checking one.
+
+Rerun on the K26 kernel on 3 November, the same way, the checking up to that
+declaration is about 3.7 times faster: declaration 225,053 at 530 s rather
+than about 1,950 s, and 32 declarations over a second, 180 s in all, rather
+than 105 and 973 s. It still stops on `IntermediateField.restrictScalars_top`,
+reached at 1,039 s, and after 1,600 s there the run ends with `ran out of
+memory after 337321 declarations` at 23.1 GB resident with `-Xmx20g`. The
+faster kernel fills the declaration's pair caches faster; docs/semantics.md K19
+has the figures.
 An earlier draft of this named a different declaration, identified from a
 progress counter that only reports every 25000 declarations; see
 docs/semantics.md K19 for why that was not an identification at all.

@@ -1613,6 +1613,49 @@ Narrowing it further needs counters inside the reduction itself — which
 `is_def_eq` pair, how deep, how many unfoldings — rather than per-declaration
 timing.
 
+**Rerun on the K26 kernel (3 November).** The same export, `cli.jvm` at
+`-Xmx20g`, traced with a timestamp on every line. Up to the stall the run is
+about 3.7 times faster: it reaches declaration 225,053 at 530 s rather than
+about 1,950 s, and only 32 declarations take over a second, 180 s in all,
+against 105 and 973 s.
+
+| declaration | 28 Oct | 3 Nov |
+|---|---|---|
+| `CategoryTheory.Bimon.instIsMonHomComonHomEquivMonComonCounitIsoAppX` | 133.0s | 22.1s |
+| `AlgebraicGeometry.Spec.sheafedSpaceMap_comp` | 93.5s | 18.6s |
+| `not_dvd_differentIdeal_of_isCoprime_of_isSeparable` | 92.0s | 21.1s |
+
+Past 225,053 the slowest that finished were `PresheafOfModules.freeObj._proof_2`
+at 135.3 s and `Std.Tactic.BVDecide.BVExpr.Cache.Inv_insert` at 80.1 s. Over
+the whole run, 57 declarations took over a second, 507 s in all.
+
+It still stops on `IntermediateField.restrictScalars_top`, reached at 1,039 s,
+but it no longer sits there: no new declaration starts for 1,600 s, and then
+the run ends with `ran out of memory after 337321 declarations`, at 23.1 GB
+resident against the 20 GB heap.
+
+Checked alone (`--check IntermediateField.restrictScalars_top --max-time
+600000`), the K21 report comes back with the same shape at about 5.5 times the
+volume:
+
+    exceeded the 600000 ms budget after 1,102,696,704 reduction steps
+    is_def_eq calls: 86,039,716 (identical: 22,108,338, cache hits: 66,
+      distinct cached pairs: 6,151,786, distinct failed pairs: 19,341,427)
+    delta attempts: 98,287,522 of which cache misses: 128, distinct constants: 115
+
+    most attempted: Set.ofPred 30,533,308, Set.range 21,367,096,
+      Membership.mem and Set.Mem 13.6 million each, Union.union and
+      Set.union 6.8 million each
+
+The same 115 `Set` constants, the same 66 positive cache hits and the same 128
+delta misses. So the faster kernel walks the same search faster, and nothing
+bounds the `TypeChecker`'s pair caches within a declaration. A heap histogram
+70 s into the declaration already held 8.7 million `ExprPair`s and 37 million
+`HashMap` nodes, and the failed-pair set reached 19.3 million by 600 s. On
+28 October the search was slower and resident stayed near 4 GB. The heap is a
+symptom here. The open question is still K21's: why a search over 115
+constants revisits pairs that the positive cache hardly ever answers.
+
 ### F8 — resource exhaustion is its own exit code
 
 Exit 2 means the file could not be read and 1 that a declaration was rejected.
