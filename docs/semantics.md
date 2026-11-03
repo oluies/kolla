@@ -2775,8 +2775,11 @@ workflow's conditions. One fails: `Test runtime (3, debug)` on Windows, a
 that repeats `WindowsThread.unpark` and `ObjectMonitor.exitMonitor` and has no
 GC frame in it. The previous head passed that job, and the same Windows
 workflow fails intermittently on `main`, so it is most likely unrelated, but
-that is not shown. The review still requests changes, pending the
-maintainer's second look.
+that is not shown. The job was rerun and passed, and on 2 November the
+maintainer approved and merged the PR as ed42ba979, closing #5168 and #5169.
+The squash commit's message opens with the first version's description
+(skipping `Unmanaged` threads, a 2% rule), but its code is the reworked head,
+972222390, unchanged. It is on `main` and not yet in a release.
 
 #### Commix
 
@@ -2880,7 +2883,9 @@ Three comparisons against the PR, same source and flags:
   most likely from `main` (#5173 or #5174), not from this change.
 
 The prototype is local and not proposed. If the depot is worth proposing it is
-as a follow-up after #5170, which it builds on.
+as a follow-up to #5170, which it builds on and which is now merged. Its one
+measured advantage is the case #5170 leaves open: idle threads that wake on a
+full heap.
 
 For kolla none of this changes the advice: run a library corpus on the JVM,
 and when a native run is needed, use `boehm` with a preset heap.

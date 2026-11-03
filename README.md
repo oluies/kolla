@@ -177,13 +177,13 @@ default, which is how kolla meets it. Fresh allocations of 8 KiB or more add a
 full collection each time one does not fit.
 Both are reported upstream:
 [scala-native#5168](https://github.com/scala-native/scala-native/issues/5168)
-for the idle threads, which `main` has not fixed, and
+for the idle threads and
 [#5169](https://github.com/scala-native/scala-native/issues/5169) for `main`
 collecting forever, instead of failing, when the heap cap is too small. A fix
-for both, with scripted tests, is proposed in
+for both, with scripted tests, was merged on 2 November as
 [scala-native#5170](https://github.com/scala-native/scala-native/pull/5170).
-It has passed Scala Native's full CI and awaits review. Until a release carries
-it, a native build stays on `boehm` with a preset heap.
+It is on `main`, not yet in a release. Until a release carries it, a native
+build stays on `boehm` with a preset heap.
 
 ## Finding a slow declaration
 
