@@ -1650,7 +1650,7 @@ volume:
 The same 115 `Set` constants, the same 66 positive cache hits and the same 128
 delta misses. So the faster kernel walks the same search faster, and nothing
 bounds the `TypeChecker`'s pair caches within a declaration. A heap histogram
-70 s into the declaration already held 8.7 million `ExprPair`s and 37 million
+about a minute into the declaration already held 8.7 million `ExprPair`s and 37 million
 `HashMap` nodes, and the failed-pair set reached 19.3 million by 600 s. On
 28 October the search was slower and resident stayed near 4 GB. The heap is a
 symptom here. The open question is still K21's: why a search over 115
