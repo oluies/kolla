@@ -1006,6 +1006,66 @@ JVM figures are with `-Xmx2g`. Natively, with `boehm` (F7):
 | `init`, 4 GB start | 208–218 s quiet; 320–323 s loaded, paired | — | 177–202 s, loaded, paired |
 | the second-heaviest `std` declaration, paired | 393–1,014 s | — | 137–212 s |
 
+### K27 — what `restrictScalars_top` keeps coming back to
+
+K21 left one question open: why a search over 115 constants on
+`IntermediateField.restrictScalars_top` gets 66 answers from a positive cache
+of 1.1 million pairs. Answering it needs to know what happens when
+`is_def_eq_core` meets a pair again, so the K21 report gains three things,
+kept only when a budget is set:
+
+- one `is_def_eq_core` pair in 64, sampled by the pair's hash so every call on
+  a sampled pair is seen, with what the previous calls on it left behind: an
+  identical pair, a success, a failure, or a comparison still open below it;
+- the maximum nesting depth of `is_def_eq_core`;
+- the most revisited sampled pairs that are not identical, each with the first
+  subterms where its two sides differ (`TypeChecker.firstDifference`), since
+  both sides of such a pair print the same far past any truncation.
+
+At K21's budget of 200,000,000 steps every K21 figure comes back exactly, so
+the counters change nothing they measure. The new lines:
+
+    is_def_eq_core pairs sampled 1 in 64: 76,426 distinct, 130,063 calls;
+      repeats of an identical pair: 49,018, after success: 0,
+      after failure: 4,618, while still open: 1; max depth: 115
+
+    most revisited sampled pairs (calls / true / false), with where they differ:
+      1,803 / 0 / 1,803  fun (a : Subfield …) => And … =?= fun (a : Subfield …) => And …
+        differ at: Set.range.{u_2, succ u_1}  vs  Set.range.{u_2, succ u_3}
+      30 / 0 / 30        fun (x : Set …) => Exists … =?= …        same difference
+      28 / 0 / 28        Set.ofPred … =?= Set.ofPred …           same difference
+      12 / 0 / 12        Set.Mem … =?= Set.Mem …                 same difference
+      12 / 0 / 12        Membership.mem … =?= Membership.mem …   same difference
+
+This settles K21's question, and not the way it was asked. The positive cache
+is not failing: every repeat after a success was an identical pair, answered by
+`t == s` before the cache is consulted, and no sampled pair that had succeeded
+was ever computed again. The cache has little to answer because almost nothing
+succeeds. The repeats that cost are failures, and there is one cycle in the
+sample.
+
+And the failures are all the same failure. Each of the most revisited pairs
+differs only in a universe: `Set.range` at `succ u_1` on one side and
+`succ u_3` on the other, with `u_1` and `u_3` distinct universe parameters of
+the declaration. Two terms that differ in that way are never definitionally
+equal, but the kernel does not know it from the levels alone: it unfolds
+`Set.ofPred`, `Set.range` and `Membership.mem` on both sides, which is the
+"most attempted" table, and fails again further down. A failure is remembered
+only on the lazy delta same-head path (`failed_before`, as in Lean's kernel),
+so a lambda pair like the first one is decided afresh every time an enclosing
+comparison asks for it: 1,803 times for that one pair in the first 200 million
+steps.
+
+Lean v4.35's `type_checker.cpp` has the same structure: `quick_is_def_eq` is
+`t == s || succeeded_before(t, s)`, `is_def_eq` caches successes, and
+`cache_failure` sits only in `lazy_delta_reduction_step`. Lean has no
+union-find `equiv_manager` at this version. So the code alone does not explain
+why Lean checks this declaration and kolla does not. Either Lean's kernel takes
+the same search and is fast enough to finish it, or the comparisons arrive in
+an order that reaches the universe mismatch sooner. Timing Lean's own kernel on
+this declaration is the next measurement, and it decides whether the fix
+belongs in kolla's speed or in its search.
+
 ## DSL
 
 ### D5 — binders are Scala functions

@@ -42,12 +42,36 @@ class WorkReportSuite extends munit.FunSuite:
     assert(msg.contains("cache misses"), clue(msg))
   }
 
+  test("a budgeted run reports is_def_eq_core revisits and depth") {
+    // K27: whether the search comes back to pairs it has seen, and whether
+    // it left them succeeded, failed or still open.
+    val tc = new TypeChecker(loopingEnv, KernelProfile.v4_35, DefinitionSafety.Safe,
+                             LocalContext.empty, maxSteps = 5000L)
+    val e  = Expr.App(Expr.Const(loopName, Nil), Expr.Sort(Level.zero))
+    val ex = intercept[KernelException](tc.whnf(e))
+    assert(ex.reason.contains("is_def_eq_core pairs sampled 1 in 64"), clue(ex.reason))
+    assert(ex.reason.contains("while still open"), clue(ex.reason))
+    assert(ex.reason.contains("max depth"), clue(ex.reason))
+  }
+
+  test("firstDifference finds where two terms stop agreeing") {
+    val prop = Expr.Sort(Level.zero)
+    val a    = Expr.Const(Name.parse("a"), Nil)
+    val b    = Expr.Const(Name.parse("b"), Nil)
+    val f    = Expr.Const(Name.parse("f"), Nil)
+    val l1   = Expr.Lam(Name.parse("x"), prop, Expr.App(Expr.App(f, a), a), BinderInfo.Default)
+    val l2   = Expr.Lam(Name.parse("x"), prop, Expr.App(Expr.App(f, a), b), BinderInfo.Default)
+    assertEquals(TypeChecker.firstDifference(l1, l2), (a, b))
+    assertEquals(TypeChecker.firstDifference(l1, l1), (l1, l1))
+  }
+
   test("a default-budget run reports counters but no breakdown") {
     // The per-constant tables cost a HashMap pair per delta attempt, so they
     // are only kept when a budget was set and a report can actually print.
     val tc = new TypeChecker(Environment.empty, KernelProfile.v4_35)
     // Nothing has been reduced, so there is nothing to attribute.
     assert(!tc.work.contains("most attempted"), clue(tc.work))
+    assert(!tc.work.contains("is_def_eq_core pairs sampled"), clue(tc.work))
     assert(tc.work.contains("is_def_eq calls: 0"), clue(tc.work))
   }
 

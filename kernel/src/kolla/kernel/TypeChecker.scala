@@ -89,6 +89,25 @@ final class TypeChecker(
   private var defEqCacheHit  = 0L
   private var cachedWithFVar = 0L
 
+  /** Whether `is_def_eq_core` comes back to pairs it has seen, and in what
+    * state it left them. Sampled one pair in 64 by hash, so the table stays
+    * small on a search of tens of millions of comparisons; the sample is
+    * deterministic, so every call on a sampled pair is counted. Only kept
+    * when diagnosing. See docs/semantics.md K27.
+    */
+  private final class Revisit:
+    var calls  = 0L
+    var trues  = 0L
+    var falses = 0L
+    var open   = 0
+  private val revisits         = mutable.HashMap.empty[ExprPair, Revisit]
+  private var revisitAfterTrue  = 0L
+  private var revisitIdentical  = 0L
+  private var revisitAfterFalse = 0L
+  private var revisitWhileOpen  = 0L
+  private var coreDepth         = 0
+  private var coreMaxDepth      = 0
+
   /** Where the reduction went, most attempted constant first.
     *
     * Printed with the `maxSteps` exception, which is the only moment a
@@ -115,6 +134,26 @@ final class TypeChecker(
     if top.nonEmpty then
       sb ++= "  most attempted (attempts / misses):\n"
       top.foreach((n, c) => sb ++= f"    ${c}%,12d / ${missed.getOrElse(n, 0L)}%,-10d $n\n")
+    if diagnosing then
+      val sampledCalls = revisits.valuesIterator.map(_.calls).sum
+      sb ++= f"  is_def_eq_core pairs sampled 1 in ${TypeChecker.revisitSample}%d: ${revisits.size}%,d distinct,"
+      sb ++= f" $sampledCalls%,d calls; repeats of an identical pair: $revisitIdentical%,d,"
+      sb ++= f" after success: $revisitAfterTrue%,d,"
+      sb ++= f" after failure: $revisitAfterFalse%,d, while still open: $revisitWhileOpen%,d;"
+      sb ++= f" max depth: $coreMaxDepth%,d\n"
+      val most = revisits.toVector
+        .filter((k, r) => r.calls > 1 && k.a != k.b)
+        .sortBy(-_._2.calls)
+        .take(5)
+      if most.nonEmpty then
+        sb ++= "  most revisited sampled pairs, identical ones left out (calls / true / false),\n"
+        sb ++= "  each with the first place its two sides differ:\n"
+        most.foreach { (k, r) =>
+          val (da, db) = TypeChecker.firstDifference(k.a, k.b)
+          sb ++= f"    ${r.calls}%,d / ${r.trues}%,d / ${r.falses}%,d  "
+          sb ++= s"${Pretty.expr(k.a, 120)}  =?=  ${Pretty.expr(k.b, 120)}\n"
+          sb ++= s"      differ at: ${Pretty.expr(da, 200)}  vs  ${Pretty.expr(db, 200)}\n"
+        }
     sb.result()
 
   /** The pairs `is_def_eq` rejected, most recent last. */
@@ -1227,8 +1266,32 @@ final class TypeChecker(
       }
     loop(t0, s0)
 
-  /** `is_def_eq_core`. */
+  /** `is_def_eq_core`, with the revisit counters when diagnosing. */
   private def isDefEqCoreE(t: Expr, s: Expr, eager: Boolean): Step[Boolean] =
+    if !diagnosing then isDefEqCoreBody(t, s, eager)
+    else
+      val key = new ExprPair(t, s)
+      val rec =
+        if (key.hashCode & (TypeChecker.revisitSample - 1)) != 0 then null
+        else revisits.getOrElseUpdate(key, new Revisit)
+      if rec != null then
+        if rec.trues > 0 then
+          if t == s then revisitIdentical += 1 else revisitAfterTrue += 1
+        else if rec.falses > 0 then revisitAfterFalse += 1
+        else if rec.open > 0 then revisitWhileOpen += 1
+        rec.calls += 1
+        rec.open += 1
+      coreDepth += 1
+      if coreDepth > coreMaxDepth then coreMaxDepth = coreDepth
+      isDefEqCoreBody(t, s, eager).map { r =>
+        coreDepth -= 1
+        if rec != null then
+          rec.open -= 1
+          if r then rec.trues += 1 else rec.falses += 1
+        r
+      }
+
+  private def isDefEqCoreBody(t: Expr, s: Expr, eager: Boolean): Step[Boolean] =
     defEqCalls += 1
     step()
     Step.defer(quickIsDefEq(t, s, eager)).flatMap {
@@ -1316,6 +1379,34 @@ final class TypeChecker(
 object TypeChecker:
   val defaultMaxSteps: Long = 1L << 32
   val maxTraceEntries: Int  = 32
+
+  /** One `is_def_eq_core` pair in this many is tracked for revisits. A power
+    * of two, since the sample is taken by masking the pair's hash.
+    */
+  val revisitSample: Int = 64
+
+  /** The first pair of subterms, in a left-to-right walk, where two
+    * expressions stop being structurally equal. Only for the K27 report: it
+    * shows what a revisited pair is actually about when both sides print the
+    * same up to the truncation.
+    */
+  def firstDifference(a: Expr, b: Expr): (Expr, Expr) =
+    @tailrec def go(a: Expr, b: Expr): (Expr, Expr) = (a, b) match
+      case (x: Expr.App, y: Expr.App) =>
+        if x.fn != y.fn then go(x.fn, y.fn) else go(x.arg, y.arg)
+      case (x: Expr.Lam, y: Expr.Lam) =>
+        if x.binderType != y.binderType then go(x.binderType, y.binderType) else go(x.body, y.body)
+      case (x: Expr.ForallE, y: Expr.ForallE) =>
+        if x.binderType != y.binderType then go(x.binderType, y.binderType) else go(x.body, y.body)
+      case (x: Expr.LetE, y: Expr.LetE) =>
+        if x.tpe != y.tpe then go(x.tpe, y.tpe)
+        else if x.value != y.value then go(x.value, y.value)
+        else go(x.body, y.body)
+      case (x: Expr.MData, y: Expr.MData) => go(x.expr, y.expr)
+      case (x: Expr.Proj, y: Expr.Proj) if x.typeName == y.typeName && x.idx == y.idx =>
+        go(x.struct, y.struct)
+      case _ => (a, b)
+    if a == b then (a, b) else go(a, b)
 
   /** How often the clock is read, in reduction steps.
     *
