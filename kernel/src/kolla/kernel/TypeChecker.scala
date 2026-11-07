@@ -757,11 +757,14 @@ final class TypeChecker(
       case f: Expr.FVar =>
         if lctx.isLetFVar(f) then Step.defer(whnfFVar(f, cheapRec, cheapProj)) else Step.now(e)
       case _ =>
+        // Lean's `whnf_core` reads its cache on every call and writes it only
+        // from a full one, so a cheap call returns a full result computed
+        // earlier. Which result comes back decides the path `is_def_eq` takes
+        // after a lazy delta step; see docs/semantics.md K28.
         val cacheable = !cheapRec && !cheapProj
-        if cacheable then
-          whnfCoreCache.get(e) match
-            case Some(r) => return Step.now(r)
-            case None    => ()
+        whnfCoreCache.get(e) match
+          case Some(r) => return Step.now(r)
+          case None    => ()
         val computed: Step[Expr] = e match
           case p: Expr.Proj =>
             Step.defer(reduceProj(p, cheapRec, cheapProj)).flatMap {

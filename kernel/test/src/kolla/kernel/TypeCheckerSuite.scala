@@ -164,6 +164,23 @@ class TypeCheckerSuite extends munit.FunSuite:
     assertEquals(t.whnf(stuck), stuck)
   }
 
+  test("a cheap whnfCore returns a full result already in the cache, as Lean's does") {
+    // `pOne : P := P.mk 1 2`. A cheap projection cannot unfold `pOne`, so
+    // `pOne.0` is stuck under `cheapProj` until a full `whnfCore` has reduced
+    // it. Lean's `whnf_core` reads its cache on every call and writes only
+    // from full ones; which answer a cheap call gets decides the path
+    // `is_def_eq` takes after a lazy delta step (docs/semantics.md K28).
+    val pOne = ConstantInfo.DefnInfo(DefinitionVal(
+      cv("pOne", Nil, Expr.const("P")), Expr.mkAppN(Expr.const("P.mk"), Seq(lit(1), lit(2))),
+      ReducibilityHints.Regular(1), DefinitionSafety.Safe, List(Name.parse("pOne"))
+    ))
+    val t    = new TypeChecker(env.addCore(pOne), KernelProfile.v4_35)
+    val proj = Expr.Proj(Name.parse("P"), 0, Expr.const("pOne"))
+    assertEquals(t.whnfCore(proj, cheapProj = true), proj)
+    assertEquals(t.whnfCore(proj), lit(1))
+    assertEquals(t.whnfCore(proj, cheapProj = true), lit(1))
+  }
+
   test("whnf evaluates the Nat literal extensions") {
     val t = tc()
     def bin(op: String, i: Int, j: Int): Expr = Expr.mkAppN(Expr.const(op), Seq(lit(i), lit(j)))
