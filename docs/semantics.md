@@ -1785,6 +1785,15 @@ about a minute into the declaration already held 8.7 million `ExprPair`s and 37 
 symptom here. The open question is still K21's: why a search over 115
 constants revisits pairs that the positive cache hardly ever answers.
 
+**Checked end to end on the K28 kernel (3 November).** K27 found that kolla
+was not on Lean's path in `restrictScalars_top` at all, and K28 found why: its
+`whnf_core` did not read the cache on cheap calls. With that fixed the
+declaration checks in under a second, and the whole export is accepted, all
+729,263 declarations, in 1,501 s at about 7.5 GB resident. 71 declarations
+take over a second, 251 s in all; the slowest is
+`CategoryTheory.instIsIsoIndCoimageImageComparison` at 33.2 s. The heavy tail
+is still there, but it is a tail of seconds, not a declaration that never ends.
+
 ### F8 — resource exhaustion is its own exit code
 
 Exit 2 means the file could not be read and 1 that a declaration was rejected.

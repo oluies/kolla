@@ -150,6 +150,22 @@ reached at 1,039 s, and after 1,600 s there the run ends with `ran out of
 memory after 337321 declarations` at 23.1 GB resident with `-Xmx20g`. The
 faster kernel fills the declaration's pair caches faster; docs/semantics.md K19
 has the figures.
+
+On the K28 kernel, the same day, it finishes. All 729,263 declarations are
+accepted in 1,501 s, resident about 7.5 GB with `-Xmx20g`. Declaration 225,053
+comes at 384 s, with 16 declarations over a second before it, 39 s in all.
+Over the whole file 71 take over a second, 251 s in all:
+
+| declaration | time |
+|---|---|
+| `CategoryTheory.instIsIsoIndCoimageImageComparison` | 33.2s |
+| `PresheafOfModules.freeObj._proof_2` | 18.1s |
+| `PadicInt.coe_adicCompletionIntegersEquiv_apply` | 15.9s |
+| `Polynomial.iterate_derivative_derivative_mul_X` | 13.8s |
+
+`restrictScalars_top` takes under a second. The reference for the verdict is
+Lean itself, which accepted every declaration when it built the export; no
+second checker has been run over the whole file.
 An earlier draft of this named a different declaration, identified from a
 progress counter that only reports every 25000 declarations; see
 docs/semantics.md K19 for why that was not an identification at all.
