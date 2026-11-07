@@ -3145,6 +3145,22 @@ What follows for the platform comparison is only that it runs on the committed
 fixtures (F6), which are thousands of declarations rather than tens of
 thousands. A library corpus is checked on the JVM.
 
+**K28 natively (7 November).** `boehm` binaries of K26 and K28, debug, built
+from the same tree with only the kernel file changed, interleaved:
+
+| `boehm` | K26 | K28 | load |
+|---|---|---|---|
+| `init`, 4 GB start | 184s, 211 s user | 193s, 211 s user | 9 to 4 |
+| `std`, 8 GB start | 882s, 900 s user | 296s, 313 s user | about 3 |
+
+`std` is 3.0 times faster and `init` unchanged, as on the JVM (K28), with every
+verdict the same and resident memory unchanged: 4.3–4.4 GB on `init`, 8.67 GB
+on `std`. One `init` pair taken at a load of 40 to 80 from other programs took
+809 s and 515 s and is left out. K26 on `std` at 882 s is itself well under the
+1,504 s recorded for it at a load of 5 to 10, which says again how much load
+moves `boehm`. Natively `std` is now 296 s against 47–117 s on the JVM: closer,
+and still the JVM for a library corpus.
+
 ### F6 — a committed export is a corpus
 
 `Corpus.fixtures` makes each file under `difftest/test/resources` a corpus with

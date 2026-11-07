@@ -151,16 +151,16 @@ it does:
 
 | corpus | native, `boehm` | wall | resident | JVM |
 |---|---|---|---|---|
-| `init` | `GC_INITIAL_HEAP_SIZE=4G` | 177–202s | 4.3–4.5 GB | 29s |
-| `std` | `GC_INITIAL_HEAP_SIZE=8G` | 1,504s | 8.50 GB | 47–117s |
+| `init` | `GC_INITIAL_HEAP_SIZE=4G` | 193s | 4.43 GB | 29s |
+| `std` | `GC_INITIAL_HEAP_SIZE=8G` | 296s | 8.67 GB | 47–117s |
 
-The native runs are on the K26 kernel (docs/semantics.md K23–K26) and the JVM
-column on K28, which is 2.6–2.9 times faster on `std` and `lean`. The native
-runs were under a load average between 5 and 10 from other programs, which
-slows `boehm` far more than it slows the JVM. Against the old kernel, interleaved, `boehm`
-is 37–45% faster on `init`, 2.9–4.8 times faster on the second-heaviest `std`
-declaration, and 22–31% faster on the whole of `std` than the old kernel's
-best quiet runs (1,919 s and 2,176 s). See F7.
+All on the current kernel, K28, in the default debug build. Interleaved against
+K26 at a load average near 3, native `std` went from 882 s to 296 s, 3.0 times,
+and `init` stayed where it was, 184 s against 193 s: the same pattern as the
+JVM. `boehm` is far more sensitive to load from other programs than the JVM is:
+an `init` pair taken at a load of 40 to 80 took 809 s and 515 s. Against the
+kernel before K23, interleaved, `boehm` was already 37–45% faster on `init` with
+K23–K26. See F7.
 
 Size the initial heap to the corpus rather than generously: `std` at 16G took
 3,058 seconds. `boehm` with its default heap hung on 2 of 15 `init` runs; none of
