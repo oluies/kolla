@@ -1060,11 +1060,31 @@ Lean v4.35's `type_checker.cpp` has the same structure: `quick_is_def_eq` is
 `t == s || succeeded_before(t, s)`, `is_def_eq` caches successes, and
 `cache_failure` sits only in `lazy_delta_reduction_step`. Lean has no
 union-find `equiv_manager` at this version. So the code alone does not explain
-why Lean checks this declaration and kolla does not. Either Lean's kernel takes
-the same search and is fast enough to finish it, or the comparisons arrive in
-an order that reaches the universe mismatch sooner. Timing Lean's own kernel on
-this declaration is the next measurement, and it decides whether the fix
-belongs in kolla's speed or in its search.
+why Lean checks this declaration and kolla does not.
+
+Lean's own kernel answers it. In the v4.35.0 Mathlib checkout the export was
+made from, a Lean file imports the declaration's module, takes its type and
+proof, and passes them under a fresh name to `Kernel.Environment.addDecl`,
+which is the synchronous kernel call (`addDecl` checks asynchronously and
+returned in 0 ms). Three runs accept it in 2, 2 and 3 ms. As a control, the
+proof of `restrictScalars_injective` against this statement is rejected in
+1 ms, so the call does exercise the kernel. The proof is small: 185 distinct
+nodes, 27 deep.
+
+The declaration is
+
+    theorem restrictScalars_top :
+        (⊤ : IntermediateField F E).restrictScalars K = ⊤ := rfl
+
+with `F : Type u_1`, `E : Type u_2`, `K : Type u_3`. A `rfl` proof leaves the
+kernel one comparison, `restrictScalars K ⊤ =?= ⊤`, and Lean settles it in
+milliseconds. kolla ends up comparing `Set.range` over `F` against `Set.range`
+over `K` instead, the ranges of two different algebra maps, which are not equal
+and which it keeps re-deriving. So Lean is not faster on the same search; it
+never makes it. kolla leaves Lean's path somewhere between that one comparison
+and the first `Set.range`, and finding where is the next step. This is a
+completeness bug in kolla, not a cost: Lean accepts the declaration, and kolla
+does not reach a verdict.
 
 ## DSL
 
