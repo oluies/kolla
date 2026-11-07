@@ -1063,13 +1063,13 @@ union-find `equiv_manager` at this version. So the code alone does not explain
 why Lean checks this declaration and kolla does not.
 
 Lean's own kernel answers it. In the v4.35.0 Mathlib checkout the export was
-made from, a Lean file imports the declaration's module, takes its type and
-proof, and passes them under a fresh name to `Kernel.Environment.addDecl`,
-which is the synchronous kernel call (`addDecl` checks asynchronously and
-returned in 0 ms). Three runs accept it in 2, 2 and 3 ms. As a control, the
-proof of `restrictScalars_injective` against this statement is rejected in
-1 ms, so the call does exercise the kernel. The proof is small: 185 distinct
-nodes, 27 deep.
+made from, the declaration's type and proof go to `Kernel.Environment.addDecl`
+under a fresh name, with a Lean kernel built from the v4.35.0 source with a
+trace added to `is_def_eq_core` and `unfold_definition_core` (K28). Lean
+accepts it after 230 `is_def_eq_core` calls. A first timing of that call, 2 to
+3 ms, measured nothing: `addDecl` there is a pure function, the compiler moved
+it ahead of the clock, and the trace shows the check happening before the
+first reading. The 230 calls are the figure that stands.
 
 The declaration is
 
@@ -1077,14 +1077,63 @@ The declaration is
         (⊤ : IntermediateField F E).restrictScalars K = ⊤ := rfl
 
 with `F : Type u_1`, `E : Type u_2`, `K : Type u_3`. A `rfl` proof leaves the
-kernel one comparison, `restrictScalars K ⊤ =?= ⊤`, and Lean settles it in
-milliseconds. kolla ends up comparing `Set.range` over `F` against `Set.range`
-over `K` instead, the ranges of two different algebra maps, which are not equal
-and which it keeps re-deriving. So Lean is not faster on the same search; it
-never makes it. kolla leaves Lean's path somewhere between that one comparison
-and the first `Set.range`, and finding where is the next step. This is a
-completeness bug in kolla, not a cost: Lean accepts the declaration, and kolla
-does not reach a verdict.
+kernel one comparison, `restrictScalars K ⊤ =?= ⊤`. kolla ended up comparing
+`Set.range` over `F` against `Set.range` over `K` instead, the ranges of two
+different algebra maps, which are not equal and which it kept re-deriving. So
+Lean was not faster on the same search; it never made it. K28 is where kolla
+left Lean's path, and the fix.
+
+### K28 — `whnf_core` reads its cache on cheap calls too
+
+Lean's `whnf_core` looks its cache up on every call, and inserts into it only
+from a full call:
+
+    // check cache
+    auto it = m_st->m_whnf_core.find(e);
+    ...
+    if (!cheap_rec && !cheap_proj) m_st->m_whnf_core.insert(mk_pair(e, r));
+
+kolla read the cache only on full calls. The two agree on what is
+definitionally equal, but not on the path `is_def_eq` takes to decide it, and
+the path is what made `restrictScalars_top` diverge.
+
+Finding it took a trace from both kernels in one format. A patched Lean
+v4.35.0, built from source with `LEAN_KTRACE=<n>`, prints each
+`is_def_eq_core` entry with its depth and the head and argument count of each
+side, its result, and the name of every `unfold_definition_core`; kolla printed
+the same from a temporary build. On `restrictScalars_top` the two agree for
+149 lines and part at the 150th, inside the proof irrelevance check on
+`add_mem'`. Both unfold `Membership.mem` on both sides of a comparison. Lean
+then compares the arguments of `Set.Mem` (`a`, the carrier, the type), which is
+the same-head shortcut of lazy delta; kolla first starts a new
+`is_def_eq_core` on `Set.Mem … =?= Set.Mem …`.
+
+The cheap `whnf_core` that follows the unfold leaves `Set.instMembership.1 s a`
+stuck, because a cheap projection does not unfold the instance. In Lean, an
+earlier full `whnf_core` of the same term had cached `Set.Mem α s a`, and the
+cheap call gets that back, so the lazy delta loop continues on `Set.Mem` and
+takes the shortcut. In kolla the cheap call could not see the cache, lazy
+delta stopped with nothing to unfold, and the final stage reduced the
+projection fully and started the comparison over. From there kolla went down
+the instance diamonds of the `Subsemiring` and `Subalgebra` fields to
+`IntermediateField.adjoin F ⊤ =?= adjoin K ⊤` and the `Set.range` search K27
+found.
+
+With the cache read on every call, kolla's trace on `restrictScalars_top` is
+Lean's, all 813 lines, and the declaration checks in under a second where it
+had not finished in 25 minutes. Every corpus keeps its verdict, and the larger
+ones are much faster, JVM, one run each:
+
+| corpus | before | after | verdict, both |
+|---|---|---|---|
+| `init` | 31s | 29s | 59,349 accepted |
+| `std` | 205s | 80s | 99,619 accepted |
+| `mathlib-sample` | 8s | 9s | 19,020 accepted |
+| `lean` | 148s | 57s | 171,705 accepted |
+
+`TypeCheckerSuite` checks the behaviour directly: a cheap `whnfCore` of a
+projection is stuck until a full one has reduced it, and then returns the full
+result.
 
 ## DSL
 
