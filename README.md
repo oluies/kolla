@@ -155,10 +155,9 @@ it does:
 | `std` | `GC_INITIAL_HEAP_SIZE=8G` | 1,504s | 8.50 GB | 47–117s |
 
 The native runs are on the K26 kernel (docs/semantics.md K23–K26) and the JVM
-column on K28, which is 2.6–2.9 times faster on `std` and `lean`. The native runs
-are
-under a load average between 5 and 10 from other programs, which slows `boehm`
-far more than it slows the JVM. Against the old kernel, interleaved, `boehm`
+column on K28, which is 2.6–2.9 times faster on `std` and `lean`. The native
+runs were under a load average between 5 and 10 from other programs, which
+slows `boehm` far more than it slows the JVM. Against the old kernel, interleaved, `boehm`
 is 37–45% faster on `init`, 2.9–4.8 times faster on the second-heaviest `std`
 declaration, and 22–31% faster on the whole of `std` than the old kernel's
 best quiet runs (1,919 s and 2,176 s). See F7.
