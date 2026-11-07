@@ -140,7 +140,7 @@ finishing one being 133 seconds. The run then stops making progress on
 
 with resident near 4 GB of a 20 GB ceiling, so it is time rather than memory.
 
-So kolla reads a Mathlib export comfortably and does not finish checking one.
+So on 28 October kolla read a Mathlib export comfortably and did not finish checking one.
 
 Rerun on the K26 kernel on 3 November, the same way, the checking up to that
 declaration is about 3.7 times faster: declaration 225,053 at 530 s rather
