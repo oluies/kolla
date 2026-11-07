@@ -151,10 +151,12 @@ it does:
 
 | corpus | native, `boehm` | wall | resident | JVM |
 |---|---|---|---|---|
-| `init` | `GC_INITIAL_HEAP_SIZE=4G` | 177–202s | 4.3–4.5 GB | 23s |
-| `std` | `GC_INITIAL_HEAP_SIZE=8G` | 1,504s | 8.50 GB | 98–110s |
+| `init` | `GC_INITIAL_HEAP_SIZE=4G` | 177–202s | 4.3–4.5 GB | 29s |
+| `std` | `GC_INITIAL_HEAP_SIZE=8G` | 1,504s | 8.50 GB | 47–117s |
 
-All on the current kernel (docs/semantics.md K23–K26), and the native runs
+The native runs are on the K26 kernel (docs/semantics.md K23–K26) and the JVM
+column on K28, which is 2.6–2.9 times faster on `std` and `lean`. The native runs
+are
 under a load average between 5 and 10 from other programs, which slows `boehm`
 far more than it slows the JVM. Against the old kernel, interleaved, `boehm`
 is 37–45% faster on `init`, 2.9–4.8 times faster on the second-heaviest `std`
@@ -347,10 +349,12 @@ difference between slow and unfinishable:
 | `std` | v4.27.0 `--defeq-cache` | 87,309 accepted, 322s, 5.63 GB |
 | `std` | v4.35.0 | 99,619 accepted, 305s, 3.8 GB |
 
-These were measured before the kernel changes in docs/semantics.md K23–K26,
-which do not change a verdict. On the current kernel `std` at v4.35.0 takes
-98–110 seconds with `-Xmx2g`; the end of K26 tabulates each step's effect on
-the JVM and natively.
+These were measured before the kernel changes in docs/semantics.md K23–K28,
+which do not change a verdict. On the current kernel, interleaved against K26
+on 4 November, `std` at v4.35.0 takes 47–117 seconds with `-Xmx2g` (137–191
+on K26) and `lean` 55–74 seconds with `-Xmx4g` (145–196 on K26); the spread is
+load from other programs, and the quietest pairs give 2.9 and 2.6 times. The
+end of K26 tabulates the earlier steps, and K28 this one.
 
 `--defeq-cache` keeps the cache on a profile that predates it, and on `std` it
 is the difference between a verdict and none. It is an optimisation and not a

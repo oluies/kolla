@@ -1122,14 +1122,22 @@ found.
 With the cache read on every call, kolla's trace on `restrictScalars_top` is
 Lean's, all 813 lines, and the declaration checks in under a second where it
 had not finished in 25 minutes. Every corpus keeps its verdict, and the larger
-ones are much faster, JVM, one run each:
+ones are much faster. Interleaved against K26 on 4 November, alternating which
+went first, `cli.jvm`:
 
-| corpus | before | after | verdict, both |
+| corpus | K26 | K28 | verdict, every run |
 |---|---|---|---|
-| `init` | 31s | 29s | 59,349 accepted |
-| `std` | 205s | 80s | 99,619 accepted |
-| `mathlib-sample` | 8s | 9s | 19,020 accepted |
-| `lean` | 148s | 57s | 171,705 accepted |
+| `std`, `-Xmx2g`, 3 pairs | 137, 141, 191s | 47, 77, 117s | 99,619 accepted |
+| `lean`, `-Xmx4g`, 3 pairs | 145, 146, 196s | 55, 56, 74s | 171,705 accepted |
+| `init`, `-Xmx2g`, 2 pairs | 30, 35s | 29, 29s | 59,349 accepted |
+
+Other programs moved the load average between 3 and 75 during the runs, which
+is the spread. The pairs taken at a load near 4 are the comparison: `std` 137 s
+against 47 s, 2.9 times, and `lean` 146 s against 55 s, 2.6 times. `init` hardly
+moves. Resident memory is the same within the noise, 1.2–1.6 GB on `std` and
+1.8–2.6 GB on `lean`. K26 on `std` was 98–110 s on 31 October and is 137 s or
+more today on the same machine, so the comparison is only made within a day.
+`mathlib-sample` took 8 s before and 9 s after, one run each.
 
 `TypeCheckerSuite` checks the behaviour directly: a cheap `whnfCore` of a
 projection is stuck until a full one has reduced it, and then returns the full
