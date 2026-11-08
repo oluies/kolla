@@ -1152,8 +1152,8 @@ entries, with depth and each side's head and argument count, their results and
 every unfolding. The hashes are joined by name.
 
 The first comparison was mostly about the comparison itself. Lean replays the
-real environment and the default export strips `mdata`, so 10,000 declarations
-differed because the two kernels had been given different terms, and kolla
+real environment and the default export strips `mdata`, so most of the first
+19,795 differences were the two kernels being given different terms, and kolla
 printed `«liftOn₂»` where Lean prints `liftOn₂`. Exporting with
 `--export-mdata` and printing names alike left 1,389 of 95,883 declarations
 differing. Those came from two more places kolla left Lean's path:
