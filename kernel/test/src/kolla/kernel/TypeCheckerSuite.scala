@@ -181,6 +181,17 @@ class TypeCheckerSuite extends munit.FunSuite:
     assertEquals(t.whnfCore(proj, cheapProj = true), lit(1))
   }
 
+  test("a stuck application is not cached: whnfCore returns the object it was given") {
+    // `is_def_eq` tests progress by pointer, so a cached older object for an
+    // equal term would read as a reduction that did not happen (K29).
+    val t = tc()
+    val a = Expr.App(Expr.const("idNatStuck"), lit(1))
+    val b = Expr.App(Expr.const("idNatStuck"), lit(1))
+    assert(a ne b)
+    assert(t.whnfCore(a) eq a)
+    assert(t.whnfCore(b) eq b)
+  }
+
   test("whnf evaluates the Nat literal extensions") {
     val t = tc()
     def bin(op: String, i: Int, j: Int): Expr = Expr.mkAppN(Expr.const(op), Seq(lit(i), lit(j)))

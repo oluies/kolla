@@ -765,6 +765,11 @@ final class TypeChecker(
         whnfCoreCache.get(e) match
           case Some(r) => return Step.now(r)
           case None    => ()
+        // Lean's `whnf_core` returns directly, past the cache write, when an
+        // application is stuck or a recursor fires: a later equal term must not
+        // get an older object back, or `is_def_eq`'s pointer test reads it as
+        // progress. See docs/semantics.md K29.
+        var write = cacheable
         val computed: Step[Expr] = e match
           case p: Expr.Proj =>
             Step.defer(reduceProj(p, cheapRec, cheapProj)).flatMap {
@@ -778,6 +783,7 @@ final class TypeChecker(
               if f.isInstanceOf[Expr.Lam] then
                 Step.defer(whnfCoreE(ExprOps.betaReduce(f, args), cheapRec, cheapProj))
               else if f == f0 then
+                write = false
                 Step.defer(reduceRecursor(a, cheapRec, cheapProj)).flatMap {
                   case Some(r) => Step.defer(whnfCoreE(r, cheapRec, cheapProj))
                   case None    => Step.now(e)
@@ -788,7 +794,7 @@ final class TypeChecker(
             Step.defer(whnfCoreE(ExprOps.instantiate1(l.body, l.value), cheapRec, cheapProj))
           case other => Step.now(other)
         computed.map { r =>
-          if cacheable then whnfCoreCache(e) = r
+          if write then whnfCoreCache(e) = r
           r
         }
 
@@ -1060,10 +1066,10 @@ final class TypeChecker(
     if t.isInstanceOf[Expr.App] && s.isInstanceOf[Expr.App] then
       val tArgs = Expr.getAppArgs(t)
       val sArgs = Expr.getAppArgs(s)
-      if tArgs.length != sArgs.length then Step.False
-      else
-        Step.defer(isDefEqE(Expr.getAppFn(t), Expr.getAppFn(s), eager)).flatMap { ok =>
-          if !ok then Step.False
+      // The heads first and the argument counts after, as `is_def_eq_app`:
+      // the head comparison writes to the caches even when the counts differ.
+      Step.defer(isDefEqE(Expr.getAppFn(t), Expr.getAppFn(s), eager)).flatMap { ok =>
+          if !ok || tArgs.length != sArgs.length then Step.False
           else
             def loop(i: Int): Step[Boolean] =
               if i >= tArgs.length then Step.True
@@ -1072,7 +1078,7 @@ final class TypeChecker(
                   if !o then Step.False else Step.defer(loop(i + 1))
                 }
             loop(0)
-        }
+      }
     else Step.False
 
   /** `is_def_eq_proof_irrel`. */
