@@ -1143,6 +1143,53 @@ more today on the same machine, so the comparison is only made within a day.
 projection is stuck until a full one has reduced it, and then returns the full
 result.
 
+### K29 — the paths of the two kernels, compared on all of `std`
+
+K28 came from comparing one declaration. `repro/kernel-trace/` does it for a
+whole corpus: Lean v4.35.0 built with a patch, replayed by `leanchecker --fresh
+Std`, and kolla, each hash per declaration the sequence of `is_def_eq_core`
+entries, with depth and each side's head and argument count, their results and
+every unfolding. The hashes are joined by name.
+
+The first comparison was mostly about the comparison itself. Lean replays the
+real environment and the default export strips `mdata`, so 10,000 declarations
+differed because the two kernels had been given different terms, and kolla
+printed `«liftOn₂»` where Lean prints `liftOn₂`. Exporting with
+`--export-mdata` and printing names alike left 1,389 of 95,883 declarations
+differing. Those came from two more places kolla left Lean's path:
+
+- `is_def_eq_app` compares the heads first and the argument counts after.
+  kolla checked the counts first and skipped the head comparison when they
+  differed, so the caches that comparison writes were not written.
+- `whnf_core` returns directly, past its cache write, when an application is
+  stuck and when a recursor fires. kolla cached those too. A later term that
+  was equal but not the same object got the older object back, and the pointer
+  test `(tnn ne tn)` in `is_def_eq_core` read that as progress and started the
+  comparison over.
+
+| `std`, per declaration | declarations identical to Lean |
+|---|---|
+| K28, default export | 74,077 of 93,872 common names |
+| K28, `--export-mdata`, names alike | 94,494 of 95,883 |
+| head comparison first | 95,726 |
+| and no cache write where Lean has none (K29) | **95,864 (99.98%)** |
+
+Over the 95,883 declarations both kernels now make 18,332,750 and 18,333,585
+comparisons and 9,498,095 and 9,498,140 unfoldings. The 19 that still differ
+agree in length to within 1%, 83,683 comparisons against 84,518 in all. Their
+first difference is at depth 0, in which comparisons type inference makes at
+all: an inference cache hit on one side only. Lean runs `sharecommon` over a
+theorem before checking it and kolla does not, which is the likely reason and
+has not been established.
+
+Neither change moves a verdict or a time: `std` is 45–47 s on K28 and K29 and
+`lean` 54–55 s, interleaved, with every declaration accepted. K28 was the one
+that cost. K29 is worth having because a path kolla shares with Lean is a path
+whose cost can be read off Lean's, and a divergence like K28's would now show
+up as a line in this comparison rather than as a run that does not finish.
+`TypeCheckerSuite` checks that `whnfCore` returns the object it was given for a
+stuck application.
+
 ## DSL
 
 ### D5 — binders are Scala functions

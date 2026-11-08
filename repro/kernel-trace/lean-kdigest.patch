@@ -1,0 +1,177 @@
+diff --git a/src/kernel/environment.cpp b/src/kernel/environment.cpp
+index 04f78f9b..957dcdf5 100644
+--- a/src/kernel/environment.cpp
++++ b/src/kernel/environment.cpp
+@@ -268,12 +268,24 @@ environment environment::add_mutual(declaration const & d, bool check) const {
+     return diag.update(new_env);
+ }
+ 
++void kd_begin(name const & n);
++void kd_end(name const & n);
++
+ environment environment::add(declaration const & d, bool check) const {
+     switch (d.kind()) {
+     case declaration_kind::Axiom:            return add_axiom(d, check);
+-    case declaration_kind::Definition:       return add_definition(d, check);
+-    case declaration_kind::Theorem:          return add_theorem(d, check);
+-    case declaration_kind::Opaque:           return add_opaque(d, check);
++    case declaration_kind::Definition: {
++        kd_begin(d.to_definition_val().get_name()); environment r = add_definition(d, check);
++        kd_end(d.to_definition_val().get_name()); return r;
++    }
++    case declaration_kind::Theorem: {
++        kd_begin(d.to_theorem_val().get_name()); environment r = add_theorem(d, check);
++        kd_end(d.to_theorem_val().get_name()); return r;
++    }
++    case declaration_kind::Opaque: {
++        kd_begin(d.to_opaque_val().get_name()); environment r = add_opaque(d, check);
++        kd_end(d.to_opaque_val().get_name()); return r;
++    }
+     case declaration_kind::MutualDefinition: return add_mutual(d, check);
+     case declaration_kind::Quot:             return add_quot();
+     case declaration_kind::Inductive:        return add_inductive(d);
+diff --git a/src/kernel/type_checker.cpp b/src/kernel/type_checker.cpp
+index a735a6e4..5693f4ec 100644
+--- a/src/kernel/type_checker.cpp
++++ b/src/kernel/type_checker.cpp
+@@ -9,6 +9,9 @@ Author: Leonardo de Moura
+ #include <limits>
+ #include <climits>
+ #include <cstdlib>
++#include <set>
++#include <fstream>
++#include <string>
+ #include "runtime/interrupt.h"
+ #include "runtime/sstream.h"
+ #include "runtime/flet.h"
+@@ -244,6 +247,84 @@ static bool to_proj_idx(nat const & idx, unsigned & result) {
+     return true;
+ }
+ 
++/* KTRACE: a structural trace of is_def_eq_core and unfold_definition_core,
++   enabled by LEAN_KTRACE=<max entries>, for diffing against another kernel. */
++static long g_kt_limit = -1;
++static long g_kt_count = 0;
++static int  g_kt_depth = 0;
++static long kt_limit() {
++    if (g_kt_limit < 0) {
++        char const * v = getenv("LEAN_KTRACE");
++        g_kt_limit = v ? atol(v) : 0;
++    }
++    return g_kt_limit;
++}
++static bool kt_on() { return kt_limit() > 0 && g_kt_count < kt_limit(); }
++/* KDIGEST: one line per declaration, LEAN_KDIGEST=<file>: name, is_def_eq_core
++   calls, unfolds, FNV-1a of the event sequence, for joining against kolla's. */
++static FILE *        g_kd_file = nullptr;
++static bool          g_kd_init = false;
++static bool          g_kd_active = false;
++static unsigned long long g_kd_hash = 0;
++static long          g_kd_calls = 0, g_kd_unfolds = 0;
++static FILE * g_kd_dump = nullptr;
++static std::set<std::string> * g_kd_names = nullptr;
++static bool g_kd_dumping = false;
++static void kd_mix(std::string const & s) {
++    if (g_kd_dumping) fprintf(g_kd_dump, "%s\n", s.c_str());
++    for (unsigned char c : s) { g_kd_hash ^= c; g_kd_hash *= 1099511628211ULL; }
++    g_kd_hash ^= 10; g_kd_hash *= 1099511628211ULL;
++}
++void kd_begin(name const & n) {
++    if (!g_kd_init) {
++        g_kd_init = true;
++        char const * v = getenv("LEAN_KDIGEST");
++        if (v) g_kd_file = fopen(v, "w");
++        char const * ns = getenv("LEAN_KD_NAMES");
++        char const * dp = getenv("LEAN_KD_DUMP");
++        if (ns && dp) {
++            g_kd_dump = fopen(dp, "w");
++            g_kd_names = new std::set<std::string>();
++            std::ifstream in(ns); std::string line;
++            while (std::getline(in, line)) g_kd_names->insert(line);
++        }
++    }
++    if (!g_kd_file) return;
++    g_kd_dumping = g_kd_names && g_kd_names->count(n.to_string()) > 0;
++    if (g_kd_dumping) fprintf(g_kd_dump, "@ %s\n", n.to_string().c_str());
++    g_kd_active = true; g_kd_hash = 14695981039346656037ULL;
++    g_kd_calls = 0; g_kd_unfolds = 0; g_kt_depth = 0;
++}
++void kd_end(name const & n) {
++    if (!g_kd_active) return;
++    g_kd_active = false;
++    fprintf(g_kd_file, "%s\t%ld\t%ld\t%016llx\n", n.to_string().c_str(), g_kd_calls, g_kd_unfolds, g_kd_hash);
++    fflush(g_kd_file);
++}
++static std::string kt_head(expr const & e) {
++    expr const & f = get_app_fn(e);
++    std::string h;
++    switch (f.kind()) {
++    case expr_kind::Const:  h = const_name(f).to_string(); break;
++    case expr_kind::Proj: {
++        unsigned i = 0; to_proj_idx(proj_idx(f), i);
++        h = "proj:" + proj_sname(f).to_string() + "." + std::to_string(i); break;
++    }
++    case expr_kind::BVar:   h = "bvar"; break;
++    case expr_kind::FVar:   h = "fvar"; break;
++    case expr_kind::MVar:   h = "mvar"; break;
++    case expr_kind::Sort:   h = "sort"; break;
++    case expr_kind::Lambda: h = "lam"; break;
++    case expr_kind::Pi:     h = "pi"; break;
++    case expr_kind::Let:    h = "let"; break;
++    case expr_kind::Lit:    h = "lit"; break;
++    case expr_kind::MData:  h = "mdata"; break;
++    case expr_kind::App:    h = "app"; break;
++    }
++    return h + "/" + std::to_string(get_app_num_args(e));
++}
++
++
+ expr type_checker::infer_proj(expr const & e, bool infer_only) {
+     expr type = whnf(infer_type_core(proj_expr(e), infer_only));
+     unsigned idx;
+@@ -565,6 +646,8 @@ optional<constant_info> type_checker::is_delta(expr const & e) const {
+ optional<expr> type_checker::unfold_definition_core(expr const & e) {
+     if (is_constant(e)) {
+         if (auto d = is_delta(e)) {
++            if (kt_on()) fprintf(stderr, "KU %s\n", d->get_name().to_string().c_str());
++            if (g_kd_active) { g_kd_unfolds++; kd_mix("U " + d->get_name().to_string()); }
+             levels const & us = const_levels(e);
+             unsigned len = length(us);
+             if (m_diag) {
+@@ -1130,6 +1213,24 @@ bool type_checker::is_def_eq_unit_like(expr const & t, expr const & s) {
+ }
+ 
+ bool type_checker::is_def_eq_core(expr const & t, expr const & s) {
++    long n = 0;
++    if (g_kd_active) {
++        g_kd_calls++;
++        kd_mix(std::to_string(g_kt_depth) + " > " + kt_head(t) + " | " + kt_head(s));
++    }
++    if (kt_on()) {
++        n = ++g_kt_count;
++        fprintf(stderr, "KT %ld %d > %s | %s\n", n, g_kt_depth, kt_head(t).c_str(), kt_head(s).c_str());
++    }
++    g_kt_depth++;
++    bool r = is_def_eq_core_impl(t, s);
++    g_kt_depth--;
++    if (g_kd_active) kd_mix(std::to_string(g_kt_depth) + " < " + (r ? "1" : "0"));
++    if (n > 0) fprintf(stderr, "KT %ld %d < %d\n", n, g_kt_depth, r ? 1 : 0);
++    return r;
++}
++
++bool type_checker::is_def_eq_core_impl(expr const & t, expr const & s) {
+     scope_rec_depth guard;
+     check_system("is_definitionally_equal", /* do_check_interrupted */ true);
+     lbool r = quick_is_def_eq(t, s);
+diff --git a/src/kernel/type_checker.h b/src/kernel/type_checker.h
+index 0625c7cd..0946491e 100644
+--- a/src/kernel/type_checker.h
++++ b/src/kernel/type_checker.h
+@@ -111,6 +111,7 @@ private:
+     lbool lazy_delta_reduction(expr & t_n, expr & s_n);
+     bool lazy_delta_proj_reduction(expr & t_n, expr & s_n, name const & sname, nat const & idx);
+     bool is_def_eq_core(expr const & t, expr const & s);
++    bool is_def_eq_core_impl(expr const & t, expr const & s);
+     /** \brief Like \c check, but ignores undefined universes */
+     expr check_ignore_undefined_universes(expr const & e);
+     optional<expr> try_unfold_proj_app(expr const & e);

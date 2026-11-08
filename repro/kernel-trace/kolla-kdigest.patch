@@ -1,0 +1,125 @@
+diff --git a/kernel/src/kolla/kernel/DeclarationChecker.scala b/kernel/src/kolla/kernel/DeclarationChecker.scala
+index 5630737..d414aa0 100644
+--- a/kernel/src/kolla/kernel/DeclarationChecker.scala
++++ b/kernel/src/kolla/kernel/DeclarationChecker.scala
+@@ -152,12 +152,15 @@ final class DeclarationChecker(
+     newEnv
+ 
+   /** `environment::add(declaration, check)`. */
++  private def kd(n: Name)(f: => Environment): Environment =
++    KDigest.begin(n); val r = f; KDigest.end(n); r
++
+   def add(env: Environment, d: Declaration, check: Boolean = true): Environment =
+     d match
+     case Declaration.AxiomDecl(v)       => addAxiom(env, v, check)
+-    case Declaration.DefnDecl(v)        => addDefinition(env, v, check)
+-    case Declaration.ThmDecl(v)         => addTheorem(env, v, check)
+-    case Declaration.OpaqueDecl(v)      => addOpaque(env, v, check)
++    case Declaration.DefnDecl(v)        => kd(v.toConstantVal.name)(addDefinition(env, v, check))
++    case Declaration.ThmDecl(v)         => kd(v.toConstantVal.name)(addTheorem(env, v, check))
++    case Declaration.OpaqueDecl(v)      => kd(v.toConstantVal.name)(addOpaque(env, v, check))
+     case Declaration.MutualDefnDecl(vs) => addMutual(env, vs, check)
+     case Declaration.QuotDecl => Quot.add(env)
+     case Declaration.InductDecl(_, _, _, _) =>
+@@ -177,9 +180,9 @@ final class DeclarationChecker(
+   def addInfo(env: Environment, info: ConstantInfo): (Environment, CheckOutcome) =
+     info match
+     case ConstantInfo.AxiomInfo(v)  => (addAxiom(env, v), CheckOutcome.Checked)
+-    case ConstantInfo.DefnInfo(v)   => (addDefinition(env, v), CheckOutcome.Checked)
+-    case ConstantInfo.ThmInfo(v)    => (addTheorem(env, v), CheckOutcome.Checked)
+-    case ConstantInfo.OpaqueInfo(v) => (addOpaque(env, v), CheckOutcome.Checked)
++    case ConstantInfo.DefnInfo(v)   => (kd(v.toConstantVal.name)(addDefinition(env, v)), CheckOutcome.Checked)
++    case ConstantInfo.ThmInfo(v)    => (kd(v.toConstantVal.name)(addTheorem(env, v)), CheckOutcome.Checked)
++    case ConstantInfo.OpaqueInfo(v) => (kd(v.toConstantVal.name)(addOpaque(env, v)), CheckOutcome.Checked)
+     case ConstantInfo.QuotInfo(v) =>
+       // `add_quot` installs all four constants at once, so the first one an
+       // export file mentions triggers the whole package; each exported constant
+diff --git a/kernel/src/kolla/kernel/TypeChecker.scala b/kernel/src/kolla/kernel/TypeChecker.scala
+index 15ca42f..5b18ea7 100644
+--- a/kernel/src/kolla/kernel/TypeChecker.scala
++++ b/kernel/src/kolla/kernel/TypeChecker.scala
+@@ -548,6 +548,7 @@ final class TypeChecker(
+         // answers is cheap, and conflating the two would read a working cache
+         // as repeated work. See docs/semantics.md K21.
+         deltaSteps += 1
++        if KDigest.active then { KDigest.unfolds += 1; KDigest.mix(s"U ${c.name}") }
+         if diagnosing then unfolded.update(c.name, unfolded.getOrElse(c.name, 0L) + 1L)
+         def fresh(): Expr =
+           deltaMisses += 1
+@@ -768,7 +769,7 @@ final class TypeChecker(
+         // Lean's `whnf_core` returns directly, past the cache write, when an
+         // application is stuck or a recursor fires: a later equal term must not
+         // get an older object back, or `is_def_eq`'s pointer test reads it as
+-        // progress. See docs/semantics.md K29.
++        // progress.
+         var write = cacheable
+         val computed: Step[Expr] = e match
+           case p: Expr.Proj =>
+@@ -1275,8 +1276,20 @@ final class TypeChecker(
+       }
+     loop(t0, s0)
+ 
+-  /** `is_def_eq_core`, with the revisit counters when diagnosing. */
+   private def isDefEqCoreE(t: Expr, s: Expr, eager: Boolean): Step[Boolean] =
++    if KDigest.active then
++      KDigest.calls += 1
++      KDigest.mix(s"${KDigest.depth} > ${KDigest.head(t)} | ${KDigest.head(s)}")
++      KDigest.depth += 1
++      isDefEqCoreE0(t, s, eager).map { r =>
++        KDigest.depth -= 1
++        KDigest.mix(s"${KDigest.depth} < ${if r then 1 else 0}")
++        r
++      }
++    else isDefEqCoreE0(t, s, eager)
++
++  /** `is_def_eq_core`, with the revisit counters when diagnosing. */
++  private def isDefEqCoreE0(t: Expr, s: Expr, eager: Boolean): Step[Boolean] =
+     if !diagnosing then isDefEqCoreBody(t, s, eager)
+     else
+       val key = new ExprPair(t, s)
+@@ -1385,6 +1398,45 @@ final class TypeChecker(
+       r
+     }
+ 
++object KDigest:
++  private val out = sys.env.get("KOLLA_KDIGEST").map(p => new java.io.PrintWriter(new java.io.FileWriter(p)))
++  var active = false
++  var hash: Long = 0L
++  var calls = 0L
++  var unfolds = 0L
++  var depth = 0
++  private val names = sys.env.get("KOLLA_KD_NAMES").map(p => scala.io.Source.fromFile(p, "UTF-8").getLines().toSet)
++  private val dump  = sys.env.get("KOLLA_KD_DUMP").map(p => new java.io.PrintWriter(new java.io.FileWriter(p)))
++  private var dumping = false
++  def mix(s0: String): Unit =
++    val s = s0.replace("«", "").replace("»", "")
++    if dumping then dump.get.println(s)
++    s.getBytes("UTF-8").foreach { b => hash = (hash ^ (b & 0xffL)) * 1099511628211L }
++    hash = (hash ^ 10L) * 1099511628211L
++  def begin(n: Name): Unit = if out.isDefined then
++    val nm = n.toString.replace("«", "").replace("»", "")
++    dumping = names.exists(_.contains(nm)) && dump.isDefined
++    if dumping then dump.get.println(s"@ $nm")
++    active = true; hash = 0xcbf29ce484222325L; calls = 0L; unfolds = 0L; depth = 0
++  def end(n: Name): Unit = if active then
++    active = false
++    out.get.println(f"${n.toString.replace("«", "").replace("»", "")}\t$calls\t$unfolds\t$hash%016x"); out.get.flush()
++    dump.foreach(_.flush())
++  def head(e: Expr): String =
++    val h = Expr.getAppFn(e) match
++      case c: Expr.Const   => c.name.toString
++      case p: Expr.Proj    => s"proj:${p.typeName}.${p.idx}"
++      case _: Expr.BVar    => "bvar"
++      case _: Expr.FVar    => "fvar"
++      case _: Expr.Sort    => "sort"
++      case _: Expr.Lam     => "lam"
++      case _: Expr.ForallE => "pi"
++      case _: Expr.LetE    => "let"
++      case _: Expr.Lit     => "lit"
++      case _: Expr.MData   => "mdata"
++      case _               => "other"
++    s"$h/${Expr.getAppNumArgs(e)}"
++
+ object TypeChecker:
+   val defaultMaxSteps: Long = 1L << 32
+   val maxTraceEntries: Int  = 32
