@@ -2085,6 +2085,57 @@ accompanying document said "Lean proves" a result while the theorem's proof was
 `sorry` — which the source showed plainly, but only because the `sorry` happened
 to be in the file someone thought to open.
 
+### A2 — a worked audit: what Veil's "verified" rests on
+
+[Veil](https://github.com/verse-lab/veil) is a Lean 4 framework for
+distributed protocols: a DSL for transition systems, invariant checking by an
+SMT solver (cvc5, through a fork of lean-smt), invariant synthesis and model
+checking. It builds on Lean v4.35.0, the release kolla's profile follows, and
+it emits its results as ordinary theorems, so A1 applies to it directly.
+
+Its source says what to expect. `veil.smt.trust` defaults to `true`,
+"`veil_smt` trusts unsat results from the SMT solver", and with trust on
+lean-smt closes the goal with `mv.admit` when the solver answers unsat: a
+`sorry`. With `set_option veil.smt.trust false` it reconstructs a Lean proof
+from cvc5's instead, with `native := false`, so no `Lean.ofReduceBool`.
+
+The audit checks that reading. Veil at 22cbf1af was built, and its tutorial
+`Examples/Tutorial/Ring.lean` (leader election in a ring) copied twice as a
+plain, non-`module` file so the proofs travel with the export, with
+`#gen_theorems` after `#gen_spec` so the verification conditions become
+declarations, and the model checking dropped. The two copies differ only in
+`veil.smt.trust`. Each was compiled with `lake lean` (plain `lean` cannot load
+cvc5's native library), exported with lean4export for its 113 theorems and
+their dependencies, about 45 MB, and given to kolla. The 15 verification
+conditions are `initializer`, `send` and `recv` against `doesNotThrow`,
+`single_leader`, `leader_greatest`, `receive_self_msg_only_if_greatest` and
+`no_bypass`.
+
+| Ring, 15 verification conditions | Veil's default | `veil.smt.trust false` |
+|---|---|---|
+| rest only on `propext`, `Classical.choice`, `Quot.sound` | 3, the `doesNotThrow` ones | all 15 |
+| rest on `sorryAx` | 12, every safety and invariant condition | none |
+| whole export, checked by kolla | 6,312 accepted, 6 s | 6,477 accepted, 6 s |
+| Lean's warning when compiling | `declaration uses 'sorry'` ×12 | none |
+
+So with Veil's defaults the protocol's safety theorem, `single_leader`, is not
+a proof: each of its preservation conditions rests on `sorryAx`. Veil says so
+in a warning ("Trusting SMT solver for N goals") and Lean in another, but
+nothing in a theorem's name or statement does, and the export type-checks
+cleanly, as A1 says it must. `--axioms` is what tells the two runs apart, and
+its exit code, 1 against 0, is a gate a CI job can use. With trust off, cvc5's
+proofs are reconstructed into terms an independent kernel accepts, resting on
+Lean's three axioms and nothing else.
+
+What this does not cover. One protocol, the smallest Veil ships. Veil also
+uses `native_decide` by default when it checks a concrete theory against a
+module's `assumption`s and in `#temporal_check`; those proofs rest on
+`Lean.ofReduceBool`, which kolla does not evaluate, and are untested here. The
+synthesizer's certificates (`#updr certify`, `veil.synthesizer.trust`) were not
+run. `assumption` and `trusted invariant` are hypotheses of the transition
+system by design and do not show up as axioms at all; they have to be read in
+the statement.
+
 ### K22 — what the kernel may be used from several threads for
 
 `TypeChecker` says of itself that it is single-threaded by construction: one
