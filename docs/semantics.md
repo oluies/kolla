@@ -2127,14 +2127,47 @@ its exit code, 1 against 0, is a gate a CI job can use. With trust off, cvc5's
 proofs are reconstructed into terms an independent kernel accepts, resting on
 Lean's three axioms and nothing else.
 
-What this does not cover. One protocol, the smallest Veil ships. Veil also
-uses `native_decide` by default when it checks a concrete theory against a
-module's `assumption`s and in `#temporal_check`; those proofs rest on
-`Lean.ofReduceBool`, which kolla does not evaluate, and are untested here. The
-synthesizer's certificates (`#updr certify`, `veil.synthesizer.trust`) were not
-run. `assumption` and `trusted invariant` are hypotheses of the transition
-system by design and do not show up as axioms at all; they have to be read in
-the statement.
+The largest SMT-checked example Veil ships, `Examples/Ivy/VerticalPaxosFirstOrder.lean`
+(350 lines, 7 actions and 10 invariant clauses, 88 verification conditions),
+gives the same answer at scale. `#gen_theorems` has to come after the file's own
+hand proofs: placed right after `#gen_spec` it claims the name
+`propose_choosable_proposal` before the file's `prove_veil_invariant_goal` does,
+and the module fails to compile.
+
+| Vertical Paxos, 88 verification conditions | Veil's default | `veil.smt.trust false` |
+|---|---|---|
+| rest only on Lean's three axioms | 3, the three proved by hand | all 88 |
+| rest on `sorryAx` | 85, every one the solver discharged | none |
+| compile time | 182 s | 50 s |
+| export | 63 MB | 90 MB |
+| whole export, checked by kolla | 6,811 accepted, 14 s | 7,075 accepted, 37 s |
+
+Both builds have the same 396 theorems, so turning trust off loses no
+verification condition; reconstruction is complete on this protocol. It makes
+the export larger and kolla's check slower, and in this run made compilation
+faster, since the solver was asked for proofs instead of unsat cores.
+
+`native_decide` is not what this entry first assumed. In v4.35 it does not
+produce a `Lean.ofReduceBool` term for the kernel to evaluate: it declares one
+auxiliary axiom per use, named like `t._native.native_decide.ax_1_1`, stating
+the result the compiled code computed, and the proof of `t` uses that axiom.
+Checked on three theorems in a file importing Veil, a `decide` control rests on
+no axioms; each of the two `native_decide` theorems rests on its own auxiliary
+axiom, which `--axioms` reports as outside Lean's trust base, with exit code 1.
+kolla accepts all three, as Lean's kernel does: an axiom is a well-formed
+declaration. So kolla needs no compiled code to audit `native_decide`; it
+names what is trusted instead of checking it.
+
+Veil itself does not put `native_decide` into an exported theorem. Its default
+`first | decide | native_decide` proves that a concrete theory satisfies a
+module's `assumption`s inside an `example`, and `finite_reach_by native_decide`
+supplies a certificate to a model-checker run; neither leaves a declaration.
+
+What this does not cover. The synthesizer's certificates (`#updr certify`,
+`veil.synthesizer.trust`) were not run. Temporal properties proved with
+`prove_temporal_by` were not exported. `assumption` and `trusted invariant`
+are hypotheses of the transition system by design and do not show up as axioms
+at all; they have to be read in the statement.
 
 ### K22 — what the kernel may be used from several threads for
 
