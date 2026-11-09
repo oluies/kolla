@@ -63,6 +63,8 @@ kolla [options] <export-file>...
   --profile <v>   the Lean release to check as (default the newest)
   --json          one JSON object per declaration on stdout
   --abort         stop at the first rejection
+  --jobs <n>      check up to n declarations at once (default 1);
+                  not with --abort, --cache or --trace
   --only <name>   report only this declaration, repeatable
   --check <pre>   check only declarations under this name prefix,
                   admitting the rest unchecked; repeatable
@@ -428,8 +430,9 @@ checker accepting each of the same four export files:
 | `Mathlib` (full) | 729,263 | nanoda |
 
 A full Mathlib export checks too. Module `Mathlib` at v4.35.0 is 6.26 GB and
-729,263 declarations; `cli.jvm` accepts all of them in 1,501 seconds at about
-7.5 GB resident with `-Xmx20g`. Until K28 it did not: the run stopped on
+729,263 declarations; `cli.jvm --jobs 16` accepts all of them in 344 seconds at
+14 GB resident with `-Xmx20g`, and on one thread in 1,190–1,501 seconds at about
+7.5 GB. Until K28 it did not: the run stopped on
 `IntermediateField.restrictScalars_top`, a `rfl` proof Lean's kernel decides in
 230 comparisons. kolla had left Lean's path because its `whnf_core` did not
 read its cache on cheap calls, and found by diffing traces of the two kernels.

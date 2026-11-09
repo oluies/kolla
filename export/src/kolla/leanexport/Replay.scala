@@ -33,6 +33,11 @@ trait ReplayCache:
 /** One step of a replay: the names it declared and what became of them. */
 final case class ReplayStep(names: List[Name], outcome: ReplayOutcome)
 
+/** A step whose environment is already settled and whose check can be run
+  * later, on another thread: `run` touches nothing mutable of the `Replay`.
+  */
+final case class ReplayDeferred(names: List[Name], run: () => ReplayOutcome)
+
 /** Replays an export file's declarations into an environment, one step at a
   * time, with no effect type of its own.
   *
@@ -345,6 +350,41 @@ final class Replay(
         dg.foreach(d => cache.foreach(_.accepted(d)))
       ReplayStep(names, outcome)
 
+  /** Like `next`, except that a check which cannot change the environment is
+    * returned instead of run.
+    *
+    * A definition, theorem, opaque or axiom adds exactly itself whether it is
+    * accepted or rejected (P6), so what follows does not have to wait for its
+    * verdict: the environment is advanced now and `run` checks against the
+    * persistent one from before. An inductive block's environment is derived
+    * by checking it, and the quotient package is an extension, so those are
+    * taken here. A cache writes digests in file order, so a replay with one
+    * takes every step here. See docs/semantics.md K30.
+    */
+  def nextDeferred(): ReplayDeferred =
+    val n = stepLength()
+    require(n.isDefined, "Replay.nextDeferred() without a complete step")
+    ready.head match
+      case ExportItem.Info(info) if n.get == 1 && cache.isEmpty && Replay.deferrable(info) && check(info.name) =>
+        ready.removeHead()
+        consumed += 1
+        val before = env
+        scala.util.Try(Replay.admitInfo(env, info)).toOption.foreach(e => env = e)
+        ReplayDeferred(
+          List(info.name),
+          () =>
+            try
+              dc.addInfo(before, info)._2 match
+                case CheckOutcome.Checked  => ReplayOutcome.Checked
+                case CheckOutcome.TypeOnly => ReplayOutcome.CarriedOver("carried over from the export file")
+            catch
+              case e: KernelException => ReplayOutcome.Rejected(e.reason, e.trace)
+              case e: ExportException => ReplayOutcome.Failed(e.getMessage)
+        )
+      case _ =>
+        val st = next()
+        ReplayDeferred(st.names, () => st.outcome)
+
   /** The step the slice amounts to: one declaration, or one inductive block. */
   private def pending(slice: Vector[ExportItem]): (List[Name], () => (Environment, CheckOutcome), Environment => Environment) =
     slice.head match
@@ -409,6 +449,12 @@ object Replay:
     * a stream retains.
     */
   val defaultHoistWindow: Int = 1 << 16
+
+  /** Whether checking this constant leaves the environment as admitting it does. */
+  private def deferrable(info: ConstantInfo): Boolean = info match
+    case _: ConstantInfo.DefnInfo | _: ConstantInfo.ThmInfo | _: ConstantInfo.OpaqueInfo | _: ConstantInfo.AxiomInfo =>
+      true
+    case _ => false
 
   /** Adds an exported constant to the environment without checking it.
     *

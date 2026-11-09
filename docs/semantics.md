@@ -1190,6 +1190,51 @@ up as a line in this comparison rather than as a run that does not finish.
 `TypeCheckerSuite` checks that `whnfCore` returns the object it was given for a
 stuck application.
 
+### K30 — `--jobs`: checking declarations in parallel
+
+A definition, theorem, opaque or axiom adds exactly itself to the environment,
+whether it is accepted or rejected (P6). So what comes after it does not have to
+wait for its verdict. `Replay.nextDeferred` advances the environment at once and
+returns a check against the persistent environment from before the step. Those
+checks run on `--jobs` threads. Inductive blocks, whose environment is derived
+by checking them, and the quotient package are still taken on the reader. K22
+is what makes this sound: one `TypeChecker` per declaration, and everything they
+share immutable.
+
+Results are put back in file order before they are reported, so the output and
+the tally are the sequential run's. The first version got that order from
+`parEvalMap`, which keeps a window of `jobs`: one slow declaration at the front
+idles every other worker. On Mathlib that was 901 s, 2.2 cores on average.
+`parEvalMapUnordered` plus a reorder buffer at the end took it to 344 s.
+
+| `cli.jvm`, load 5 to 25 from other programs | 1 job | 16 jobs |
+|---|---|---|
+| `init`, `-Xmx2g` | 28–30 s | 10 s |
+| `std`, `-Xmx2g` | 45–48 s | 15 s |
+| `lean`, `-Xmx4g` | 55 s | 21 s |
+| `Mathlib`, `-Xmx20g` | 1,190–1,501 s, 7.5 GB | 344 s, 14.0 GB |
+
+The sequential Mathlib figures are from separate runs. nanoda takes 925 s on the
+same file. Resident memory goes up with the number of proofs in flight, each
+with its own caches.
+
+Parallelism must not change what is computed, and K22's suite says of itself
+that it is not a race detector. So the K29 digest, made per-thread, was compared
+between one job and 16 on `std`: the sequence of comparisons and unfoldings is
+identical for all 95,883 declarations, and 95,864 still match Lean's kernel, the
+same as sequentially. The check code was not touched after that; the reorder
+buffer changed only how finished results are collected. After it, the
+per-declaration `--json` of `std` is byte-identical between 1 and 16 jobs apart
+from timings, in the same order, and the three negative exports at v4.27.0 give
+the same rejections and exit code 1.
+
+`--abort`, `--cache` and `--trace` are refused with `--jobs` above 1, since each
+depends on steps being taken one at a time: stopping at the first rejection,
+writing digests in file order, naming the step a run is inside. The default is
+one job, which takes the old path unchanged. The native build compiles with the
+flag and has not been measured with it: F7's hangs under a parallel collector
+are reason to measure first.
+
 ## DSL
 
 ### D5 — binders are Scala functions

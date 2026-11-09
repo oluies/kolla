@@ -231,6 +231,140 @@ object Check:
         }
     }
 
+  /** `stream`, with up to `jobs` declarations checked at once.
+    *
+    * The reader stays on one fiber and advances the environment; only the
+    * checks that cannot change it are handed out (`Replay.nextDeferred`).
+    * Checks finish in any order and are put back in file order before they
+    * are reported, so the output and the tally are the sequential run's.
+    * Ordering them with `parEvalMap` instead keeps a window of `jobs`: one
+    * slow declaration at its front idles every other worker, and Mathlib is
+    * full of those. Each check builds its own `TypeChecker` over a persistent
+    * environment (K22), and a check blocks its thread for as long as it
+    * takes, so it runs on the blocking pool rather than the compute pool that
+    * is running the reader. See docs/semantics.md K30.
+    */
+  def streamParallel(
+      name: String,
+      bytes: Stream[IO, Byte],
+      profile: KernelProfile,
+      jobs: Int,
+      emit: (Name, ReplayOutcome, Long) => IO[Unit],
+      progress: Option[Progress => IO[Unit]] = None,
+      check: Name => Boolean = _ => true,
+      maxSteps: Long = kolla.kernel.TypeChecker.defaultMaxSteps,
+      timeLimit: Option[kolla.kernel.TypeChecker.TimeLimit] = None
+  ): IO[Either[Failure, Result]] =
+    IO.monotonic.flatMap { start =>
+      val replay = new Replay(
+        profile, true, Replay.defaultHoistWindow, check, None, maxSteps,
+        kolla.kernel.Environment.empty, timeLimit
+      )
+      val reader = new ExportReader(None, retainItems = false)
+      // `seen` is read by the workers for an out-of-memory message.
+      val seen   = new java.util.concurrent.atomic.AtomicLong(0L)
+      var tally  = ReplayTally()
+      var read   = 0L
+      var noted  = 0L
+
+      def outOfRoom[A](body: => A): A =
+        try body
+        catch case _: OutOfMemoryError => throw new OutOfRoom(seen.get())
+
+      def take: IO[fs2.Chunk[ReplayDeferred]] = IO {
+        outOfRoom {
+          val out = Vector.newBuilder[ReplayDeferred]
+          while replay.hasNext do out += replay.nextDeferred()
+          fs2.Chunk.from(out.result())
+        }
+      }
+
+      val lines =
+        bytes.chunks
+          .evalTap(c => IO { read += c.size })
+          .unchunks
+          .through(fs2.text.utf8.decode)
+          .through(fs2.text.lines)
+
+      val fed = lines.chunks.evalMap { chunk =>
+        IO {
+          outOfRoom {
+            chunk.foreach(reader.feed)
+            reader.drain().foreach(replay.feed)
+          }
+        } *> take
+      }
+
+      val last = Stream.eval(
+        IO {
+          outOfRoom {
+            reader.finish()
+            reader.drain().foreach(replay.feed)
+            replay.finish()
+          }
+        } *> take
+      )
+
+      // Finished checks waiting for an earlier one, and the next to report.
+      val parked = scala.collection.mutable.HashMap.empty[Long, (List[Name], ReplayOutcome, Long)]
+      var nextIx = 0L
+
+      def report(names: List[Name], outcome: ReplayOutcome, took: Long): IO[Unit] = IO.defer {
+        tally = tally.add(ReplayStep(names, outcome))
+        val total = seen.addAndGet(names.length.toLong)
+        val note =
+          if total - noted < progressEvery then IO.unit
+          else
+            noted = total
+            progress.fold(IO.unit)(f => f(Progress(total, read)))
+        names.traverse_(d => emit(d, outcome, took)) *> note
+      }
+
+      def reportReady: IO[Unit] = IO.defer {
+        parked.remove(nextIx) match
+          case None => IO.unit
+          case Some((names, outcome, took)) =>
+            nextIx += 1
+            report(names, outcome, took) *> reportReady
+      }
+
+      (fed ++ last)
+        .flatMap(Stream.chunk)
+        .zipWithIndex
+        .parEvalMapUnordered(jobs) { (d, ix) =>
+          IO.blocking {
+            outOfRoom {
+              val t0  = System.nanoTime()
+              val out = d.run()
+              (ix, d.names, out, System.nanoTime() - t0)
+            }
+          }
+        }
+        .evalMap { (ix, names, outcome, took) =>
+          IO { parked.update(ix, (names, outcome, took)) } *> reportReady
+        }
+        .compile
+        .drain
+        .attempt
+        .flatMap {
+          case Right(_) =>
+            IO.monotonic.map(end =>
+              Right(
+                Result(
+                  tally, (end - start).toNanos, replay.lateAmbientConstants,
+                  replay.admittedUnchecked, 0, replay.environment
+                )
+              )
+            )
+          case Left(e: OutOfRoom) =>
+            IO.pure(Left(Failure.Exhausted(s"$name: ran out of memory after ${e.declarations} declarations")))
+          case Left(_: OutOfMemoryError) =>
+            IO.pure(Left(Failure.Exhausted(s"$name: ran out of memory after ${seen.get()} declarations")))
+          case Left(e) =>
+            IO.pure(Left(Failure.Unreadable(s"$name: ${e.getMessage}")))
+        }
+    }
+
   /** Reads an export and checks it, turning a read failure into a left. */
   def file(
       name: String,

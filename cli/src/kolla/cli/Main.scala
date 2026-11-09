@@ -220,15 +220,20 @@ object Main extends IOApp:
 
     val withCache: IO[Option[CacheStore]] = o.cache.fold(IO.pure(None))(CacheStore.load(_).map(Some(_)))
 
-    advise *> withCache.flatMap { store =>
-      Check
-        .stream(
-          file, read(file), profile, o.abortOnReject, emit, progress,
-          Options.selects(o), store, store.map(_.flush), traceOf(o), o.maxSteps,
-          kolla.kernel.Environment.empty, timeLimitOf(o)
-        )
+    if o.jobs > 1 then
+      advise *> Check
+        .streamParallel(file, read(file), profile, o.jobs, emit, progress, Options.selects(o), o.maxSteps, timeLimitOf(o))
         .flatMap(reportOne(o, profile, file, _))
-    }
+    else
+      advise *> withCache.flatMap { store =>
+        Check
+          .stream(
+            file, read(file), profile, o.abortOnReject, emit, progress,
+            Options.selects(o), store, store.map(_.flush), traceOf(o), o.maxSteps,
+            kolla.kernel.Environment.empty, timeLimitOf(o)
+          )
+          .flatMap(reportOne(o, profile, file, _))
+      }
 
   private def reportOne(
       o: Options, profile: kolla.kernel.KernelProfile, file: String,

@@ -199,6 +199,19 @@ class OptionsSuite extends munit.FunSuite:
     assert(err("--serve", "-q", "-v").contains("--quiet and --verbose"))
   }
 
+  test("--jobs is positive and refuses what needs one step at a time") {
+    assertEquals(ok("a").jobs, 1)
+    assertEquals(ok("--jobs", "8", "a").jobs, 8)
+    assert(err("--jobs", "0", "a").contains("positive"))
+    assert(err("--jobs", "x", "a").contains("positive"))
+    assert(err("--jobs", "2", "--abort", "a").contains("mutually exclusive"))
+    assert(err("--jobs", "2", "--cache", "c.txt", "a").contains("mutually exclusive"))
+    assert(err("--jobs", "2", "--trace", "a").contains("mutually exclusive"))
+    assert(err("--jobs", "2", "--eval", "t", "a").contains("--jobs applies"))
+    // one job is the sequential run, whatever else is asked for
+    assert(ok("--jobs", "1", "--abort", "a").abortOnReject)
+  }
+
   test("--axioms parses, repeats, and rejects what it cannot combine with") {
     assertEquals(ok("a").axiomsOf, Nil)
     assertEquals(ok("--axioms", "Nat.add_comm", "a").axiomsOf, List("Nat.add_comm"))

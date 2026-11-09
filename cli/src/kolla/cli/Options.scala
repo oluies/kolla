@@ -10,6 +10,7 @@ final case class Options(
     json: Boolean = false,
     /** Stop at the first rejection, as lean4checker does. */
     abortOnReject: Boolean = false,
+    jobs: Int = 1,
     /** Print the declaration names as they are checked. */
     verbose: Boolean = false,
     /** Print only the counts and the verdict. */
@@ -60,6 +61,8 @@ object Options:
       |  --profile <v>   the Lean release to check as (default the newest)
       |  --json          one JSON object per declaration on stdout
       |  --abort         stop at the first rejection
+      |  --jobs <n>      check up to n declarations at once (default 1);
+      |                  not with --abort, --cache or --trace
       |  --only <name>   report only this declaration, repeatable
       |  --check <pre>   check only declarations under this name prefix,
       |                  admitting the rest unchecked; repeatable
@@ -136,6 +139,11 @@ object Options:
       case Nil                  => Right(o)
       case "--json" :: t        => go(t, o.copy(json = true))
       case "--abort" :: t       => go(t, o.copy(abortOnReject = true))
+      case "--jobs" :: v :: t =>
+        v.toIntOption match
+          case Some(n) if n > 0 => go(t, o.copy(jobs = n))
+          case _                => Left(s"--jobs expects a positive number, got $v")
+      case "--jobs" :: Nil => Left("--jobs expects a number")
       case ("-v" | "--verbose") :: t => go(t, o.copy(verbose = true))
       case ("-q" | "--quiet") :: t   => go(t, o.copy(quiet = true))
       case "--progress" :: t         => go(t, o.copy(progress = true))
@@ -192,6 +200,14 @@ object Options:
       else if o.serve && o.checkOnly.nonEmpty then
         Left("--serve and --check are mutually exclusive: a check request names its own file")
       else if !o.serve && o.files.isEmpty then Left(s"no export file given\n\n$usage")
+      // Each of these depends on steps being taken one at a time: stopping at
+      // the first rejection, writing digests in file order, naming the step a
+      // run is inside. See docs/semantics.md K30.
+      else if o.jobs > 1 && o.abortOnReject then Left("--jobs and --abort are mutually exclusive")
+      else if o.jobs > 1 && o.cache.isDefined then Left("--jobs and --cache are mutually exclusive")
+      else if o.jobs > 1 && o.trace then Left("--jobs and --trace are mutually exclusive")
+      else if o.jobs > 1 && (o.serve || o.evalTerm.isDefined || o.axiomsOf.nonEmpty) then
+        Left("--jobs applies to checking files, not to --serve, --eval or --axioms")
       else if o.quiet && o.verbose then Left("--quiet and --verbose are mutually exclusive")
       else if o.axiomsOf.nonEmpty && o.evalTerm.isDefined then
         Left("--axioms and --eval are mutually exclusive")

@@ -156,6 +156,54 @@ class CheckSuite extends CatsEffectSuite:
     }
   }
 
+  /** Enough declarations that `--jobs` has something to overlap, each using
+    * the one before it, with a rejection in the middle that later ones use.
+    */
+  private val chain: Vector[ExportItem] =
+    val base = Vector(axiom("P", prop), defn("Q0", type0, prop))
+    val rest = (1 to 200).toVector.map { i =>
+      if i == 100 then defn("Q100", prop, type0)
+      else defn(s"Q$i", type0, Expr.Const(Name.parse(s"Q${i - 1}"), Nil))
+    }
+    base ++ rest
+
+  private def namesAndCounts(run: ((Name, ReplayOutcome, Long) => IO[Unit]) => IO[Either[Check.Failure, Check.Result]]) =
+    IO.ref(Vector.empty[String]).flatMap { ref =>
+      run((n, o, _) => ref.update(_ :+ s"$n ${o.getClass.getSimpleName}"))
+        .flatMap(out => ref.get.map(names => (out.getOrElse(fail("no result")).tally, names)))
+    }
+
+  test("--jobs gives the sequential run's tally and output, in file order") {
+    for
+      seq <- namesAndCounts(Check.stream("x", bytesOf(chain, 11), KernelProfile.v4_35, abortOnReject = false, _))
+      par <- namesAndCounts(Check.streamParallel("x", bytesOf(chain, 11), KernelProfile.v4_35, 4, _))
+    yield
+      assertEquals(par._2, seq._2)
+      assertEquals(par._1.accepted, seq._1.accepted)
+      assertEquals(par._1.rejected, seq._1.rejected)
+      // Q100 itself, and Q101, whose value has Q100's stated type.
+      assertEquals(seq._1.rejected, 2)
+      assertEquals(par._1.total, seq._1.total)
+  }
+
+  test("--jobs accepts a selection and reports it carried over") {
+    Check
+      .streamParallel("x", bytesOf(good, 7), KernelProfile.v4_35, 2, silent, check = _.toString == "P")
+      .map { out =>
+        val r = out.getOrElse(fail("no result"))
+        assertEquals(r.tally.accepted, 1)
+        assertEquals(r.admittedUnchecked, 1)
+      }
+  }
+
+  test("--jobs reports an unreadable stream as a read failure") {
+    val junk = fs2.Stream.emits("this is not an export".getBytes("UTF-8").toSeq)
+    Check.streamParallel("x", junk, KernelProfile.v4_35, 2, silent).map {
+      case Left(_: Check.Failure.Unreadable) => ()
+      case other                             => fail(s"expected a read failure, got $other")
+    }
+  }
+
   test("an unparseable stream is a read failure, not an exhaustion") {
     val junk = fs2.Stream.emits("this is not an export".getBytes("UTF-8").toSeq)
     Check.stream("x", junk, KernelProfile.v4_35, abortOnReject = false, silent).map {
