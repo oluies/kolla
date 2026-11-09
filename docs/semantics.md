@@ -3095,7 +3095,10 @@ workflow's conditions. One fails: `Test runtime (3, debug)` on Windows, a
 that repeats `WindowsThread.unpark` and `ObjectMonitor.exitMonitor` and has no
 GC frame in it. The previous head passed that job, and the same Windows
 workflow fails intermittently on `main`, so it is most likely unrelated, but
-that is not shown. The job was rerun and passed, and on 2 November the
+that is not shown. [scala-native#5209](https://github.com/scala-native/scala-native/pull/5209),
+merged on 9 November, later fixed unbounded mutual recursion between
+`ObjectMonitor.exitMonitor` and a thread's `unpark`, reported from BSD runs: the
+same loop as that stack. The job was rerun and passed, and on 2 November the
 maintainer approved and merged the PR as ed42ba979, closing #5168 and #5169.
 The squash commit's message opens with the first version's description
 (skipping `Unmanaged` threads, a 2% rule), but its code is the reworked head,
@@ -3206,6 +3209,29 @@ Three comparisons against the PR, same source and flags:
   same base, 4e8508c1d, aborted the same way in its macOS LLVM 21 job, and
   the PR runs that passed that job were all on older bases. So the abort is
   most likely from `main` (#5173 or #5174), not from this change.
+
+  The maintainer replaced #5184 with
+  [scala-native#5190](https://github.com/scala-native/scala-native/pull/5190),
+  merged on 8 November, which closed #5183 and left #5184 closed unmerged. It
+  is the better fix. `unsafe.externRedirect` is a small general mechanism for
+  keeping a renamed extern linkable, it covers all five externs #5123 and #4934
+  renamed (`clock_gettime`, `nanosleep`, `socket`, `setlocale`, `sigaltstack`),
+  and it sends old binaries through the glue where #5184 called libc directly,
+  which settles the question that PR left open about FreeBSD and OpenBSD.
+
+  With #5190 kolla builds against unpatched `main`. On 8a4ae8d81 (9 November,
+  K29 kernel, debug, `immix`): the kernel's native test suites pass, `init`
+  is accepted in 294 s at 7.25 GB resident under a 32 GB cap, at a load near 16,
+  and `std` still runs out of memory under the same cap, after 82,375 of its
+  99,619 declarations, at 425 s and 10.1 GB resident. So `main` is usable, and
+  a corpus of `std`'s size is still `boehm`'s or the JVM's. It is not something
+  to depend on yet: `main` is not a release, and the newest published nightly,
+  `0.5.13-20261107-69432d9-SNAPSHOT`, predates #5190. Testing it locally needs
+  mill's `tools_2.13` published too, because `publish-local-dev 3.9.0` does not
+  refresh it. A stale linker over new libraries emitted the redirect under its
+  bare name, and the binary recursed between `clock_gettime` and
+  `scalanative_clock_gettime` at startup. That looked like a bug in #5190 and
+  was not.
 
 The prototype is local and not proposed. If the depot is worth proposing it is
 as a follow-up to #5170, which it builds on and which is now merged. Its one
