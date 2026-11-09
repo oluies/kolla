@@ -1848,6 +1848,8 @@ declaration checks in under a second, and the whole export is accepted, all
 take over a second, 251 s in all; the slowest is
 `CategoryTheory.instIsIsoIndCoimageImageComparison` at 33.2 s. The heavy tail
 is still there, but it is a tail of seconds, not a declaration that never ends.
+nanoda accepts the same export, with no type-checker errors, in 925 s at 6.19 GB
+(docs/scale.md), so the verdict has a second independent checker behind it.
 
 ### F8 — resource exhaustion is its own exit code
 

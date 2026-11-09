@@ -163,9 +163,14 @@ Over the whole file 71 take over a second, 251 s in all:
 | `PadicInt.coe_adicCompletionIntegersEquiv_apply` | 15.9s |
 | `Polynomial.iterate_derivative_derivative_mul_X` | 13.8s |
 
-`restrictScalars_top` takes under a second. The reference for the verdict is
-Lean itself, which accepted every declaration when it built the export; no
-second checker has been run over the whole file.
+`restrictScalars_top` takes under a second. Lean accepted every declaration
+when it built the export, and nanoda, an independent checker in Rust, accepts
+the whole file too: no type-checker errors, 925 s, 6.19 GB resident, with
+`propext`, `Classical.choice`, `Quot.sound` and `Lean.trustCompiler` permitted.
+nanoda counts 729,262 declarations where kolla counts 729,263. It is the same
+one-declaration difference it shows on `init` (59,348 against 59,349), and
+there is no difference on a file without the quotient package (`case-natlit`,
+331), so it is how the two count that package.
 An earlier draft of this named a different declaration, identified from a
 progress counter that only reports every 25000 declarations; see
 docs/semantics.md K19 for why that was not an identification at all.

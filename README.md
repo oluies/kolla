@@ -425,6 +425,7 @@ checker accepting each of the same four export files:
 | `std` | 99,619 | nanoda |
 | `lean` | 171,705 | nanoda |
 | `mathlib-sample` | 19,020 | nanoda |
+| `Mathlib` (full) | 729,263 | nanoda |
 
 A full Mathlib export checks too. Module `Mathlib` at v4.35.0 is 6.26 GB and
 729,263 declarations; `cli.jvm` accepts all of them in 1,501 seconds at about
@@ -433,7 +434,8 @@ A full Mathlib export checks too. Module `Mathlib` at v4.35.0 is 6.26 GB and
 230 comparisons. kolla had left Lean's path because its `whnf_core` did not
 read its cache on cheap calls, and found by diffing traces of the two kernels.
 The cost is in a thin tail: 71 declarations take over a second, 251 seconds in
-all, the slowest 33 seconds. docs/scale.md has the figures and
+all, the slowest 33 seconds. nanoda, an independent checker in Rust, accepts the
+same file in 925 seconds at 6.2 GB. docs/scale.md has the figures and
 docs/semantics.md K19, K27 and K28 the story.
 
 One theorem out of a real development has also been checked end to end:
