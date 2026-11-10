@@ -1271,6 +1271,13 @@ their order now.
 | K29 | 95,864 of 95,883 |
 | payloads kept (K31) | **95,883**: 18,333,585 comparisons and 9,498,140 unfoldings on each side |
 
+The same run over `lean`, 161,148 definitions, theorems and opaques of its
+171,705 declarations, is identical too: 23,284,964 comparisons and 10,664,974
+unfoldings on each side, 107 s of `leanchecker --fresh Lean` against 69 s of
+kolla. The count is smaller than the corpus because the digest covers what
+`is_def_eq` is run on; axioms, inductive blocks and the quotient package are
+hashed by neither side.
+
 No verdict can move: `mdata` has no effect on typing, so a cache hit under the
 wrong annotation returned the right type. No default export is affected either,
 since lean4export leaves `mdata` out unless `--export-mdata` is given. The v4.35

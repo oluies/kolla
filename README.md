@@ -475,8 +475,9 @@ Agreeing on verdicts says nothing about how they were reached, so the two
 kernels have also been compared step by step. `repro/kernel-trace/` patches
 Lean v4.35.0 to hash, per declaration, the sequence of `is_def_eq_core` calls
 and unfoldings its kernel makes, and kolla computes the same hash. On `std`,
-all 95,883 declarations take exactly Lean's path: 18,333,585 comparisons
-and 9,498,140 unfoldings on each side. The comparison found three more places
+all 95,883 declarations take exactly Lean's path, 18,333,585 comparisons
+and 9,498,140 unfoldings on each side, and on `lean` all 161,148, 23,284,964
+comparisons and 10,664,974 unfoldings. The comparison found three more places
 kolla had left that path, none of which changed a verdict or a time
 (docs/semantics.md K29 and K31). A divergence like the one that stopped Mathlib
 would now show up as a line in that comparison.
