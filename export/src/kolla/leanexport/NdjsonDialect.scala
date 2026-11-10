@@ -19,6 +19,21 @@ private[leanexport] final class NdjsonDialect(tables: ExportTables, emit: Export
   private def nameList(j: Json, what: String): List[Name] =
     j.asArr(what).toList.map(name(_, what))
 
+  /** An `mdata` map, in the order the file gives it, since Lean compares the
+    * list. lean4export prints each value; a value in any other JSON form is kept
+    * as its text, which only has to compare equal to itself.
+    */
+  private def kvmap(j: Json): KVMap =
+    KVMap(j.asObj("Expr.mdata data").toList.map { (k, v) =>
+      val text = v match
+        case Str(s)  => s
+        case Bool(b) => b.toString
+        case Num(n)  => n.toString
+        case Real(d) => d.toString
+        case other   => other.kindName
+      (Name.parse(k), DataValue.printed(text))
+    })
+
   private def binderInfo(s: String): BinderInfo = s match
     case "default"        => BinderInfo.Default
     case "implicit"       => BinderInfo.Implicit
@@ -144,7 +159,7 @@ private[leanexport] final class NdjsonDialect(tables: ExportTables, emit: Export
       else if root.contains("strVal") then Expr.strLit(root("strVal").asStr("Expr.lit strVal"))
       else if root.contains("mdata") then
         val f = root("mdata").asObj("Expr.mdata")
-        Expr.MData(KVMap.empty, expr(f.req("expr", "Expr.mdata"), "Expr.mdata"))
+        Expr.MData(kvmap(f.getOrElse("data", Obj(Map.empty))), expr(f.req("expr", "Expr.mdata"), "Expr.mdata"))
       else throw ExportException(s"expr item ${root.keys.mkString(",")} has no known constructor")
     tables.exprs.set(idx, e)
 

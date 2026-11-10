@@ -72,6 +72,33 @@ class ExprSuite extends munit.ScalaCheckSuite:
     assertNotEquals(e: Expr, nat)
   }
 
+  test("mdata payloads are compared as Lean's BEq DataValue compares them") {
+    def kv(v: String) = KVMap(List(Name.parse("_recApp") -> DataValue.printed(v)))
+    val at971 =
+      """Lean.DataValue.ofSyntax
+        |  (Lean.Syntax.ident
+        |    (Lean.SourceInfo.original "".toRawSubstring { byteIdx := 971 } " ".toRawSubstring { byteIdx := 978 })
+        |    "bitwise".toRawSubstring
+        |    `bitwise
+        |    [])""".stripMargin
+    // The same identifier elsewhere in the file, printed on one line.
+    val at12 =
+      """Lean.DataValue.ofSyntax (Lean.Syntax.ident (Lean.SourceInfo.synthetic { byteIdx := 12 } { byteIdx := 19 } false) "bitwise".toRawSubstring `bitwise [])"""
+    val other = at971.replace("\"bitwise\"", "\"bit  wise\"")
+    assertEquals(DataValue.printed(at971), DataValue.printed(at12))
+    assertEquals(
+      DataValue.printed(at971).printed,
+      """Lean.DataValue.ofSyntax (Lean.Syntax.ident _ "bitwise".toRawSubstring `bitwise [])"""
+    )
+    assertNotEquals(DataValue.printed(at971), DataValue.printed(other))
+    assertEquals(DataValue.printed(other).printed.contains("\"bit  wise\""), true)
+    assertEquals(Expr.MData(kv(at971), nat): Expr, Expr.MData(kv(at12), nat))
+    assertNotEquals(
+      Expr.MData(kv("Lean.DataValue.ofNat 971"), nat): Expr,
+      Expr.MData(kv("Lean.DataValue.ofNat 972"), nat)
+    )
+  }
+
   test("literals") {
     assertEquals(Expr.natLit(3), Expr.Lit(Literal.NatVal(BigInt(3))): Expr)
     assertNotEquals(Expr.natLit(3), Expr.strLit("3"))

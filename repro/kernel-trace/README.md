@@ -4,7 +4,7 @@ Two kernels can agree on every verdict and still take different paths to it.
 This compares the paths. Both kernels hash, per declaration, the sequence of
 `is_def_eq_core` entries (depth, head and argument count of each side), results
 and `unfold_definition_core` calls, and the hashes are joined by name.
-docs/semantics.md K28 and K29 are what it found.
+docs/semantics.md K28, K29 and K31 are what it found.
 
 ## Lean's side
 

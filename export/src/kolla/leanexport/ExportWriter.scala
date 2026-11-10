@@ -170,7 +170,8 @@ final class ExportWriter(format: ExportFormat, out: String => Unit):
             if isJson then s""""strVal":${Jsonw.str(v)}""" else s"#ELS ${ExportWriter.hex(v)}"
       case m: Expr.MData =>
         val x = exprIdx(m.expr)
-        if isJson then s""""mdata":{"expr":$x,"data":{}}"""
+        val data = m.kv.entries.map((k, v) => s"${Jsonw.str(k.toString)}:${Jsonw.str(v.printed)}").mkString("{", ",", "}")
+        if isJson then s""""mdata":{"expr":$x,"data":$data}"""
         else throw ExportException("the text formats cannot represent Expr.mdata")
       case _: Expr.FVar => throw ExportException("cannot emit a free variable")
       case _: Expr.MVar => throw ExportException("cannot emit a metavariable")

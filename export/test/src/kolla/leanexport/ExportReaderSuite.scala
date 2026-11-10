@@ -255,15 +255,17 @@ class ExportReaderSuite extends munit.FunSuite:
     assertEquals(read(src).infos.head.tpe, Expr.natLit(5))
   }
 
-  test("ndjson mdata keeps the inner expression and drops the payload") {
+  test("ndjson mdata keeps the inner expression and the payload, in order") {
     val src =
       """{"meta":{"exporter":{"name":"x","version":"3.1.0"},"format":{"version":"3.1.0"}}}
         |{"in":1,"str":{"pre":0,"str":"A"}}
         |{"ie":0,"const":{"name":1,"us":[]}}
-        |{"ie":1,"mdata":{"expr":0,"data":{"pp":true}}}
+        |{"ie":1,"mdata":{"expr":0,"data":{"pp":true,"_recAppPos":"Lean.DataValue.ofNat 971","e":"1","d":"2","c":"3"}}}
         |{"axiom":{"name":1,"levelParams":[],"type":1,"isUnsafe":false}}""".stripMargin
     val t = read(src).infos.head.tpe
-    assertEquals(t, Expr.MData(KVMap.empty, Expr.Const(Name.parse("A"), Nil)): Expr)
+    val kv = KVMap(List("pp" -> "true", "_recAppPos" -> "Lean.DataValue.ofNat 971", "e" -> "1", "d" -> "2", "c" -> "3")
+      .map((k, v) => (Name.parse(k), DataValue.printed(v))))
+    assertEquals(t, Expr.MData(kv, Expr.Const(Name.parse("A"), Nil)): Expr)
     assertEquals(Expr.consumeMData(t), Expr.Const(Name.parse("A"), Nil))
   }
 

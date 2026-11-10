@@ -1178,9 +1178,9 @@ Over the 95,883 declarations both kernels now make 18,332,750 and 18,333,585
 comparisons and 9,498,095 and 9,498,140 unfoldings. The 19 that still differ
 agree in length to within 1%, 83,683 comparisons against 84,518 in all. Their
 first difference is at depth 0, in which comparisons type inference makes at
-all: an inference cache hit on one side only. Lean runs `sharecommon` over a
-theorem before checking it and kolla does not, which is the likely reason and
-has not been established.
+all: an inference cache hit on one side only. The guess recorded here was
+`sharecommon`, which Lean runs over a theorem and kolla does not. It was wrong:
+K31 has the cause, and with it all 95,883 match.
 
 Neither change moves a verdict or a time: `std` is 45–47 s on K28 and K29 and
 `lean` 54–55 s, interleaved, with every declaration accepted. K28 was the one
@@ -1234,6 +1234,49 @@ writing digests in file order, naming the step a run is inside. The default is
 one job, which takes the old path unchanged. The native build compiles with the
 flag and has not been measured with it: F7's hangs under a parallel collector
 are reason to measure first.
+
+### K31 — `mdata` payloads are part of a term
+
+The 19 declarations K29 left over differed because kolla's reader dropped every
+`mdata` payload. `NdjsonDialect` built each node with an empty map, so two
+annotations on the same term became one term. Lean's `is_equal` compares the
+map, and the inference cache, the positive `is_def_eq` cache and the `t == s`
+test in `quick_is_def_eq` all go through `is_equal`. So where Lean computed the
+type of `f a` again, kolla found it in the cache under the other annotation, and
+skipped the comparisons that computation makes.
+
+It was found by adding dump-only events to both kernels for each inference
+cache lookup, hit or miss, and for how `quick_is_def_eq` answered. The first
+divergence in each of the 19 was a hit in kolla where Lean missed. A Lean-side
+event that, on a miss, walked every cached key with the same hash and named the
+first place it differed answered every one the same way: the `mdata` map, and
+always `_recApp` with `_recAppPos`, which the equation compiler leaves on each
+recursive call. Two calls in one proof are the same term apart from where in the
+source they were written.
+
+`DataValue` now holds the value as lean4export prints it, because the kernel
+only needs to compare values, never to read one. It has to compare them as
+Lean's `BEq DataValue` does, which is not the same as comparing the text.
+`Syntax.structEq` ignores every `SourceInfo`, and the printer breaks lines by
+width, so a position with more digits can move a line break.
+`DataValue.printed` replaces each `(Lean.SourceInfo. ...)` with `_` and collapses
+whitespace outside string literals. Every other constructor prints one way per
+value, and `Substring.Raw.beq` compares contents, which is what the printer
+shows. The map keeps the file's order, since Lean compares it as a list:
+`Json` built objects of more than four fields as an unordered map, and keeps
+their order now.
+
+| `std`, `--export-mdata`, per declaration | identical to Lean |
+|---|---|
+| K29 | 95,864 of 95,883 |
+| payloads kept (K31) | **95,883**: 18,333,585 comparisons and 9,498,140 unfoldings on each side |
+
+No verdict can move: `mdata` has no effect on typing, so a cache hit under the
+wrong annotation returned the right type. No default export is affected either,
+since lean4export leaves `mdata` out unless `--export-mdata` is given. The v4.35
+`init` and `std` exports contain no `mdata` nodes. The writer now emits the
+payload instead of an empty map, so a file kolla writes keeps what it read.
+`ExprSuite` and `RoundTripSuite` cover the comparison and the round trip.
 
 ## DSL
 

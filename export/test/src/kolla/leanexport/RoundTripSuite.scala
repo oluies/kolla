@@ -82,6 +82,21 @@ class RoundTripSuite extends munit.FunSuite:
     assertEquals(roundTrip(env, Ndjson("3.1.0")).infos.head.name, n)
   }
 
+  test("an mdata payload survives, and two payloads stay two terms") {
+    def md(pos: Int) = Expr.MData(
+      KVMap(List(
+        Name.parse("_recApp") -> DataValue.printed("Lean.DataValue.ofSyntax (Lean.Syntax.atom (Lean.SourceInfo.none) \"f\")"),
+        Name.parse("_recAppPos") -> DataValue.printed(s"Lean.DataValue.ofNat $pos")
+      )),
+      Expr.const("Nat")
+    )
+    val body = Expr.App(Expr.App(Expr.const("P"), md(1)), md(2))
+    val env = ExportEnv(TextV2, None, Vector(ExportItem.Info(ConstantInfo.AxiomInfo(
+      AxiomVal(ConstantVal(Name.parse("M"), Nil, body), false)
+    ))))
+    assertEquals(roundTrip(env, Ndjson("3.1.0")).infos.head.tpe, body)
+  }
+
   test("a single binder's annotation survives") {
     List(BinderInfo.Default, BinderInfo.Implicit, BinderInfo.StrictImplicit, BinderInfo.InstImplicit).foreach { bi =>
       val n = Name.parse("B")

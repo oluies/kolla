@@ -88,7 +88,9 @@ object Json:
           case ',' => i += 1
           case '}' => i += 1; done = true
           case c   => fail(s"unexpected character '$c' in object")
-      Obj(b.toMap)
+      // An immutable map of up to four entries keeps insertion order; a larger
+      // one does not, and an `mdata` map's order is part of its value.
+      Obj(if b.size <= 4 then b.toMap else scala.collection.immutable.VectorMap.from(b))
 
     private def arr(depth: Int): Json =
       expect('[')
