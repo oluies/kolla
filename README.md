@@ -136,6 +136,31 @@ keeps the digests it had already accepted. Reusing an entry is trusting it; the
 file is part of what the verdict rests on, which is why it is opt-in. See
 docs/semantics.md P15.
 
+### Checking in parallel
+
+`--jobs <n>` checks up to `n` declarations at once. A definition, theorem,
+opaque or axiom adds exactly itself to the environment whether it is accepted
+or rejected, so the reader moves on without waiting for its verdict and the
+check runs on a worker against the environment as it stood before it.
+Inductive blocks and the quotient package are still checked on the reader.
+Results are reported in file order, so the output and the counts are the
+sequential run's.
+
+| `cli.jvm`, at a load of 5 to 25 | 1 job | 16 jobs |
+|---|---|---|
+| `init`, `-Xmx2g` | 28–30 s | 10 s |
+| `std`, `-Xmx2g` | 45–48 s | 15 s |
+| `lean`, `-Xmx4g` | 55 s | 21 s |
+| `Mathlib`, `-Xmx20g` | 1,190–1,501 s, 7.5 GB | 344 s, 14.0 GB |
+
+Memory goes up with the number of proofs in flight, since each has its own
+caches. On `std`, 16 jobs follow the same sequence of comparisons and
+unfoldings as one for every declaration, and the per-declaration `--json` is
+the same apart from timings. `--abort`, `--cache` and `--trace` are refused with
+more than one job, because each depends on steps taken one at a time, and so
+are `--serve`, `--eval` and `--axioms`. The default is one job. The native build
+accepts the flag but has not been measured with it. docs/semantics.md K30.
+
 ### Memory, and the native binary
 
 The checker holds little. On the v4.35.0 `std` export, 99,619 declarations,
@@ -185,8 +210,12 @@ for the idle threads and
 collecting forever, instead of failing, when the heap cap is too small. A fix
 for both, with scripted tests, was merged on 2 November as
 [scala-native#5170](https://github.com/scala-native/scala-native/pull/5170).
-It is on `main`, not yet in a release. Until a release carries it, a native
-build stays on `boehm` with a preset heap.
+It is on `main`, not yet in a release. kolla links against unpatched `main`
+since [#5190](https://github.com/scala-native/scala-native/pull/5190) kept
+renamed externs linkable, and with `immix` there it accepts `init` in 294 s,
+but `std` still runs out of a 32 GB heap after 82,375 of its 99,619
+declarations. Until a release does better, a native build stays on `boehm`
+with a preset heap.
 
 ## Finding a slow declaration
 
@@ -355,7 +384,8 @@ which do not change a verdict. On the current kernel, interleaved against K26
 on 4 November, `std` at v4.35.0 takes 47–117 seconds with `-Xmx2g` (137–191
 on K26) and `lean` 55–74 seconds with `-Xmx4g` (145–196 on K26); the spread is
 load from other programs, and the quietest pairs give 2.9 and 2.6 times. The
-end of K26 tabulates the earlier steps, and K28 this one.
+end of K26 tabulates the earlier steps, and K28 this one. K29 left them where
+they were: 45–47 s and 54–55 s, interleaved with K28.
 
 `--defeq-cache` keeps the cache on a profile that predates it, and on `std` it
 is the difference between a verdict and none. It is an optimisation and not a
@@ -418,8 +448,8 @@ also does not confirm anything, so a comparison is only evidence when it says
 
 ### What it has found
 
-At v4.35.0, every declaration of four corpora was accepted, with an independent
-checker accepting each of the same four export files:
+At v4.35.0, every declaration of five corpora was accepted, with an independent
+checker accepting each of the same five export files:
 
 | corpus | declarations | reference |
 |---|---|---|
@@ -440,6 +470,16 @@ The cost is in a thin tail: 71 declarations take over a second, 251 seconds in
 all, the slowest 33 seconds. nanoda, an independent checker in Rust, accepts the
 same file in 925 seconds at 6.2 GB. docs/scale.md has the figures and
 docs/semantics.md K19, K27 and K28 the story.
+
+Agreeing on verdicts says nothing about how they were reached, so the two
+kernels have also been compared step by step. `repro/kernel-trace/` patches
+Lean v4.35.0 to hash, per declaration, the sequence of `is_def_eq_core` calls
+and unfoldings its kernel makes, and kolla computes the same hash. On all of
+`std`, 95,864 of 95,883 declarations take exactly Lean's path, and the other 19
+are within 1% of it in length. The comparison found two more places kolla had
+left that path, neither of which changed a verdict or a time
+(docs/semantics.md K29). A divergence like the one that stopped Mathlib would
+now show up as a line in that comparison.
 
 One theorem out of a real development has also been checked end to end:
 `openai/math`'s claimed proof that the Exponential Time Hypothesis is false.
