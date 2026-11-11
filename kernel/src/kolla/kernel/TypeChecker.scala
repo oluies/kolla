@@ -87,6 +87,9 @@ final class TypeChecker(
   private var deltaMisses   = 0L
   private var defEqIdentical = 0L
   private var defEqCacheHit  = 0L
+  /** For the suites: which path a comparison took (K32). */
+  private[kernel] def defEqCacheHits: Long = defEqCacheHit
+  private[kernel] def deltaAttempts: Long  = deltaSteps
   private var cachedWithFVar = 0L
 
   /** Whether `is_def_eq_core` comes back to pairs it has seen, and in what
@@ -1106,8 +1109,11 @@ final class TypeChecker(
                val ctorVal  = env.get(ctorName).asInstanceOf[ConstantInfo.CtorInfo].value
                if ctorVal.numFields != 0 then Step.False
                else
+                 // `is_def_eq_core`, not `is_def_eq`: Lean does not cache a
+                 // success here, and a later comparison of the same pair
+                 // unfolds again where a cached one would not. K32.
                  Step.defer(inferTypeE(s, inferOnly = true)).flatMap(st =>
-                   Step.defer(isDefEqE(tType, st, eager))
+                   Step.defer(isDefEqCoreE(tType, st, eager))
                  )
              case _ => Step.False
     yield r
@@ -1120,9 +1126,10 @@ final class TypeChecker(
           case Literal.StrVal(v)
               if s.isInstanceOf[Expr.App] &&
                 Expr.isConstOf(s.asInstanceOf[Expr.App].fn, profile.stringLiteralCtor) =>
+            // `is_def_eq_core`, as in `is_def_eq_unit_like`: no cache write. K32.
             Step
               .defer(whnfE(ExprOps.stringLitToConstructor(v, profile)))
-              .flatMap(x => Step.defer(isDefEqE(x, s, eager)))
+              .flatMap(x => Step.defer(isDefEqCoreE(x, s, eager)))
               .map(Some(_))
           case _ => Step.now(None)
       case _ => Step.now(None)

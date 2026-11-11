@@ -1285,6 +1285,45 @@ since lean4export leaves `mdata` out unless `--export-mdata` is given. The v4.35
 payload instead of an empty map, so a file kolla writes keeps what it read.
 `ExprSuite` and `RoundTripSuite` cover the comparison and the round trip.
 
+### K32 — a success in `is_def_eq_unit_like` is not remembered
+
+K31's comparison run over Mathlib, 705,184 definitions, theorems and opaques of
+its 729,263 declarations, left five that differed: identical sequences of
+comparisons, and 1 to 13 fewer unfoldings in kolla. With the K31 instrumentation
+on both sides, the first divergence in each was a comparison of `PUnit.{1}` with
+`Unit` at the end of `is_def_eq_unit_like`, after `whnf(infer_type(t))` had
+unfolded `Unit`. Lean's final step there is a direct `is_def_eq_core`, and only
+the `is_def_eq` wrapper writes the success cache, so the pair is not remembered
+and the next comparison of it unfolds `Unit` again. kolla's final step was
+`isDefEqE`, the caching wrapper, so its second comparison was a cache hit with
+no unfolding. The same wrapper was in `try_string_lit_expansion_core`, where
+Lean also calls `is_def_eq_core`; both now do. Every other direct
+`is_def_eq_core` call in Lean already had `isDefEqCoreE` opposite it.
+
+| per declaration, `--export-mdata` | identical to Lean | comparisons | unfoldings |
+|---|---|---|---|
+| `std` | 95,883 of 95,883 | 18,333,585 | 9,498,140 |
+| `lean` | 161,148 of 161,148 | 23,284,964 | 10,664,974 |
+| `Mathlib` | **705,184 of 705,184** | 342,418,155 | 251,388,074 |
+
+The counts are each side's; they are equal. `leanchecker --fresh Mathlib` took
+40 minutes at 6.3 GB on the patched build, and kolla with `--jobs 16` 12 minutes
+at 11 GB on the 6.27 GB export, which carries 91,026 `mdata` nodes against none
+in the default one. The declarations not in the table are axioms, inductive
+blocks and the quotient package, which neither digest covers.
+
+The change removes a cache entry, so it can only add work, and never a verdict:
+the five declarations unfold `Unit` a few more times. On `std` and `lean` the
+entry was never hit, since both were already identical before the change.
+`TypeCheckerSuite` has the case: two variables of a field-less structure type
+and of a definition unfolding to it are equal, and comparing the two types
+afterwards must unfold the definition rather than find the pair cached.
+
+The per-thread form of the digest, so that kolla's side can run with `--jobs`,
+gives the same hash for every `std` declaration at 1 and 16 jobs. A dump of
+named declarations, though, interleaves lines from different workers in one
+file, so dumps are taken with one job.
+
 ## DSL
 
 ### D5 — binders are Scala functions

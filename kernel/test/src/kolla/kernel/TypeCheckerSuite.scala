@@ -326,3 +326,31 @@ class TypeCheckerSuite extends munit.FunSuite:
     )
     assertEquals(t.whnf(nested), natZero)
   }
+
+  test("a unit-like success is not remembered, as Lean's is_def_eq_core does not (K32)") {
+    // `structure One : Type` with no fields, and `def OneAlias := One`. Two
+    // variables of those types are equal by `is_def_eq_unit_like`, whose last
+    // step compares `One` with `OneAlias` through `is_def_eq_core`: Lean writes
+    // no cache entry there, so a later comparison of the same pair unfolds
+    // `OneAlias` again. kolla used to cache it and skip the unfolding.
+    val one = Name.parse("One")
+    val env2 = env
+      .addCore(ConstantInfo.InductInfo(InductiveVal(
+        cv("One", Nil, type0), 0, 0, List(one), List(Name.parse("One.unit")), 0, false, false, false
+      )))
+      .addCore(ConstantInfo.CtorInfo(ConstructorVal(cv("One.unit", Nil, Expr.const("One")), one, 0, 0, 0, false)))
+      .addCore(ConstantInfo.DefnInfo(DefinitionVal(
+        cv("OneAlias", Nil, type0), Expr.const("One"),
+        ReducibilityHints.Regular(1), DefinitionSafety.Safe, List(Name.parse("OneAlias"))
+      )))
+    val ngen    = new NameGenerator()
+    val (l1, x) = LocalContext.empty.mkLocalDecl(ngen, Name.parse("x"), Expr.const("One"), BinderInfo.Default)
+    val (l2, y) = l1.mkLocalDecl(ngen, Name.parse("y"), Expr.const("OneAlias"), BinderInfo.Default)
+    val tc      = new TypeChecker(env2, KernelProfile.v4_35, DefinitionSafety.Safe, l2)
+    assert(tc.isDefEq(x, y))
+    val unfolds = tc.deltaAttempts
+    assert(unfolds >= 1L, clue(unfolds))
+    assert(tc.isDefEq(Expr.const("One"), Expr.const("OneAlias")))
+    assertEquals(tc.defEqCacheHits, 0L)
+    assertEquals(tc.deltaAttempts, unfolds + 1L)
+  }
