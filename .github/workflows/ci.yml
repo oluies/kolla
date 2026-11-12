@@ -16,6 +16,7 @@ jobs:
   # it so that a break there is seen before that JDK ships, and it is allowed
   # to fail: an early-access build is not something kolla promises to run on.
   test:
+    name: test (${{ matrix.java }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
