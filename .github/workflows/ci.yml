@@ -11,14 +11,27 @@ concurrency:
 jobs:
   # The unit suites across all three platforms. No Lean toolchain is involved,
   # so this is the gate that has to stay fast.
+  #
+  # The gate is the current JDK. The next one's early-access build runs beside
+  # it so that a break there is seen before that JDK ships, and it is allowed
+  # to fail: an early-access build is not something kolla promises to run on.
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        java: ['25']
+        experimental: [false]
+        include:
+          - java: '28-ea'
+            experimental: true
+    continue-on-error: ${{ matrix.experimental }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: '25'
+          java-version: ${{ matrix.java }}
       - uses: actions/setup-node@v7
         with:
           node-version: '26'

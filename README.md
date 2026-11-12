@@ -434,7 +434,9 @@ mill difftest.run mutants                   # the negative corpus
   rejecting different declarations and reaching the same total.
 
 `.github/workflows/ci.yml` runs the unit suites and the platform comparison on
-every push, and a job per toolchain. `nightly.yml` runs the libraries and the
+every push, and a job per toolchain. The suites run on the current JDK, which
+is the gate, and on the next JDK's early-access build, which may fail without
+failing the run. `nightly.yml` runs the libraries and the
 mathlib sample, on request rather than on a schedule: it costs hours of runner
 time whether or not anything changed. Below v4.35 it passes `--defeq-cache`,
 without which `std` and `lean` do not finish; that changes no verdict and the
