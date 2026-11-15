@@ -140,8 +140,18 @@ object AddInductive:
     // The parametric arguments `Ds` of a nested occurrence `I Ds` do not appear
     // in the auxiliary declaration, so they would otherwise never be checked.
     // They are checked last, in the restored environment.
+    // In Lean's order: `m_aux2nested` is a `name_map`, a tree ordered by
+    // `name_quick_cmp`, which compares hashes before names — and reads the
+    // 64-bit hash into an `unsigned`, so it is the low 32 bits that order it.
+    // `Name.hash` is Lean's, so the order is reproducible, and the checker's
+    // caches then fill as Lean's do (K33).
     val paramTc = new TypeChecker(newEnv, profile, safety, res.paramsLctx, maxSteps, timeLimit)
-    res.aux2nested.values.foreach(nested => paramTc.check(nested, decl.levelParams))
+    val inLeanOrder = res.aux2nested.toSeq.sortWith { case ((a, _), (b, _)) =>
+      val ha = a.hash & 0xffffffffL
+      val hb = b.hash & 0xffffffffL
+      if ha != hb then ha < hb else Name.compare(a, b) < 0
+    }
+    inLeanOrder.foreach((_, nested) => paramTc.check(nested, decl.levelParams))
 
     // Re-check what `restoreNested` rewrote. The checks above are expected to
     // make this redundant; it keeps a mistake in the restoration from reaching

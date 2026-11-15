@@ -1,7 +1,6 @@
 package kolla.kernel
 
 import scala.annotation.tailrec
-import scala.util.hashing.MurmurHash3
 
 sealed abstract class Name:
   val hash: Long
@@ -104,11 +103,47 @@ object Name:
     var r = h ^ k
     r * m
 
+  /** Lean's `String.hash`: MurmurHash64A over the UTF-8 bytes, seed 11
+    * (`lean_string_hash` in `src/runtime/object.cpp`). With `mix` being
+    * `mixHash`, this makes `Name.hash` Lean's `Name.hash` exactly, which is
+    * what lets kolla iterate a `name_map` in Lean's order (K33).
+    */
   private def hashString(s: String): Long =
-    MurmurHash3.stringHash(s).toLong & 0xffffffffL
+    murmur64A(s.getBytes(java.nio.charset.StandardCharsets.UTF_8), 11L)
 
+  /** `Name.hash`'s numeral case: the value if it fits in 64 bits, else 17. */
   private def hashNat(i: BigInt): Long =
-    if i.isValidLong then i.toLong else MurmurHash3.bytesHash(i.toByteArray).toLong & 0xffffffffL
+    if i.signum >= 0 && i.bitLength <= 64 then i.toLong else 17L
+
+  private def murmur64A(data: Array[Byte], seed: Long): Long =
+    val m   = 0xc6a4a7935bd1e995L
+    val len = data.length
+    var h   = seed ^ (len.toLong * m)
+    var i   = 0
+    val end = (len / 8) * 8
+    while i < end do
+      var k = 0L
+      var j = 7
+      while j >= 0 do
+        k = (k << 8) | (data(i + j) & 0xffL)
+        j -= 1
+      i += 8
+      k *= m
+      k ^= k >>> 47
+      k *= m
+      h ^= k
+      h *= m
+    val rest = len & 7
+    if rest > 0 then
+      var j = rest - 1
+      while j >= 0 do
+        h ^= (data(i + j) & 0xffL) << (8 * j)
+        j -= 1
+      h *= m
+    h ^= h >>> 47
+    h *= m
+    h ^= h >>> 47
+    h
 
   @tailrec
   private[kernel] def structEq(a: Name, b: Name): Boolean =

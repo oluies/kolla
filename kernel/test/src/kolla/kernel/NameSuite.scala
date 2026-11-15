@@ -157,3 +157,18 @@ class NameSuite extends munit.ScalaCheckSuite:
     assertEquals(Name.parse(n.toString), n)
     assertEquals(Name.parse(n.toString).components.length, 2)
   }
+
+  test("Name.hash is Lean's Name.hash (K33)") {
+    // Values from `#eval (\`...).hash` on the v4.35.0 toolchain, as unsigned
+    // 64-bit integers; the same for `String.hash`.
+    def u(s: String): Long = BigInt(s).toLong
+    assertEquals(Name.anonymous.hash, 1723L)
+    assertEquals(Name.parse("Nat").hash, u("11442535297760353691"))
+    assertEquals(Name.parse("Lean.PrefixTreeNode").hash, u("1706947459708195693"))
+    assertEquals(Name.parse("_nested.Std.DTreeMap.Internal.Impl_3").hash, u("16743206916845758936"))
+    assertEquals(Name.mkSimple("liftOn₂").hash, u("13676816729141255412"))
+    assertEquals(Name.anonymous.str("_private").str("Foo").num(0).hash, u("2494191080819051551"))
+    assertEquals(Name.anonymous.num(7).hash, u("17909327291900945388"))
+    assertEquals(Name.anonymous.num(BigInt("18446744073709551615")).hash, u("5599302449031520111"))
+    assertEquals(Name.anonymous.num(BigInt("18446744073709551616")).hash, u("14196505973637522745"))
+  }
