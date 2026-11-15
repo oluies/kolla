@@ -1,5 +1,5 @@
 diff --git a/src/kernel/environment.cpp b/src/kernel/environment.cpp
-index 04f78f9b..957dcdf5 100644
+index 04f78f9..957dcdf 100644
 --- a/src/kernel/environment.cpp
 +++ b/src/kernel/environment.cpp
 @@ -268,12 +268,24 @@ environment environment::add_mutual(declaration const & d, bool check) const {
@@ -30,8 +30,158 @@ index 04f78f9b..957dcdf5 100644
      case declaration_kind::MutualDefinition: return add_mutual(d, check);
      case declaration_kind::Quot:             return add_quot();
      case declaration_kind::Inductive:        return add_inductive(d);
+diff --git a/src/kernel/environment.h b/src/kernel/environment.h
+index a0bed62..da0df34 100644
+--- a/src/kernel/environment.h
++++ b/src/kernel/environment.h
+@@ -72,6 +72,7 @@ class LEAN_EXPORT environment : public object_ref {
+     environment add_mutual(declaration const & d, bool check) const;
+     environment add_quot() const;
+     environment add_inductive(declaration const & d) const;
++    environment add_inductive_core(declaration const & d) const;
+ public:
+     environment(environment const & other):object_ref(other) {}
+     environment(environment && other) noexcept:object_ref(std::move(other)) {}
+diff --git a/src/kernel/inductive.cpp b/src/kernel/inductive.cpp
+index 438f92d..64051f5 100644
+--- a/src/kernel/inductive.cpp
++++ b/src/kernel/inductive.cpp
+@@ -17,6 +17,11 @@ Author: Leonardo de Moura
+ #include "kernel/kernel_exception.h"
+ 
+ namespace lean {
++void kd_begin(name const & n);
++void kd_end(name const & n);
++void kd_mix_ext(std::string const & s);
++bool kd_is_active();
++void kd_note_ext(std::string const & s);
+ static name * g_ind_fresh = nullptr;
+ 
+ /** \brief Return recursor name for the given inductive datatype name */
+@@ -1232,7 +1237,7 @@ static void check_no_nested_aux(environment const & env, name const & n, expr co
+     }
+ }
+ 
+-environment environment::add_inductive(declaration const & d) const {
++environment environment::add_inductive_core(declaration const & d) const {
+     /* Reject metavariables, free variables, and references to auxiliary declarations. */
+     {
+         inductive_decl ind_d(d);
+@@ -1318,7 +1323,8 @@ environment environment::add_inductive(declaration const & d) const {
+            type checking terms in an environment containing auxiliary declarations. */
+         {
+             type_checker tc(new_env, res.m_params_lctx, diag.get(), inductive_decl(d).is_unsafe() ? definition_safety::unsafe : definition_safety::safe);
+-            res.m_aux2nested.for_each([&](name const &, expr const & nested) {
++            res.m_aux2nested.for_each([&](name const & auxn, expr const & nested) {
++                    kd_note_ext("restore nested " + auxn.to_string() + " hash=" + std::to_string(auxn.hash()));
+                     tc.check(nested, inductive_decl(d).get_lparams());
+                 });
+         }
+@@ -1332,11 +1338,13 @@ environment environment::add_inductive(declaration const & d) const {
+         */
+         {
+             type_checker tc(new_env, diag.get(), inductive_decl(d).is_unsafe() ? definition_safety::unsafe : definition_safety::safe);
++            kd_note_ext("restore ctors");
+             for (inductive_type const & ind_type : ind_d.get_types()) {
+                 for (constructor const & cnstr : ind_type.get_cnstrs()) {
+                     tc.check(new_env.get(constructor_name(cnstr)).get_type(), inductive_decl(d).get_lparams());
+                 }
+             }
++            kd_note_ext("restore recs");
+             for (name const & rec_name : new_rec_names) {
+                 constant_info rec_info = new_env.get(rec_name);
+                 tc.check(rec_info.get_type(), rec_info.get_lparams());
+@@ -1349,6 +1357,88 @@ environment environment::add_inductive(declaration const & d) const {
+     }
+ }
+ 
++/* KDIGEST: one canonical spelling of a closed term, shared with kolla's patch:
++   binder names and info and mdata left out, levels and names spelled out. */
++static void kd_ser_level(level const & l, std::string & o) {
++    switch (kind(l)) {
++    case level_kind::Zero:  o += "0"; break;
++    case level_kind::Succ:  o += "(s "; kd_ser_level(succ_of(l), o); o += ")"; break;
++    case level_kind::Max:   o += "(max "; kd_ser_level(level_lhs(l), o); o += " "; kd_ser_level(level_rhs(l), o); o += ")"; break;
++    case level_kind::IMax:  o += "(imax "; kd_ser_level(level_lhs(l), o); o += " "; kd_ser_level(level_rhs(l), o); o += ")"; break;
++    case level_kind::Param: o += param_id(l).to_string(); break;
++    case level_kind::MVar:  o += "?"; break;
++    }
++}
++static void kd_ser(expr const & e, std::string & o) {
++    switch (e.kind()) {
++    case expr_kind::BVar:   o += "#"; o += bvar_idx(e).to_std_string(); break;
++    case expr_kind::FVar:   o += "fv"; break;
++    case expr_kind::MVar:   o += "mv"; break;
++    case expr_kind::Sort:   o += "(S "; kd_ser_level(sort_level(e), o); o += ")"; break;
++    case expr_kind::Const:
++        o += const_name(e).to_string(); o += "{";
++        for (level const & l : const_levels(e)) { kd_ser_level(l, o); o += ","; }
++        o += "}"; break;
++    case expr_kind::App:    o += "("; kd_ser(app_fn(e), o); o += " "; kd_ser(app_arg(e), o); o += ")"; break;
++    case expr_kind::Lambda: o += "(L "; kd_ser(binding_domain(e), o); o += " "; kd_ser(binding_body(e), o); o += ")"; break;
++    case expr_kind::Pi:     o += "(P "; kd_ser(binding_domain(e), o); o += " "; kd_ser(binding_body(e), o); o += ")"; break;
++    case expr_kind::Let:    o += "(let "; kd_ser(let_type(e), o); o += " "; kd_ser(let_value(e), o); o += " "; kd_ser(let_body(e), o); o += ")"; break;
++    case expr_kind::Lit:
++        if (lit_value(e).kind() == literal_kind::Nat) o += lit_value(e).get_nat().to_std_string();
++        else { o += "\""; o += lit_value(e).get_string().to_std_string(); o += "\""; }
++        break;
++    case expr_kind::MData:  kd_ser(mdata_expr(e), o); break;
++    case expr_kind::Proj:   o += "(J "; o += proj_sname(e).to_string(); o += " "; o += proj_idx(e).to_std_string(); o += " "; kd_ser(proj_expr(e), o); o += ")"; break;
++    }
++}
++
++environment environment::add_inductive(declaration const & d) const {
++    inductive_decl ind_d(d);
++    name first = head(ind_d.get_types()).get_name();
++    kd_begin(first);
++    environment new_env = add_inductive_core(d);
++    if (kd_is_active()) {
++        for (inductive_type const & t : ind_d.get_types()) {
++            constant_info ci = new_env.get(t.get_name());
++            inductive_val iv = ci.to_inductive_val();
++            std::string o = "T " + t.get_name().to_string() + " " + std::to_string(iv.get_nparams()) + " " +
++                std::to_string(iv.get_nindices()) + " " + std::to_string(iv.get_nnested()) + " " +
++                (iv.is_rec() ? "r" : "-") + (iv.is_reflexive() ? "x" : "-") + " ";
++            kd_ser(ci.get_type(), o); kd_mix_ext(o);
++            for (name const & c : iv.get_cnstrs()) {
++                constant_info cc = new_env.get(c);
++                constructor_val cv = cc.to_constructor_val();
++                o = "C " + c.to_string() + " " + std::to_string(cv.get_cidx()) + " " +
++                    std::to_string(cv.get_nparams()) + " " + std::to_string(cv.get_nfields()) + " ";
++                kd_ser(cc.get_type(), o); kd_mix_ext(o);
++            }
++        }
++        std::vector<std::pair<std::string, name>> recs;
++        for (inductive_type const & t : ind_d.get_types()) {
++            name rn = mk_rec_name(t.get_name()); recs.emplace_back(rn.to_string(), rn);
++        }
++        unsigned nn = new_env.get(first).to_inductive_val().get_nnested();
++        for (unsigned i = 1; i <= nn; i++) {
++            name rn(first, ("rec_" + std::to_string(i)).c_str()); recs.emplace_back(rn.to_string(), rn);
++        }
++        std::sort(recs.begin(), recs.end(), [](auto const & a, auto const & b) { return a.first < b.first; });
++        for (auto const & pr : recs) {
++            optional<constant_info> ci = new_env.find(pr.second);
++            if (!ci || !ci->is_recursor()) { kd_mix_ext("R " + pr.first + " missing"); continue; }
++            recursor_val rv = ci->to_recursor_val();
++            std::string o = "R " + pr.first + " " + std::to_string(rv.get_nparams()) + " " + std::to_string(rv.get_nindices()) + " " +
++                std::to_string(rv.get_nmotives()) + " " + std::to_string(rv.get_nminors()) + " " + (rv.is_k() ? "k" : "-") + " ";
++            kd_ser(ci->get_type(), o); kd_mix_ext(o);
++            for (recursor_rule const & r : rv.get_rules()) {
++                o = "RR " + r.get_cnstr().to_string() + " " + std::to_string(r.get_nfields()) + " ";
++                kd_ser(r.get_rhs(), o); kd_mix_ext(o);
++            }
++        }
++    }
++    kd_end(first);
++    return new_env;
++}
++
+ static expr * g_nat_zero       = nullptr;
+ static expr * g_nat_succ       = nullptr;
+ static expr * g_string_mk      = nullptr;
 diff --git a/src/kernel/type_checker.cpp b/src/kernel/type_checker.cpp
-index a735a6e4..5693f4ec 100644
+index a735a6e..dbbab10 100644
 --- a/src/kernel/type_checker.cpp
 +++ b/src/kernel/type_checker.cpp
 @@ -9,6 +9,9 @@ Author: Leonardo de Moura
@@ -44,7 +194,7 @@ index a735a6e4..5693f4ec 100644
  #include "runtime/interrupt.h"
  #include "runtime/sstream.h"
  #include "runtime/flet.h"
-@@ -244,6 +247,84 @@ static bool to_proj_idx(nat const & idx, unsigned & result) {
+@@ -244,6 +247,91 @@ static bool to_proj_idx(nat const & idx, unsigned & result) {
      return true;
  }
  
@@ -71,11 +221,18 @@ index a735a6e4..5693f4ec 100644
 +static FILE * g_kd_dump = nullptr;
 +static std::set<std::string> * g_kd_names = nullptr;
 +static bool g_kd_dumping = false;
-+static void kd_mix(std::string const & s) {
++static void kd_mix(std::string const & s0) {
++    std::string s = s0;
++    size_t p;
++    while ((p = s.find("\xC2\xAB")) != std::string::npos) s.erase(p, 2);
++    while ((p = s.find("\xC2\xBB")) != std::string::npos) s.erase(p, 2);
 +    if (g_kd_dumping) fprintf(g_kd_dump, "%s\n", s.c_str());
 +    for (unsigned char c : s) { g_kd_hash ^= c; g_kd_hash *= 1099511628211ULL; }
 +    g_kd_hash ^= 10; g_kd_hash *= 1099511628211ULL;
 +}
++void kd_mix_ext(std::string const & s) { kd_mix(s); }
++void kd_note_ext(std::string const & s) { if (g_kd_active && g_kd_dumping) fprintf(g_kd_dump, "# %s\n", s.c_str()); }
++bool kd_is_active() { return g_kd_active; }
 +void kd_begin(name const & n) {
 +    if (!g_kd_init) {
 +        g_kd_init = true;
@@ -129,7 +286,7 @@ index a735a6e4..5693f4ec 100644
  expr type_checker::infer_proj(expr const & e, bool infer_only) {
      expr type = whnf(infer_type_core(proj_expr(e), infer_only));
      unsigned idx;
-@@ -565,6 +646,8 @@ optional<constant_info> type_checker::is_delta(expr const & e) const {
+@@ -565,6 +653,8 @@ optional<constant_info> type_checker::is_delta(expr const & e) const {
  optional<expr> type_checker::unfold_definition_core(expr const & e) {
      if (is_constant(e)) {
          if (auto d = is_delta(e)) {
@@ -138,7 +295,7 @@ index a735a6e4..5693f4ec 100644
              levels const & us = const_levels(e);
              unsigned len = length(us);
              if (m_diag) {
-@@ -1130,6 +1213,24 @@ bool type_checker::is_def_eq_unit_like(expr const & t, expr const & s) {
+@@ -1130,6 +1220,24 @@ bool type_checker::is_def_eq_unit_like(expr const & t, expr const & s) {
  }
  
  bool type_checker::is_def_eq_core(expr const & t, expr const & s) {
@@ -164,7 +321,7 @@ index a735a6e4..5693f4ec 100644
      check_system("is_definitionally_equal", /* do_check_interrupted */ true);
      lbool r = quick_is_def_eq(t, s);
 diff --git a/src/kernel/type_checker.h b/src/kernel/type_checker.h
-index 0625c7cd..0946491e 100644
+index 0625c7c..0946491 100644
 --- a/src/kernel/type_checker.h
 +++ b/src/kernel/type_checker.h
 @@ -111,6 +111,7 @@ private:

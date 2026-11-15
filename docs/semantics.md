@@ -1324,6 +1324,67 @@ gives the same hash for every `std` declaration at 1 and 16 jobs. A dump of
 named declarations, though, interleaves lines from different workers in one
 file, so dumps are taken with one job.
 
+### K33 — the inductive blocks, compared with Lean's too
+
+K29's comparison hashed what `is_def_eq` and `unfold_definition` did, so an
+inductive block contributed only what its own checks compared. The digest now
+covers a block as one entry: the comparisons and unfoldings of its check, and
+what it produced — each type, constructor and recursor with their arities and
+flags, and each recursor rule's right-hand side — spelled in one canonical form
+both patches implement, binder names and `mdata` left out. Recursors are taken
+in name order. `repro/kernel-trace/README.md` has the details.
+
+The first run agreed on everything a block produces, down to the last rule, for
+every block of `std`, and differed in the check for 203 of 1,028. Three of the
+differences were instructive; the fourth is the one that matters.
+
+- `check_recursors` walks a constructor's type to build a rule's left-hand
+  side. kolla's walk also asked which fields are recursive, which costs a
+  `whnf` per field; Lean's does not, since it does not need them there. One
+  flag on `ctorParts` (all 203).
+- For a nested block, the restore phase re-checks the nested applications
+  `I Ds` that the auxiliary declaration never saw. Lean iterates a `name_map`,
+  a tree ordered by `name_quick_cmp`: by hash first, and by the *low 32 bits*
+  of the 64-bit hash, since `quick_cmp` reads it into an `unsigned`. kolla
+  iterated a hash map. The checks share one checker, so their order decides
+  which later one finds its work cached. 2 blocks of `lean`,
+  `Lean.PrefixTreeNode` and `Lean.Json`, the two whose nested applications
+  happen to have low words in a different order from their names.
+- Reproducing that order needs Lean's `Name.hash`, so `Name.hash` is now
+  exactly that: `1723` for the anonymous name, `mixHash` for the step (which
+  `Name.mix` already was), MurmurHash64A with seed 11 over the UTF-8 bytes for a
+  string component, the value for a numeral below 2^64 and `17` above.
+  `NameSuite` pins nine values read off `#eval` on the v4.35.0 toolchain.
+- A dump from 16 workers interleaves, and `javap` without `-p` does not show
+  the private method a lambda compiles to: both cost an hour, both are in the
+  README now.
+
+| per block, `--export-mdata` | blocks | identical to Lean |
+|---|---|---|
+| `std` | 1,028 | 1,028 |
+| `lean` | 2,860 | 2,860 |
+| `Mathlib` | 7,013 | **7,013** |
+
+With the declarations of K32, that is 96,911 of 96,911 entries on `std`,
+164,008 of 164,008 on `lean` and 712,197 of 712,197 on Mathlib, 343,433,614
+comparisons and 251,745,749 unfoldings on each side; the Mathlib replay is 51
+minutes of `leanchecker --fresh Mathlib` at 6.1 GB against 11 minutes of kolla
+with `--jobs 16` at 12.5 GB. What neither digest covers is the quotient
+package and the axioms, which have no computation to compare.
+
+None of this moves a verdict. The first change removes work and the second
+reorders checks that are independent of each other; `Name.hash` is used for
+hashing and for this one ordering. The property the three buy is that a block's
+check and its output are now compared with Lean's on every corpus, so a
+regression like K17 — a recursor built from the wrong major premise — would
+show as a differing `R` line rather than as nine false rejections found by a
+reference checker a release later.
+
+A practical note: the patched Lean build and the exports with `mdata` lived
+under `/tmp`, and macOS removed everything there not read for three days,
+Lean's source tree included. They are under `.difftest/` now, which is
+gitignored and durable.
+
 ## DSL
 
 ### D5 — binders are Scala functions

@@ -476,13 +476,15 @@ docs/semantics.md K19, K27 and K28 the story.
 Agreeing on verdicts says nothing about how they were reached, so the two
 kernels have also been compared step by step. `repro/kernel-trace/` patches
 Lean v4.35.0 to hash, per declaration, the sequence of `is_def_eq_core` calls
-and unfoldings its kernel makes, and kolla computes the same hash. Every
-declaration both kernels hash takes exactly Lean's path: all 95,883 of `std`,
-all 161,148 of `lean`, and all 705,184 of Mathlib, where that is 342,418,155
-comparisons and 251,388,074 unfoldings on each side. The comparison found four
-more places kolla had left that path, none of which changed a verdict or a time
-(docs/semantics.md K29, K31 and K32). A divergence like the one that stopped
-Mathlib would now show up as a line in that comparison.
+and unfoldings its kernel makes, and kolla computes the same hash; for an
+inductive block it also covers every type, constructor and recursor the block
+produces, rule by rule. Every entry both kernels hash is identical: all 96,911
+of `std`, all 164,008 of `lean`, and all 712,197 of Mathlib, where that is
+343,433,614 comparisons and 251,745,749 unfoldings on each side. The comparison
+found six more places kolla had left Lean's path, none of which changed a
+verdict (docs/semantics.md K29, K31, K32 and K33). A divergence like the one
+that stopped Mathlib, or a recursor built differently from Lean's, would now
+show up as a line in that comparison.
 
 One theorem out of a real development has also been checked end to end:
 `openai/math`'s claimed proof that the Exponential Time Hypothesis is false.

@@ -1,3 +1,43 @@
+diff --git a/export/src/kolla/leanexport/Replay.scala b/export/src/kolla/leanexport/Replay.scala
+index 0d82d94..72fbbb6 100644
+--- a/export/src/kolla/leanexport/Replay.scala
++++ b/export/src/kolla/leanexport/Replay.scala
+@@ -413,7 +413,11 @@ final class Replay(
+           blockNames,
+           () =>
+             val decl = InductiveChecker.declarationOf(exportedInds, exportedCtors)
++            val kdn  = exportedInds.headOption.map(_.toConstantVal.name)
++            kdn.foreach(KDigest.begin)
+             val r    = AddInductive.add(env, decl, profile, maxSteps, timeLimit)
++            if kdn.isDefined then KDigest.inductive(r.env, r.inductives)
++            kdn.foreach(KDigest.end)
+             InductiveChecker.validate(
+               exportedInds, exportedCtors, r.inductives, r.constructors, exportedRecs, r.recursors
+             )
+diff --git a/kernel/src/kolla/kernel/AddInductive.scala b/kernel/src/kolla/kernel/AddInductive.scala
+index 8cb7029..bacdf3f 100644
+--- a/kernel/src/kolla/kernel/AddInductive.scala
++++ b/kernel/src/kolla/kernel/AddInductive.scala
+@@ -151,13 +151,18 @@ object AddInductive:
+       val hb = b.hash & 0xffffffffL
+       if ha != hb then ha < hb else Name.compare(a, b) < 0
+     }
+-    inLeanOrder.foreach((_, nested) => paramTc.check(nested, decl.levelParams))
++    inLeanOrder.foreach { (n, nested) =>
++      KDigest.note(s"restore nested $n hash=${java.lang.Long.toUnsignedString(n.hash)}")
++      paramTc.check(nested, decl.levelParams)
++    }
+ 
+     // Re-check what `restoreNested` rewrote. The checks above are expected to
+     // make this redundant; it keeps a mistake in the restoration from reaching
+     // the environment.
+     val tc = new TypeChecker(newEnv, profile, safety, LocalContext.empty, maxSteps, timeLimit)
++    KDigest.note("restore ctors")
+     constructors.foreach(c => tc.check(c.toConstantVal.tpe, decl.levelParams))
++    KDigest.note("restore recs")
+     newRecNames.foreach { recName =>
+       val info = newEnv.get(recName)
+       tc.check(info.tpe, info.levelParams)
 diff --git a/kernel/src/kolla/kernel/DeclarationChecker.scala b/kernel/src/kolla/kernel/DeclarationChecker.scala
 index 5630737..d414aa0 100644
 --- a/kernel/src/kolla/kernel/DeclarationChecker.scala
@@ -34,11 +74,62 @@ index 5630737..d414aa0 100644
      case ConstantInfo.QuotInfo(v) =>
        // `add_quot` installs all four constants at once, so the first one an
        // export file mentions triggers the whole package; each exported constant
+diff --git a/kernel/src/kolla/kernel/InductiveChecker.scala b/kernel/src/kolla/kernel/InductiveChecker.scala
+index f7be3a1..4d33bbf 100644
+--- a/kernel/src/kolla/kernel/InductiveChecker.scala
++++ b/kernel/src/kolla/kernel/InductiveChecker.scala
+@@ -546,9 +546,13 @@ final class InductiveChecker(
+         val introApp = Expr.mkAppN(Expr.mkAppN(Expr.Const(ctor.name, levels), params.toSeq), bu)
+         val lhs      = Expr.App(Expr.mkAppN(recPre, itIndices), introApp)
+         val checker  = tc
++        KDigest.note("rule infer(lhs)")
+         val expected = checker.infer(lhs)
++        KDigest.note("rule whnf(lhs)")
+         val reduct   = checker.whnf(lhs)
++        KDigest.note("rule infer(reduct)")
+         val actual   = checker.infer(reduct)
++        KDigest.note("rule isDefEq")
+         if !checker.isDefEq(actual, expected) then
+           throw new KernelException(
+             ExceptionKind.InvalidDeclaration,
+@@ -570,8 +574,11 @@ final class InductiveChecker(
+     // declaration, which by construction mentions the reserved `_nested` prefix.
+     // `AddInductive.add` runs them on the user's declaration.
+     env.checkDuplicatedUnivParams(lparams)
++    KDigest.note("phase checkInductiveTypes")
+     checkInductiveTypes()
++    KDigest.note("phase computeIsRec")
+     val rec       = computeIsRec
++    KDigest.note("phase computeIsReflexive")
+     val reflexive = computeIsReflexive
+     val all       = indTypes.map(_.name).toList
+     // Declare the types first so that the constructors can refer to them.
+@@ -581,13 +588,20 @@ final class InductiveChecker(
+         nparams, nindices(idx), all, indType.ctors.map(_.name), numNested, rec, isUnsafe, reflexive
+       )))
+     }
++    KDigest.note("phase checkConstructors")
+     checkConstructors()
++    KDigest.note("phase derive")
+     val (inds, ctors) = derive()
+     ctors.foreach(c => env = env.addCore(ConstantInfo.CtorInfo(c)))
++    KDigest.note("phase initElimLevel")
+     initElimLevel()
++    KDigest.note("phase initKTarget")
+     initKTarget()
++    KDigest.note("phase mkRecInfos")
+     mkRecInfos()
++    KDigest.note("phase declareRecursors")
+     val recs = declareRecursors()
++    KDigest.note("phase checkRecursors")
+     if profile.checkRecursors then checkRecursors()
+     InductiveResult(env, inds, ctors, recs, resultLevel, nindices.toList, elimLevel, kTarget)
+ 
 diff --git a/kernel/src/kolla/kernel/TypeChecker.scala b/kernel/src/kolla/kernel/TypeChecker.scala
-index 15ca42f..5b18ea7 100644
+index 48d2ca7..a99cbe2 100644
 --- a/kernel/src/kolla/kernel/TypeChecker.scala
 +++ b/kernel/src/kolla/kernel/TypeChecker.scala
-@@ -548,6 +548,7 @@ final class TypeChecker(
+@@ -551,6 +551,7 @@ final class TypeChecker(
          // answers is cheap, and conflating the two would read a working cache
          // as repeated work. See docs/semantics.md K21.
          deltaSteps += 1
@@ -46,7 +137,7 @@ index 15ca42f..5b18ea7 100644
          if diagnosing then unfolded.update(c.name, unfolded.getOrElse(c.name, 0L) + 1L)
          def fresh(): Expr =
            deltaMisses += 1
-@@ -768,7 +769,7 @@ final class TypeChecker(
+@@ -771,7 +772,7 @@ final class TypeChecker(
          // Lean's `whnf_core` returns directly, past the cache write, when an
          // application is stuck or a recursor fires: a later equal term must not
          // get an older object back, or `is_def_eq`'s pointer test reads it as
@@ -55,7 +146,7 @@ index 15ca42f..5b18ea7 100644
          var write = cacheable
          val computed: Step[Expr] = e match
            case p: Expr.Proj =>
-@@ -1275,8 +1276,20 @@ final class TypeChecker(
+@@ -1282,8 +1283,20 @@ final class TypeChecker(
        }
      loop(t0, s0)
  
@@ -77,34 +168,56 @@ index 15ca42f..5b18ea7 100644
      if !diagnosing then isDefEqCoreBody(t, s, eager)
      else
        val key = new ExprPair(t, s)
-@@ -1385,6 +1398,45 @@ final class TypeChecker(
+@@ -1392,6 +1405,120 @@ final class TypeChecker(
        r
      }
  
-+object KDigest:
-+  private val out = sys.env.get("KOLLA_KDIGEST").map(p => new java.io.PrintWriter(new java.io.FileWriter(p)))
++/** Per-thread, so that `--jobs` gives each declaration its own digest. */
++final class KDState:
 +  var active = false
 +  var hash: Long = 0L
 +  var calls = 0L
 +  var unfolds = 0L
 +  var depth = 0
++  var dumping = false
++
++object KDigest:
++  private val out = sys.env.get("KOLLA_KDIGEST").map(p => new java.io.PrintWriter(new java.io.FileWriter(p)))
 +  private val names = sys.env.get("KOLLA_KD_NAMES").map(p => scala.io.Source.fromFile(p, "UTF-8").getLines().toSet)
 +  private val dump  = sys.env.get("KOLLA_KD_DUMP").map(p => new java.io.PrintWriter(new java.io.FileWriter(p)))
-+  private var dumping = false
++  private val st = ThreadLocal.withInitial(() => new KDState)
++  def enabled: Boolean = out.isDefined
++  def active: Boolean = st.get.active
++  def calls: Long = st.get.calls
++  def calls_=(v: Long): Unit = st.get.calls = v
++  def unfolds: Long = st.get.unfolds
++  def unfolds_=(v: Long): Unit = st.get.unfolds = v
++  def depth: Int = st.get.depth
++  def depth_=(v: Int): Unit = st.get.depth = v
 +  def mix(s0: String): Unit =
++    val k = st.get
 +    val s = s0.replace("«", "").replace("»", "")
-+    if dumping then dump.get.println(s)
-+    s.getBytes("UTF-8").foreach { b => hash = (hash ^ (b & 0xffL)) * 1099511628211L }
-+    hash = (hash ^ 10L) * 1099511628211L
++    if k.dumping then dump.synchronized(dump.get.println(s))
++    var h = k.hash
++    s.getBytes("UTF-8").foreach { b => h = (h ^ (b & 0xffL)) * 1099511628211L }
++    k.hash = (h ^ 10L) * 1099511628211L
++  def note(s0: String): Unit =
++    val k = st.get
++    if k.active && k.dumping then dump.synchronized(dump.get.println("# " + s0))
 +  def begin(n: Name): Unit = if out.isDefined then
++    val k  = st.get
 +    val nm = n.toString.replace("«", "").replace("»", "")
-+    dumping = names.exists(_.contains(nm)) && dump.isDefined
-+    if dumping then dump.get.println(s"@ $nm")
-+    active = true; hash = 0xcbf29ce484222325L; calls = 0L; unfolds = 0L; depth = 0
-+  def end(n: Name): Unit = if active then
-+    active = false
-+    out.get.println(f"${n.toString.replace("«", "").replace("»", "")}\t$calls\t$unfolds\t$hash%016x"); out.get.flush()
-+    dump.foreach(_.flush())
++    k.dumping = names.exists(_.contains(nm)) && dump.isDefined
++    if k.dumping then dump.synchronized(dump.get.println(s"@ $nm"))
++    k.active = true; k.hash = 0xcbf29ce484222325L; k.calls = 0L; k.unfolds = 0L; k.depth = 0
++  def end(n: Name): Unit =
++    val k = st.get
++    if k.active then
++      k.active = false
++      out.synchronized {
++        out.get.println(f"${n.toString.replace("«", "").replace("»", "")}\t${k.calls}\t${k.unfolds}\t${k.hash}%016x"); out.get.flush()
++      }
++      dump.foreach(d => d.synchronized(d.flush()))
 +  def head(e: Expr): String =
 +    val h = Expr.getAppFn(e) match
 +      case c: Expr.Const   => c.name.toString
@@ -119,6 +232,59 @@ index 15ca42f..5b18ea7 100644
 +      case _: Expr.MData   => "mdata"
 +      case _               => "other"
 +    s"$h/${Expr.getAppNumArgs(e)}"
++
++  /** One canonical spelling of a closed term, shared with the Lean patch:
++    * binder names and info and `mdata` left out, levels and names spelled out.
++    */
++  def serLevel(l: Level, o: StringBuilder): Unit = l match
++    case Level.Zero        => o ++= "0"
++    case Level.Succ(a)     => o ++= "(s "; serLevel(a, o); o ++= ")"
++    case Level.Max(a, b)   => o ++= "(max "; serLevel(a, o); o ++= " "; serLevel(b, o); o ++= ")"
++    case Level.IMax(a, b)  => o ++= "(imax "; serLevel(a, o); o ++= " "; serLevel(b, o); o ++= ")"
++    case Level.Param(n)    => o ++= n.toString
++    case Level.MVar(_)     => o ++= "?"
++  def ser(e: Expr, o: StringBuilder): Unit = e match
++    case b: Expr.BVar    => o ++= "#"; o ++= b.idx.toString
++    case _: Expr.FVar    => o ++= "fv"
++    case _: Expr.MVar    => o ++= "mv"
++    case s: Expr.Sort    => o ++= "(S "; serLevel(s.level, o); o ++= ")"
++    case c: Expr.Const   =>
++      o ++= c.name.toString; o ++= "{"
++      c.levels.foreach { l => serLevel(l, o); o ++= "," }
++      o ++= "}"
++    case a: Expr.App     => o ++= "("; ser(a.fn, o); o ++= " "; ser(a.arg, o); o ++= ")"
++    case l: Expr.Lam     => o ++= "(L "; ser(l.binderType, o); o ++= " "; ser(l.body, o); o ++= ")"
++    case p: Expr.ForallE => o ++= "(P "; ser(p.binderType, o); o ++= " "; ser(p.body, o); o ++= ")"
++    case l: Expr.LetE    => o ++= "(let "; ser(l.tpe, o); o ++= " "; ser(l.value, o); o ++= " "; ser(l.body, o); o ++= ")"
++    case l: Expr.Lit     =>
++      l.value match
++        case Literal.NatVal(v) => o ++= v.toString
++        case Literal.StrVal(v) => o ++= "\""; o ++= v; o ++= "\""
++    case m: Expr.MData   => ser(m.expr, o)
++    case p: Expr.Proj    => o ++= "(J "; o ++= p.typeName.toString; o ++= " "; o ++= p.idx.toString; o ++= " "; ser(p.struct, o); o ++= ")"
++  private def serStr(e: Expr): String = { val o = new StringBuilder; ser(e, o); o.result() }
++
++  /** What a block produced, mixed after its check. The Lean patch does the same
++    * from the environment `add_inductive` returns.
++    */
++  def inductive(env: Environment, types: List[InductiveVal]): Unit = if active then
++    types.foreach { iv =>
++      val cv = iv.toConstantVal
++      mix(s"T ${cv.name} ${iv.numParams} ${iv.numIndices} ${iv.numNested} ${if iv.isRec then "r" else "-"}${if iv.isReflexive then "x" else "-"} ${serStr(cv.tpe)}")
++      iv.ctors.foreach { c =>
++        val ci = env.get(c).asInstanceOf[ConstantInfo.CtorInfo].value
++        mix(s"C $c ${ci.cidx} ${ci.numParams} ${ci.numFields} ${serStr(ci.toConstantVal.tpe)}")
++      }
++    }
++    val recNames = types.map(_.toConstantVal.name.str("rec")) ++
++      (1 to types.head.numNested).map(i => types.head.toConstantVal.name.str(s"rec_$i"))
++    recNames.map(_.toString).sorted.foreach { rn =>
++      env.find(Name.parse(rn)) match
++        case Some(ConstantInfo.RecInfo(rv)) =>
++          mix(s"R $rn ${rv.numParams} ${rv.numIndices} ${rv.numMotives} ${rv.numMinors} ${if rv.k then "k" else "-"} ${serStr(rv.toConstantVal.tpe)}")
++          rv.rules.foreach(r => mix(s"RR ${r.ctor} ${r.nfields} ${serStr(r.rhs)}"))
++        case _ => mix(s"R $rn missing")
++    }
 +
  object TypeChecker:
    val defaultMaxSteps: Long = 1L << 32
