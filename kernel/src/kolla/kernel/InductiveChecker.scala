@@ -371,7 +371,12 @@ final class InductiveChecker(
     * Splitting this into two walks would give the result type a different set of
     * free variables from the arguments.
     */
-  private def ctorParts(ctorType: Expr): CtorParts =
+  /** The constructor's fields as locals, the recursive ones among them, and
+    * its result type. `check_recursors` walks the type the same way but never
+    * asks which fields are recursive, and asking costs a `whnf` per field, so
+    * a caller that does not need `recArgs` says so (K33).
+    */
+  private def ctorParts(ctorType: Expr, recArgs: Boolean = true): CtorParts =
     val bu = mutable.ArrayBuffer.empty[Expr]
     val u  = mutable.ArrayBuffer.empty[Expr]
     var t  = ctorType
@@ -382,7 +387,7 @@ final class InductiveChecker(
       else
         val l = localDeclFor(t)
         bu += l
-        if isRecArgument(pi.binderType).isDefined then u += l
+        if recArgs && isRecArgument(pi.binderType).isDefined then u += l
         t = ExprOps.instantiate1(pi.body, l)
       i += 1
     CtorParts(bu.toVector, u.toVector, t)
@@ -535,7 +540,7 @@ final class InductiveChecker(
         minors
       )
       indTypes(dIdx).ctors.foreach { ctor =>
-        val parts = ctorParts(ctor.tpe)
+        val parts = ctorParts(ctor.tpe, recArgs = false)
         val bu    = parts.args
         val (_, itIndices) = getIIndices(parts.result)
         val introApp = Expr.mkAppN(Expr.mkAppN(Expr.Const(ctor.name, levels), params.toSeq), bu)
