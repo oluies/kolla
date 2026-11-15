@@ -159,7 +159,8 @@ unfoldings as one for every declaration, and the per-declaration `--json` is
 the same apart from timings. `--abort`, `--cache` and `--trace` are refused with
 more than one job, because each depends on steps taken one at a time, and so
 are `--serve`, `--eval` and `--axioms`. The default is one job. The native build
-accepts the flag but has not been measured with it. docs/semantics.md K30.
+accepts the flag and gains nothing from it: `boehm` serialises the workers, so
+`init` and `std` take the same time at 8 jobs as at 1. docs/semantics.md K30.
 
 ### Memory, and the native binary
 
@@ -438,7 +439,8 @@ every push, and a job per toolchain. The suites run on the current JDK, which
 is the gate, and on the next JDK's early-access build, which may fail without
 failing the run. `nightly.yml` runs the libraries and the
 mathlib sample, on request rather than on a schedule: it costs hours of runner
-time whether or not anything changed. Below v4.35 it passes `--defeq-cache`,
+time whether or not anything changed, less since it checks four declarations
+at once. Below v4.35 it passes `--defeq-cache`,
 without which `std` and `lean` do not finish; that changes no verdict and the
 profile reports itself as `+defeq-cache` so a report cannot be mistaken for a
 plain run of the release (docs/semantics.md P20).

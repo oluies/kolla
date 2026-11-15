@@ -1231,9 +1231,27 @@ the same rejections and exit code 1.
 `--abort`, `--cache` and `--trace` are refused with `--jobs` above 1, since each
 depends on steps being taken one at a time: stopping at the first rejection,
 writing digests in file order, naming the step a run is inside. The default is
-one job, which takes the old path unchanged. The native build compiles with the
-flag and has not been measured with it: F7's hangs under a parallel collector
-are reason to measure first.
+one job, which takes the old path unchanged.
+
+The native build, `boehm` with a preset heap as F7 prescribes, runs with the
+flag and gains nothing from it. On 15 November, at a load of 7 to 13 from other
+programs:
+
+| native `boehm`, debug build | 1 job | 8 jobs |
+|---|---|---|
+| `init`, `GC_INITIAL_HEAP_SIZE=4G` | 170 s, 191 s CPU, 4.8 GB | 182 s, 297 s CPU, 4.8 GB |
+| `std`, `GC_INITIAL_HEAP_SIZE=8G` | 344 s, 356 s CPU, 9.3 GB | 330 s, 522 s CPU, 9.3 GB |
+
+The CPU time says the workers do run; the wall time says the collector
+serialises them, which is what a stop-the-world collector with one allocation
+lock does. Nothing hung and every declaration was accepted. So `--jobs` is a
+JVM flag in practice, and the native build stays the one for small inputs.
+
+`difftest` takes the same `--jobs`, through `KollaChecker`, and `nightly.yml`
+passes `--jobs 4` for the runner's four cores. Beside a reference the results
+are cut at the first rejection afterwards, which is the report the sequential
+stop gives, so a comparison is unchanged; `KollaCheckerSuite` checks both the
+verdicts and the cut against the sequential run.
 
 ### K31 — `mdata` payloads are part of a term
 
