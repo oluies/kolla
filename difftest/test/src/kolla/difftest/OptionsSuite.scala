@@ -60,3 +60,10 @@ class OptionsSuite extends munit.FunSuite:
     assert(!Options.parse(List("run")).toOption.get.defeqCache)
     assert(Options.parse(List("run", "--defeq-cache")).toOption.get.defeqCache)
   }
+
+  test("--jobs takes a positive count and refuses anything else") {
+    assertEquals(Options.parse(List("run", "--jobs", "4")).map(_.jobs), Right(4))
+    assertEquals(Options.parse(List("run")).map(_.jobs), Right(1))
+    assert(Options.parse(List("run", "--jobs", "0")).isLeft)
+    assert(Options.parse(List("run", "--jobs", "many")).isLeft)
+  }

@@ -1,6 +1,7 @@
 package kolla.difftest
 
 import cats.effect.IO
+import cats.syntax.all.*
 import kolla.kernel.*
 import kolla.leanexport.*
 import munit.CatsEffectSuite
@@ -129,5 +130,62 @@ class KollaCheckerSuite extends CatsEffectSuite:
     run("nat-add-3.1.0.ndjson").map { r =>
       val names = r.results.map(_.name)
       assertEquals(names.distinct.length, names.length, clue(names.groupBy(identity).filter(_._2.length > 1).keys.toString))
+    }
+  }
+
+  test("jobs above one gives the sequential run's verdicts, in its order (K30)") {
+    val file = "nat-add-3.1.0.ndjson"
+    val one  = KollaChecker.check(items(file), KernelProfile.v4_35, "t", file)
+    val four = KollaChecker.check(items(file), KernelProfile.v4_35, "t", file, jobs = 4)
+    (one, four).mapN { (a, b) =>
+      assertEquals(b.results.map(r => (r.name, r.verdict)), a.results.map(r => (r.name, r.verdict)))
+      assertEquals(b.accepted, a.accepted)
+      assertEquals(b.notChecked, 0)
+    }
+  }
+
+  test("a rejection is reported at the same place with jobs above one") {
+    // The same corruption the sequential rejection test uses: a theorem whose
+    // type is replaced, so the kernel refuses it and admits it (P6).
+    val file  = "nat-add-3.1.0.ndjson"
+    val base  = items(file)
+    val thmAt = base.indexWhere {
+      case ExportItem.Info(ConstantInfo.ThmInfo(_)) => true
+      case _                                        => false
+    }
+    assume(thmAt >= 0, "the fixture has a theorem")
+    val mutated = base.updated(thmAt, base(thmAt) match
+      case ExportItem.Info(ConstantInfo.ThmInfo(v)) =>
+        ExportItem.Info(ConstantInfo.ThmInfo(v.copy(toConstantVal = v.toConstantVal.copy(tpe = Expr.Sort(Level.zero)))))
+      case other => other
+    )
+    val one  = KollaChecker.check(mutated, KernelProfile.v4_35, "t", "mutated")
+    val four = KollaChecker.check(mutated, KernelProfile.v4_35, "t", "mutated", jobs = 4)
+    (one, four).mapN { (a, b) =>
+      assert(a.rejected >= 1, clue(a.rejected))
+      assertEquals(b.rejected, a.rejected)
+      assertEquals(b.results.map(r => (r.name, r.verdict)), a.results.map(r => (r.name, r.verdict)))
+    }
+  }
+
+  test("comparison mode with jobs above one cuts the results where the sequential stop does") {
+    val file  = "nat-add-3.1.0.ndjson"
+    val base  = items(file)
+    val thmAt = base.indexWhere {
+      case ExportItem.Info(ConstantInfo.ThmInfo(_)) => true
+      case _                                        => false
+    }
+    assume(thmAt >= 0, "the fixture has a theorem")
+    val mutated = base.updated(thmAt, base(thmAt) match
+      case ExportItem.Info(ConstantInfo.ThmInfo(v)) =>
+        ExportItem.Info(ConstantInfo.ThmInfo(v.copy(toConstantVal = v.toConstantVal.copy(tpe = Expr.Sort(Level.zero)))))
+      case other => other
+    )
+    val one  = KollaChecker.check(mutated, KernelProfile.v4_35, "t", "mutated", stopOnFirstRejection = true)
+    val four = KollaChecker.check(mutated, KernelProfile.v4_35, "t", "mutated", stopOnFirstRejection = true, jobs = 4)
+    (one, four).mapN { (a, b) =>
+      assertEquals(a.rejected, 1)
+      assert(a.notChecked > 0, clue(a.notChecked))
+      assertEquals(b.results.map(r => (r.name, r.verdict)), a.results.map(r => (r.name, r.verdict)))
     }
   }

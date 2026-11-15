@@ -29,7 +29,12 @@ final case class Options(
       * the JVM run declaration by declaration.
       */
     withPlatforms: Boolean = false,
-    writeHistory: Boolean = false
+    writeHistory: Boolean = false,
+    /** Declarations kolla checks at once (K30). It changes no verdict and no
+      * order; beside a reference, which stops at the first rejection, the
+      * results are cut there afterwards, so the comparison is the same.
+      */
+    jobs: Int = 1
 )
 
 object Options:
@@ -55,6 +60,7 @@ object Options:
       |  --no-mutants           skip the negative corpus
       |  --platforms            also run the native and js builds and compare
       |  --history              append timings to difftest/history/
+      |  --jobs <n>             check up to n declarations at once (default 1)
       |""".stripMargin
 
   def parse(args: List[String]): Either[String, Options] =
@@ -73,6 +79,10 @@ object Options:
       case "--no-mutants" :: t                     => go(t, o.copy(withMutants = false))
       case "--platforms" :: t                      => go(t, o.copy(withPlatforms = true))
       case "--history" :: t                        => go(t, o.copy(writeHistory = true))
+      case "--jobs" :: v :: t                      =>
+        v.toIntOption.filter(_ > 0) match
+          case Some(n) => go(t, o.copy(jobs = n))
+          case None    => Left(s"--jobs expects a positive number, got $v")
       case ("-h" | "--help") :: _                  => Left(usage)
       case f :: _ if f.startsWith("--")            => Left(s"unknown option $f")
       case c :: t                                  => go(t, o.copy(command = c))
@@ -287,7 +297,8 @@ object Main extends IOApp:
       kolla <- KollaChecker.check(
                  items, kollaProfile(o, t), t.spec, c.name, "jvm",
                  stopOnFirstRejection = reference || useNanoda,
-                 expectRejection = c.expectRejection
+                 expectRejection = c.expectRejection,
+                 jobs = o.jobs
                )
       // A library corpus is replayed with fewer workers than lean4checker's
       // default, since each loads a near-complete environment.

@@ -67,6 +67,9 @@ jobs:
       # The mutants are skipped: a corpus this size takes long enough once.
       # Below v4.35 the positive is_def_eq cache has to be kept or a library
       # corpus does not finish; see docs/semantics.md P12 and P20.
+      # `--jobs 4` is the runner's four cores. It changes no verdict and no
+      # order (K30); beside a reference, which stops at the first rejection,
+      # the results are cut there afterwards, so the comparison is the same.
       - run: |
           extra=""
           case "${{ matrix.toolchain }}" in
@@ -74,7 +77,7 @@ jobs:
             *) extra="--defeq-cache" ;;
           esac
           ./mill difftest.run run --toolchain "${{ matrix.toolchain }}" \
-            --corpus "${{ matrix.corpus }}" --no-mutants --history $extra
+            --corpus "${{ matrix.corpus }}" --no-mutants --history --jobs 4 $extra
       - if: always()
         uses: actions/upload-artifact@v7
         with:
@@ -129,7 +132,7 @@ jobs:
       - run: ./mill difftest.run provision --toolchain ${{ matrix.toolchain }}
       - run: >-
           ./mill difftest.run run --toolchain ${{ matrix.toolchain }}
-          --corpus mathlib-sample --mathlib "$PWD/mathlib4" --no-mutants --history
+          --corpus mathlib-sample --mathlib "$PWD/mathlib4" --no-mutants --history --jobs 4
       - if: always()
         uses: actions/upload-artifact@v7
         with:

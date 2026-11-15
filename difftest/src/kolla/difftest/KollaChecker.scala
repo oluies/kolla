@@ -41,7 +41,16 @@ object KollaChecker:
       platform: String = "jvm",
       stopOnFirstRejection: Boolean = false,
       expectRejection: Boolean = false,
-      hoist: Boolean = true
+      hoist: Boolean = true,
+      /** Declarations checked at once. Above one, the checks a step can defer
+        * (K30) run on that many fibers against the environment from before the
+        * step, and the results are put back in file order; the verdicts and
+        * their order are the sequential run's. With `stopOnFirstRejection`
+        * the results are cut at the first rejection afterwards, which is the
+        * same report the sequential stop gives, at the cost of having checked
+        * what follows it.
+        */
+      jobs: Int = 1
   ): IO[CheckerRun] =
     IO.monotonic.flatMap { start =>
       val replay  = new Replay(items, profile, hoist)
@@ -53,6 +62,48 @@ object KollaChecker:
         val rt   = Runtime.getRuntime
         val used = rt.totalMemory() - rt.freeMemory()
         if used > peak then peak = used
+
+      def resultsOf(names: List[Name], outcome: ReplayOutcome, took: Long): List[DeclResult] =
+        val v = verdictOf(outcome)
+        val trace = outcome match
+          case ReplayOutcome.Rejected(_, t) => t
+          case _                            => Nil
+        names.map(d => DeclResult(d, v, took, trace))
+
+      /** The reader takes every step now, deferring what it can; the deferred
+        * checks then run `jobs` at a time, and `parTraverseN` keeps their order.
+        * In comparison mode the steps after the first rejection are then
+        * reported as not reached, as `skipRest` reports them.
+        */
+      def parallel: IO[Unit] =
+        import cats.effect.implicits.*
+        val deferred = Vector.newBuilder[ReplayDeferred]
+        def collect(n: Int): IO[Unit] =
+          if !replay.hasNext then IO.unit
+          else
+            val yieldNow = if n % cedeEvery == 0 then IO.cede else IO.unit
+            yieldNow *> IO { deferred += replay.nextDeferred() }.flatMap(_ => collect(n + 1))
+        collect(0).flatMap { _ =>
+          deferred.result().parTraverseN(jobs) { d =>
+            IO.blocking {
+              val t0      = System.nanoTime()
+              val outcome = d.run()
+              val took    = System.nanoTime() - t0
+              observeHeap()
+              (d.names, outcome, took)
+            }
+          }.map { steps =>
+            steps.foreach { (names, outcome, took) =>
+              if stopOnFirstRejection && rejected then
+                names.foreach(d =>
+                  results += DeclResult(d, Verdict.NotChecked("not reached: an earlier declaration was rejected"), 0L)
+                )
+              else
+                results ++= resultsOf(names, outcome, took)
+                if outcome.isRejection then rejected = true
+            }
+          }
+        }
 
       def loop(n: Int): IO[Unit] =
         if !replay.hasNext then IO.unit
@@ -83,7 +134,8 @@ object KollaChecker:
             observeHeap()
           }.flatMap(_ => loop(n + 1))
 
-      loop(0).flatMap { _ =>
+      val run = if jobs > 1 then parallel else loop(0)
+      run.flatMap { _ =>
         IO.monotonic.map { end =>
           CheckerRun(
             name, toolchain, corpus, platform,
