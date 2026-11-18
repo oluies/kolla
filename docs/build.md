@@ -86,6 +86,11 @@ The workflow has three modes, because a Central release cannot be undone:
 | `workflow_dispatch` with `upload` | uploads a bundle and leaves it staged |
 | a `v*` tag | uploads a bundle and leaves it staged |
 
+Without the four secrets a tag still runs the workflow, which then builds and
+tests and prints a notice instead of uploading, so a fork can tag safely and
+so could this repository before the secrets existed: 0.1.0 was released from
+a laptop, below, and tagged for the record.
+
 Staged means the Portal holds it until Publish is pressed, and a staged bundle
 can be dropped. Releasing straight from CI needs `release: true` on a dispatch
 run; a tag on its own never does it. None of the four is ever echoed by

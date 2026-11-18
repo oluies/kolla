@@ -21,6 +21,12 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # A repository without the Portal token — a fork, or this one before the
+    # secrets are set — still verifies a tag: it builds, tests and signs
+    # nothing, and says so instead of failing at the upload. 0.1.0 was
+    # released from a laptop this way; see docs/build.md.
+    env:
+      HAS_PORTAL: ${{ secrets.MILL_SONATYPE_USERNAME != '' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v6
@@ -56,8 +62,12 @@ jobs:
 
       # Signing and upload. Mill reads all four from the environment and none
       # is echoed. A tag stages; releasing is a choice.
+      - name: Note that no upload happens without the Portal token
+        if: (startsWith(github.ref, 'refs/tags/v') || inputs.upload) && env.HAS_PORTAL != 'true'
+        run: echo "::notice::MILL_SONATYPE_USERNAME is not set, so the bundle was built and verified but not uploaded"
+
       - name: Publish to Maven Central
-        if: startsWith(github.ref, 'refs/tags/v') || inputs.upload
+        if: (startsWith(github.ref, 'refs/tags/v') || inputs.upload) && env.HAS_PORTAL == 'true'
         env:
           MILL_SONATYPE_USERNAME: ${{ secrets.MILL_SONATYPE_USERNAME }}
           MILL_SONATYPE_PASSWORD: ${{ secrets.MILL_SONATYPE_PASSWORD }}
